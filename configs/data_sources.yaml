@@ -1,0 +1,14 @@
+default_provider: akshare
+storage:
+  sqlite_path: database/etf_system.sqlite
+  parquet_root: data/parquet
+update:
+  rolling_refetch_window: 5
+  sample_categories:
+    - A股宽基
+    - A股行业
+    - 港股宽基
+    - 港股科技
+    - 港股医药
+    - 商品
+    - 债券

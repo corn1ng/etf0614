@@ -1,0 +1,24 @@
+risk_profile: balanced_conservative
+position_caps:
+  equity_total:
+    bull: 0.70
+    range: 0.50
+    bear: 0.25
+    high_volatility: 0.25
+  single_etf:
+    A股宽基: 0.15
+    A股行业: 0.08
+    A股主题: 0.06
+    港股宽基: 0.10
+    港股科技: 0.06
+    港股医药: 0.06
+    港股高股息/红利: 0.08
+    债券: 0.20
+    商品: 0.10
+    货币/现金替代: 0.50
+  hk_cross_market_total:
+    bull: 0.20
+    range: 0.20
+    bear: 0.10
+    high_volatility: 0.10
+minimum_cash_bond_weight: 0.25
