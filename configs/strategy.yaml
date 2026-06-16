@@ -1,0 +1,8 @@
+trend:
+  moving_averages: [51, 120, 250, 850]
+  momentum_windows: [20, 60]
+  relative_strength_buy_rank: 0.30
+  min_trade_interval_days: 10
+  min_avg_amount_20: 30000000
+  max_abs_premium_rate: 0.005
+  high_volatility_20: 0.04

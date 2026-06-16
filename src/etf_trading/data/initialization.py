@@ -1,0 +1,161 @@
+"""Initialization and catch-up task services."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, timedelta
+
+import pandas as pd
+
+from etf_trading.data.indexes import DEFAULT_INDEXES, INDEX_HISTORY_AUTO_START
+from etf_trading.data.provider import DataProvider
+from etf_trading.data.storage import ParquetStore, SQLiteStore
+from etf_trading.strategy.features import add_technical_features
+
+
+@dataclass(frozen=True)
+class IndexHistoryResult:
+    index_code: str
+    status: str
+    fetched_rows: int
+    total_rows: int
+    start_date: date | None = None
+    end_date: date | None = None
+    error_message: str | None = None
+
+
+class InitializationService:
+    def __init__(
+        self,
+        store: SQLiteStore,
+        provider: DataProvider | None = None,
+        parquet_store: ParquetStore | None = None,
+    ) -> None:
+        self.store = store
+        self.provider = provider
+        self.parquet_store = parquet_store or ParquetStore()
+
+    def initialize_master(self) -> pd.DataFrame:
+        if self.provider is None:
+            raise ValueError("provider is required to initialize ETF master")
+        self.store.initialize_schema()
+        master = self.provider.fetch_etf_list()
+        self.store.upsert_etf_master(master)
+        return master
+
+    def select_sample_etfs(self, required_categories: list[str]) -> pd.DataFrame:
+        master = self.store.list_etf_master()
+        if master.empty:
+            return master
+        if "amount" not in master.columns:
+            master["amount"] = 0
+        master["amount"] = pd.to_numeric(master["amount"], errors="coerce").fillna(0)
+        rows = []
+        for category in required_categories:
+            candidates = master[(master["category"] == category) & (master["is_active"].fillna(1).astype(int) == 1)]
+            if candidates.empty:
+                continue
+            rows.append(candidates.sort_values(["amount", "etf_code"], ascending=[False, True]).iloc[0])
+        if not rows:
+            return pd.DataFrame(columns=master.columns)
+        return pd.DataFrame(rows).reset_index(drop=True)
+
+    def create_history_jobs_for_watchlist(self, start_date: date | str | None = None, end_date: date | str | None = None) -> int:
+        watchlist = self.store.list_watchlist()
+        count = 0
+        for row in watchlist.itertuples(index=False):
+            self.store.create_fetch_job("history", row.etf_code, str(start_date) if start_date else None, str(end_date) if end_date else None)
+            count += 1
+        return count
+
+    def fetch_and_store_history(self, etf_code: str, start_date: date | str, end_date: date | str, adjust: str = "qfq") -> pd.DataFrame:
+        if self.provider is None:
+            raise ValueError("provider is required to fetch history")
+        prices = self.provider.fetch_etf_daily(etf_code, start_date, end_date, adjust=adjust)
+        features = add_technical_features(prices)
+        self.parquet_store.write_prices(etf_code, features)
+        if not features.empty:
+            last_date = pd.Timestamp(features["trade_date"].max()).strftime("%Y-%m-%d")
+            self.store.upsert_update_state("etf_daily_price", etf_code, last_date)
+        return features
+
+    def ensure_index_history(self, index_code: str, through: date | str) -> IndexHistoryResult:
+        if self.provider is None:
+            raise ValueError("provider is required to fetch index history")
+
+        through_date = pd.Timestamp(through).date()
+        existing = self.parquet_store.read_index_prices(index_code)
+
+        if existing.empty:
+            fetch_start: date | str = INDEX_HISTORY_AUTO_START
+            status = "INITIALIZED"
+        else:
+            existing = _normalize_existing_index_frame(existing, index_code)
+            last_date = pd.Timestamp(existing["trade_date"].max()).date()
+            if last_date >= through_date:
+                self.store.upsert_update_state("index_daily_price", index_code, last_date.isoformat(), status="SUCCESS")
+                return IndexHistoryResult(
+                    index_code=index_code,
+                    status="SKIPPED",
+                    fetched_rows=0,
+                    total_rows=len(existing),
+                    start_date=pd.Timestamp(existing["trade_date"].min()).date(),
+                    end_date=last_date,
+                )
+            fetch_start = last_date + timedelta(days=1)
+            status = "UPDATED"
+
+        fetched = self.provider.fetch_index_daily(index_code, fetch_start, through_date)
+        fetched_rows = len(fetched)
+        if existing.empty:
+            combined = fetched
+        else:
+            combined = pd.concat([existing, fetched], ignore_index=True)
+        combined = _normalize_existing_index_frame(combined, index_code)
+        featured = add_technical_features(combined.rename(columns={"index_code": "etf_code"})).rename(columns={"etf_code": "index_code"})
+        self.parquet_store.write_index_prices(index_code, featured)
+
+        if featured.empty:
+            self.store.upsert_update_state("index_daily_price", index_code, None, status="EMPTY")
+            return IndexHistoryResult(index_code=index_code, status="EMPTY", fetched_rows=0, total_rows=0)
+
+        first_date = pd.Timestamp(featured["trade_date"].min()).date()
+        last_date = pd.Timestamp(featured["trade_date"].max()).date()
+        self.store.upsert_update_state("index_daily_price", index_code, last_date.isoformat(), status="SUCCESS")
+        return IndexHistoryResult(
+            index_code=index_code,
+            status=status,
+            fetched_rows=fetched_rows,
+            total_rows=len(featured),
+            start_date=first_date,
+            end_date=last_date,
+        )
+
+    def ensure_all_index_history(self, through: date | str, index_codes: list[str] | None = None) -> pd.DataFrame:
+        codes = index_codes or [item.index_code for item in DEFAULT_INDEXES]
+        results: list[IndexHistoryResult] = []
+        for index_code in codes:
+            try:
+                results.append(self.ensure_index_history(index_code, through))
+            except Exception as exc:  # noqa: BLE001 - one failed index must not block the whole batch
+                self.store.upsert_update_state("index_daily_price", index_code, None, status="FAILED", error_message=str(exc))
+                results.append(
+                    IndexHistoryResult(
+                        index_code=index_code,
+                        status="FAILED",
+                        fetched_rows=0,
+                        total_rows=0,
+                        error_message=str(exc),
+                    )
+                )
+        return pd.DataFrame([result.__dict__ for result in results])
+
+
+def _normalize_existing_index_frame(frame: pd.DataFrame, index_code: str) -> pd.DataFrame:
+    result = frame.copy()
+    if "index_code" not in result.columns:
+        result["index_code"] = index_code
+    result["index_code"] = result["index_code"].fillna(index_code)
+    result["trade_date"] = pd.to_datetime(result["trade_date"])
+    result = result.drop_duplicates(subset=["index_code", "trade_date"], keep="last")
+    return result.sort_values("trade_date").reset_index(drop=True)
