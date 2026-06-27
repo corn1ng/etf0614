@@ -6,3 +6,23 @@ trend:
   min_avg_amount_20: 30000000
   max_abs_premium_rate: 0.005
   high_volatility_20: 0.04
+
+trend_v1:
+  moving_averages: [20, 60, 120, 250, 850]
+  momentum_windows: [60, 120]
+  momentum_skip_days: 5
+  relative_strength_buy_rank: 0.30
+  min_trade_interval_days: 10
+  min_listing_days: 252
+  min_avg_amount_20: 100000000
+  compatibility_min_avg_amount_20: 30000000
+  max_abs_premium_rate: 0.005
+  max_cross_market_premium_rate: 0.015
+  atr_window: 20
+  max_atr_distance_from_ma20: 2.0
+  trailing_atr_multiple: 3.0
+  initial_stop_atr_multiple: 2.5
+  initial_stop_min_pct: 0.05
+  initial_stop_max_pct: 0.12
+  max_recent_return_5: 0.12
+  max_recent_return_20: 0.25
