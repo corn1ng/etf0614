@@ -28,7 +28,7 @@ from etf_trading.strategy.trend import TrendStrategy
 from etf_trading.ui.chart_renderer import build_lightweight_chart_payload
 from etf_trading.ui.components.charts import chart_display_controls, chart_range_controls, filter_date_range_frame
 from etf_trading.ui.components.research_tables import render_research_table, research_bar_chart, research_column_config
-from etf_trading.ui.components.status import render_top_status_bar
+from etf_trading.ui.components.status import render_next_steps, render_status_cards, render_top_status_bar
 from etf_trading.ui.navigation import render_primary_navigation, render_secondary_navigation
 from etf_trading.ui.pages import data_maintenance, decision, market, portfolio, research
 from etf_trading.ui.state import summarize_platform_status
@@ -1850,9 +1850,28 @@ def main() -> None:
     section = render_secondary_navigation(page)
 
     if page.slug == "decision":
-        decision.render(store=store, parquet_store=parquet_store, view=section, legacy_render=_tab_decision)
+        decision.render(
+            store=store,
+            parquet_store=parquet_store,
+            view=section,
+            platform_status=_platform_status,
+            render_status_cards=render_status_cards,
+            render_next_steps=render_next_steps,
+            index_trend_display_frame=_index_trend_display_frame,
+            render_research_table=_render_research_table,
+            build_daily_advice_report=_build_daily_advice_report,
+            watchlist_status_frame=_watchlist_status_frame,
+        )
     elif page.slug == "market":
-        market.render(store=store, parquet_store=parquet_store, view=section, legacy_render=_tab_market_watch)
+        market.render(
+            store=store,
+            parquet_store=parquet_store,
+            view=section,
+            build_index_trend_summary=_build_index_trend_summary,
+            render_index_filter_explorer=_render_index_filter_explorer,
+            render_etf_chart=_tab_chart,
+            render_index_watch=_tab_index_watch,
+        )
     elif page.slug == "portfolio":
         portfolio.render(
             store=store,
@@ -1998,25 +2017,6 @@ def _platform_issues(
     return issues
 
 
-def _render_status_cards(status: dict[str, object]) -> None:
-    cols = st.columns(4)
-    cols[0].metric("可参与指数", f"{int(status['eligible_index_count'])}")
-    cols[1].metric("可参与分类", f"{len(status['eligible_categories'])}")
-    cols[2].metric("计算池 ETF", f"{len(status['enabled_watchlist'])}")
-    cols[3].metric("数据缺口", f"{len(status['issues'])}")
-
-
-def _render_next_steps(status: dict[str, object]) -> None:
-    issues = status["issues"]
-    if not issues:
-        st.success("数据和计算池已就绪，可以直接查看今日建议。")
-        return
-
-    st.warning("当前还有准备项未完成，建议按下面顺序处理：")
-    for index, issue in enumerate(issues, start=1):
-        st.markdown(f"{index}. **{issue['title']}**：{issue['detail']}")
-
-
 def _watchlist_status_frame(watchlist: pd.DataFrame, parquet_store: ParquetStore) -> pd.DataFrame:
     if watchlist.empty:
         return watchlist
@@ -2030,77 +2030,6 @@ def _watchlist_status_frame(watchlist: pd.DataFrame, parquet_store: ParquetStore
         if column in display.columns:
             display[column] = display[column].map(lambda value: "是" if bool(value) else "否")
     return display
-
-
-def _tab_decision(store: SQLiteStore, parquet_store: ParquetStore, view: str | None = None) -> None:
-    st.subheader("\u4eca\u65e5\u884c\u52a8")
-    st.caption("\u5148\u770b\u5e02\u573a\u662f\u5426\u5141\u8bb8\u53c2\u4e0e\uff0c\u518d\u770b\u8ba1\u7b97\u6c60\u548c\u4eca\u65e5\u5efa\u8bae\uff1b\u9700\u8981\u8865\u6570\u636e\u65f6\u76f4\u63a5\u7ed9\u4e0b\u4e00\u6b65\u3002")
-
-    status = _platform_status(store, parquet_store)
-    index_summary = status["index_summary"]
-    eligible_categories = status["eligible_categories"]
-    watchlist = status["watchlist"]
-
-    _render_status_cards(status)
-    if eligible_categories:
-        st.info("\u5f53\u524d\u6307\u6570\u8d8b\u52bf\u5141\u8bb8\u53c2\u4e0e\u7684\u5206\u7c7b\uff1a" + "\u3001".join(eligible_categories))
-    else:
-        st.warning("\u5f53\u524d\u6ca1\u6709\u6307\u6570\u5206\u7c7b\u6ee1\u8db3\u65b0\u5f00\u4ed3\u6761\u4ef6\uff0c\u4eca\u65e5\u884c\u52a8\u5e94\u504f\u9632\u5b88\u3002")
-    _render_next_steps(status)
-
-    view = view or st.radio(
-        "\u4eca\u65e5\u89c6\u56fe",
-        ["\u884c\u52a8\u6458\u8981", "\u6bcf\u65e5\u5efa\u8bae", "\u8ba1\u7b97\u6c60\u660e\u7ec6"],
-        horizontal=True,
-        key="daily_action_view",
-    )
-    if view == "\u884c\u52a8\u6458\u8981":
-        top_indexes = (
-            index_summary[index_summary["allows_new_position"].fillna(False).astype(bool)]
-            .head(8)
-            if not index_summary.empty and "allows_new_position" in index_summary.columns
-            else pd.DataFrame()
-        )
-        if top_indexes.empty:
-            st.info("\u6682\u65e0\u53ef\u5f00\u4ed3\u6307\u6570\u3002\u53ef\u5230\u201c\u6570\u636e\u7ef4\u62a4\u201d\u8865\u9f50\u6307\u6570\u5386\u53f2\uff0c\u6216\u7b49\u5f85\u8d8b\u52bf\u6761\u4ef6\u6539\u5584\u3002")
-        else:
-            st.markdown("### \u5f53\u524d\u901a\u8fc7\u8d8b\u52bf\u8fc7\u6ee4\u7684\u6307\u6570")
-            _render_research_table(_index_trend_display_frame(top_indexes), height=260)
-        st.markdown("### \u4eca\u65e5\u5efa\u8bae")
-        report = _build_daily_advice_report(store, parquet_store)
-        if report is None:
-            st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5230\u201cETF\u6c60\u201d\u52a0\u5165 ETF\u3002")
-        else:
-            st.markdown(report)
-        with st.expander("\u67e5\u770b\u539f\u59cb\u8ba1\u7b97\u6c60", expanded=False):
-            if watchlist.empty:
-                st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002")
-            else:
-                st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=320)
-    elif view == "\u6bcf\u65e5\u5efa\u8bae":
-        report = _build_daily_advice_report(store, parquet_store)
-        if report is None:
-            st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5230\u201cETF\u6c60\u201d\u52a0\u5165 ETF\u3002")
-        else:
-            st.markdown(report)
-    else:
-        if watchlist.empty:
-            st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5230\u201cETF\u6c60\u201d\u52a0\u5165 ETF\u3002")
-        else:
-            st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=420)
-
-
-def _tab_market_watch(store: SQLiteStore, parquet_store: ParquetStore, view: str | None = None) -> None:
-    st.subheader("\u5e02\u573a\u5730\u56fe")
-    st.caption("\u5148\u770b\u6307\u6570\u8fc7\u6ee4\u548c\u8d8b\u52bf\u7ed3\u6784\uff0c\u518d\u4e0b\u94bb\u5230 ETF \u884c\u60c5\u3002")
-    index_summary = _build_index_trend_summary(parquet_store)
-    view = view or st.radio("\u5730\u56fe\u89c6\u56fe", ["\u6307\u6570\u4e70\u5356\u53c2\u8003", "ETF\u884c\u60c5", "\u6307\u6570K\u7ebf"], horizontal=True, key="market_map_view")
-    if view == "\u6307\u6570\u4e70\u5356\u53c2\u8003":
-        _render_index_filter_explorer(index_summary, parquet_store)
-    elif view == "ETF\u884c\u60c5":
-        _tab_chart(store, parquet_store)
-    else:
-        _tab_index_watch(parquet_store)
 
 
 def _render_index_quick_sync(store: SQLiteStore, parquet_store: ParquetStore) -> None:
@@ -2126,7 +2055,7 @@ def _render_data_health(status: dict[str, object]) -> None:
     cols[1].metric("指数历史", f"{int(status['index_history_count'])}/{len(DEFAULT_INDEXES)}")
     cols[2].metric("每日计算池", f"{len(watchlist)}")
     cols[3].metric("缺历史 ETF", f"{len(missing_etf_history)}")
-    _render_next_steps(status)
+    render_next_steps(status)
 
 
 def _render_etf_search_and_add(store: SQLiteStore) -> None:
