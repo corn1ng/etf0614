@@ -30,6 +30,7 @@ from etf_trading.ui.components.charts import chart_display_controls, chart_range
 from etf_trading.ui.components.research_tables import render_research_table, research_bar_chart, research_column_config
 from etf_trading.ui.components.status import render_top_status_bar
 from etf_trading.ui.navigation import render_primary_navigation, render_secondary_navigation
+from etf_trading.ui.pages import data_maintenance, decision, market, portfolio, research
 from etf_trading.ui.state import summarize_platform_status
 from etf_trading.ui.styles import inject_global_styles
 from etf_trading.universe.classification import CATEGORIES, is_hk_cross_market
@@ -1849,15 +1850,21 @@ def main() -> None:
     section = render_secondary_navigation(page)
 
     if page.slug == "decision":
-        _tab_decision(store, parquet_store, view=section)
+        decision.render(store=store, parquet_store=parquet_store, view=section, legacy_render=_tab_decision)
     elif page.slug == "market":
-        _tab_market_watch(store, parquet_store, view=section)
+        market.render(store=store, parquet_store=parquet_store, view=section, legacy_render=_tab_market_watch)
     elif page.slug == "portfolio":
-        _tab_portfolio(store, parquet_store, view=section)
+        portfolio.render(store=store, parquet_store=parquet_store, view=section, legacy_render=_tab_portfolio)
     elif page.slug == "research":
-        _tab_research(store, parquet_store, research_view=section)
+        research.render(store=store, parquet_store=parquet_store, view=section, legacy_render=_tab_research)
     else:
-        _tab_data_and_settings(store, parquet_store, service, view=section)
+        data_maintenance.render(
+            store=store,
+            parquet_store=parquet_store,
+            service=service,
+            view=section,
+            legacy_render=_tab_data_and_settings,
+        )
 
 
 @st.cache_resource
