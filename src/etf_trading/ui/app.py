@@ -2553,19 +2553,19 @@ def _render_research_run_controls(
     with st.expander("\u8fd0\u884c\u7814\u7a76", expanded=True):
         st.caption("\u91cd\u65b0\u8fd0\u884c\u4f1a\u5728\u540e\u53f0\u6267\u884c\uff1b\u505c\u6b62\u4e0d\u4f1a\u8986\u76d6\u65e7\u7ed3\u679c\u3002\u5efa\u8bae\u5148\u540c\u6b65\u6307\u6570\u6570\u636e\uff0c\u518d\u8fd0\u884c\u8d8b\u52bf\u7814\u7a76\u3002")
         col1, col2, col3 = st.columns([1, 1, 2])
-        min_rows = int(col1.number_input("\u6700\u5c11\u5386\u53f2\u4ea4\u6613\u65e5", min_value=60, max_value=2000, value=min_rows, step=20))
-        limit_value = int(col2.number_input("\u6837\u672c\u4e0a\u9650", min_value=0, max_value=2000, value=120, step=10))
-        limit = None if limit_value == 0 else limit_value
+        min_rows = int(col1.number_input("\u6700\u5c11\u5386\u53f2\u884c\u6570", min_value=120, max_value=1200, value=min_rows, step=20))
+        limit_input = col2.number_input("\u6700\u591aETF\u6570\u91cf", min_value=0, max_value=1000, value=0, step=10)
+        limit = int(limit_input) or None
         use_index_filter = col3.checkbox("\u5148\u6309ETF\u6307\u6570\u8d8b\u52bf\u7b5b\u9009\u8303\u56f4", value=True, key="research_use_index_filter")
 
         sync_cols = st.columns([1, 1, 2])
-        sync_disabled = job_manager.is_running()
-        if sync_cols[0].button("\u540c\u6b65\u6307\u6570\u6570\u636e", width="stretch", type="primary", disabled=sync_disabled):
+        sync_end = sync_cols[1].date_input("\u6307\u6570\u540c\u6b65\u5230", value=date.today(), key="research_index_sync_end")
+        if sync_cols[0].button("\u5148\u540c\u6b65\u6307\u6570\u5386\u53f2", key="research_sync_indexes"):
             with st.spinner("\u6b63\u5728\u540c\u6b65\u6307\u6570\u5386\u53f2\u5230\u4eca\u5929..."):
                 try:
                     provider = _provider()
                     service = InitializationService(store=store, provider=provider, parquet_store=parquet_store)
-                    sync_summary = service.ensure_all_index_history(date.today())
+                    sync_summary = service.ensure_all_index_history(sync_end)
                 except Exception as exc:  # noqa: BLE001 - UI should preserve provider failure text
                     st.session_state["latest_index_sync_message"] = {
                         "level": "error",
@@ -2576,13 +2576,8 @@ def _render_research_run_controls(
                     level, message = _index_sync_status_message(sync_summary)
                     st.session_state["latest_index_sync_message"] = {"level": level, "message": message}
                     st.session_state["latest_index_sync_summary"] = sync_summary
-        sync_cols[1].button(
-            "\u540c\u6b65 ETF \u6570\u636e",
-            width="stretch",
-            disabled=True,
-            help="ETF \u6570\u636e\u540c\u6b65\u5c06\u4f5c\u4e3a\u72ec\u7acb\u4efb\u52a1\u63a5\u5165\uff0c\u9ed8\u8ba4\u6309\u5f53\u524d\u6307\u6570\u8fc7\u6ee4\u540e\u7684 ETF \u8303\u56f4\u6267\u884c\u3002",
-        )
-        sync_cols[2].caption("ETF \u5386\u53f2\u540c\u6b65\u4ecd\u662f\u72ec\u7acb\u4efb\u52a1\uff1b\u5f53\u524d\u5148\u4fdd\u7559\u5165\u53e3\u63d0\u793a\u3002")
+            st.rerun()
+        sync_cols[2].caption("\u8d8b\u52bf\u7814\u7a76\u4f9d\u8d56\u6307\u6570\u8fc7\u6ee4\u3002\u82e5\u6307\u6570\u5386\u53f2\u6ede\u540e\uff0c\u5148\u540c\u6b65\u518d\u8fd0\u884c\u3002")
         _render_latest_index_sync_result()
 
         candidates = load_research_candidates(RESEARCH_CONFIG)
