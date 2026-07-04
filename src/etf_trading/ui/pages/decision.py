@@ -13,7 +13,7 @@ def render(
     store: SQLiteStore,
     parquet_store: ParquetStore,
     view: str,
-    platform_status,
+    status: dict[str, object],
     render_status_cards,
     render_next_steps,
     index_trend_display_frame,
@@ -24,7 +24,6 @@ def render(
     st.subheader("今日行动")
     st.caption("先看市场是否允许参与，再看计算池和今日建议；需要补数据时直接给下一步。")
 
-    status = platform_status(store, parquet_store)
     index_summary = status["index_summary"]
     eligible_categories = status["eligible_categories"]
     watchlist = status["watchlist"]

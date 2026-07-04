@@ -12,14 +12,13 @@ def render(
     store: SQLiteStore,
     parquet_store: ParquetStore,
     view: str,
-    build_index_trend_summary,
+    index_summary,
     render_index_filter_explorer,
     render_etf_chart,
     render_index_watch,
 ) -> None:
     st.subheader("市场地图")
     st.caption("先看指数过滤和趋势结构，再下钻到 ETF 行情。")
-    index_summary = build_index_trend_summary(parquet_store)
 
     if view == "指数买卖参考":
         render_index_filter_explorer(index_summary, parquet_store)

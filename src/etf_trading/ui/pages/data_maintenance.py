@@ -14,7 +14,7 @@ def render(
     parquet_store: ParquetStore,
     service: InitializationService,
     view: str,
-    platform_status,
+    status: dict[str, object],
     render_data_health,
     render_index_quick_sync,
     render_data_center,
@@ -22,7 +22,6 @@ def render(
 ) -> None:
     st.subheader("数据维护")
     st.caption("低频维护入口：先看数据健康，再初始化数据、补齐指数历史、查看任务日志。")
-    status = platform_status(store, parquet_store)
 
     if view == "数据健康":
         render_data_health(status)

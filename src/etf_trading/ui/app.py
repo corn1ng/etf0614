@@ -1854,7 +1854,7 @@ def main() -> None:
             store=store,
             parquet_store=parquet_store,
             view=section,
-            platform_status=_platform_status,
+            status=status,
             render_status_cards=render_status_cards,
             render_next_steps=render_next_steps,
             index_trend_display_frame=_index_trend_display_frame,
@@ -1867,7 +1867,7 @@ def main() -> None:
             store=store,
             parquet_store=parquet_store,
             view=section,
-            build_index_trend_summary=_build_index_trend_summary,
+            index_summary=status["index_summary"],
             render_index_filter_explorer=_render_index_filter_explorer,
             render_etf_chart=_tab_chart,
             render_index_watch=_tab_index_watch,
@@ -1888,7 +1888,7 @@ def main() -> None:
             parquet_store=parquet_store,
             service=service,
             view=section,
-            platform_status=_platform_status,
+            status=status,
             render_data_health=_render_data_health,
             render_index_quick_sync=_render_index_quick_sync,
             render_data_center=_tab_data_center,
@@ -2442,12 +2442,6 @@ def _tab_research(store: SQLiteStore, parquet_store: ParquetStore, research_view
     _render_research_job_status(job_manager)
 
     extra_tool = st.selectbox("\u7814\u7a76\u8f85\u52a9\u5de5\u5177", ["\u4e0d\u542f\u7528", "\u6307\u6570\u8fc7\u6ee4", "\u624b\u52a8\u56de\u6d4b"], key="research_extra_tool")
-    if extra_tool == "\u6307\u6570\u8fc7\u6ee4":
-        _render_index_filter_explorer(index_summary, parquet_store)
-        return
-    if extra_tool == "\u624b\u52a8\u56de\u6d4b":
-        _tab_backtest(store, parquet_store)
-        return
 
     if research_view == "\u8fd0\u884c\u7814\u7a76":
         _render_research_run_controls(
@@ -2458,28 +2452,31 @@ def _tab_research(store: SQLiteStore, parquet_store: ParquetStore, research_view
             job_manager=job_manager,
             output_dir=output_dir,
         )
-        return
-
-    results_path = output_dir / "research_results.csv"
-    ranking_path = output_dir / "candidate_ranking.csv"
-    if not results_path.exists() or not ranking_path.exists():
-        st.info("\u6682\u65e0\u8d8b\u52bf\u7814\u7a76\u7ed3\u679c\u3002\u70b9\u51fb\u201c\u8fd0\u884c\u8d8b\u52bf\u7814\u7a76\u201d\u751f\u6210\u672c\u5730\u7ed3\u679c\u3002")
-        return
-
-    results = pd.read_csv(results_path)
-    ranking = pd.read_csv(ranking_path)
-    if results.empty or ranking.empty:
-        st.warning("\u8d8b\u52bf\u7814\u7a76\u7ed3\u679c\u4e3a\u7a7a\u3002")
-        return
-
-    if research_view == "\u7814\u7a76\u603b\u89c8":
-        _render_research_overview(results, ranking)
-    elif research_view == "\u7b56\u7565\u5bf9\u6bd4":
-        _render_research_comparison_and_category(results)
-    elif research_view == "ETF\u590d\u76d8":
-        _render_research_replay(results, store, parquet_store, min_rows)
     else:
-        _render_research_detail_table(results, store)
+        results_path = output_dir / "research_results.csv"
+        ranking_path = output_dir / "candidate_ranking.csv"
+        if not results_path.exists() or not ranking_path.exists():
+            st.info("\u6682\u65e0\u8d8b\u52bf\u7814\u7a76\u7ed3\u679c\u3002\u70b9\u51fb\u201c\u8fd0\u884c\u8d8b\u52bf\u7814\u7a76\u201d\u751f\u6210\u672c\u5730\u7ed3\u679c\u3002")
+        else:
+            results = pd.read_csv(results_path)
+            ranking = pd.read_csv(ranking_path)
+            if results.empty or ranking.empty:
+                st.warning("\u8d8b\u52bf\u7814\u7a76\u7ed3\u679c\u4e3a\u7a7a\u3002")
+            elif research_view == "\u7814\u7a76\u603b\u89c8":
+                _render_research_overview(results, ranking)
+            elif research_view == "\u7b56\u7565\u5bf9\u6bd4":
+                _render_research_comparison_and_category(results)
+            elif research_view == "ETF\u590d\u76d8":
+                _render_research_replay(results, store, parquet_store, min_rows)
+            else:
+                _render_research_detail_table(results, store)
+
+    if extra_tool != "\u4e0d\u542f\u7528":
+        with st.expander(f"\u8f85\u52a9\u5de5\u5177\uff1a{extra_tool}", expanded=False):
+            if extra_tool == "\u6307\u6570\u8fc7\u6ee4":
+                _render_index_filter_explorer(index_summary, parquet_store)
+            else:
+                _tab_backtest(store, parquet_store)
 
 
 def _render_research_job_status(job_manager: ResearchJobManager) -> None:
