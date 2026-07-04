@@ -26,6 +26,7 @@ from etf_trading.strategy.features import add_technical_features
 from etf_trading.strategy.models import StrategySignal
 from etf_trading.strategy.trend import TrendStrategy
 from etf_trading.ui.chart_renderer import build_lightweight_chart_payload
+from etf_trading.ui.components.charts import chart_display_controls, chart_range_controls, filter_date_range_frame
 from etf_trading.ui.components.research_tables import render_research_table, research_bar_chart, research_column_config
 from etf_trading.ui.components.status import render_top_status_bar
 from etf_trading.ui.navigation import render_primary_navigation, render_secondary_navigation
@@ -1707,82 +1708,30 @@ def _chart_display_controls(
     default_ma_labels: list[str] | None = None,
     default_price_scale_label: str = "线性坐标 Linear",
 ) -> tuple[str, str, list[str]]:
-    default_ma_labels = default_ma_labels if default_ma_labels is not None else ["MA51", "MA120", "MA250", "MA850"]
-    control_cols = st.columns([1, 1, 2])
-    chart_label = control_cols[0].radio(
-        "图表类型 Chart Type",
-        list(CHART_TYPE_OPTIONS),
-        index=list(CHART_TYPE_OPTIONS).index(default_chart_label),
-        horizontal=True,
-        key=f"{key_prefix}_chart_type",
-    )
-    price_scale_label = control_cols[1].radio(
-        "显示口径 View",
-        list(PRICE_SCALE_OPTIONS),
-        index=list(PRICE_SCALE_OPTIONS).index(default_price_scale_label),
-        horizontal=True,
-        key=f"{key_prefix}_price_scale",
-    )
     price_scale_help = {
         "涨跌幅视图 Return %": "纵轴为相对区间起点的累计涨跌幅。",
         "比例视图 Log Return %": "纵轴为对数涨跌幅，等距离更接近等比例变化。",
         "回撤视图 Drawdown %": "纵轴为相对此前最高点的回撤。",
         "距区间低点 Downside %": "纵轴为从当前点位跌到区间最低点还需下跌的比例。",
     }
-    if price_scale_label in price_scale_help:
-        control_cols[1].caption(price_scale_help[price_scale_label])
-    selected_ma_labels = control_cols[2].multiselect(
-        "均线显示 Moving Averages",
-        list(MA_DISPLAY_OPTIONS),
-        default=default_ma_labels,
-        key=f"{key_prefix}_ma_columns",
-    )
-    return (
-        CHART_TYPE_OPTIONS[chart_label],
-        PRICE_SCALE_OPTIONS[price_scale_label],
-        [MA_DISPLAY_OPTIONS[label] for label in selected_ma_labels],
+    return chart_display_controls(
+        key_prefix,
+        chart_type_options=CHART_TYPE_OPTIONS,
+        price_scale_options=PRICE_SCALE_OPTIONS,
+        ma_display_options=MA_DISPLAY_OPTIONS,
+        default_chart_label=default_chart_label,
+        default_ma_labels=default_ma_labels or ["MA51", "MA120", "MA250", "MA850"],
+        default_price_scale_label=default_price_scale_label,
+        price_scale_help=price_scale_help,
     )
 
 
 def _chart_range_controls(frame: pd.DataFrame, key_prefix: str, *, default_label: str = "近2年") -> pd.DataFrame:
-    if frame.empty or "trade_date" not in frame.columns:
-        return frame
-
-    prepared = frame.copy()
-    prepared["trade_date"] = pd.to_datetime(prepared["trade_date"])
-    min_date = pd.Timestamp(prepared["trade_date"].min()).date()
-    max_date = pd.Timestamp(prepared["trade_date"].max()).date()
-    labels = list(CHART_RANGE_PRESETS)
-    default_index = labels.index(default_label) if default_label in labels else labels.index("近2年")
-    range_label = st.radio(
-        "图表区间",
-        labels,
-        index=default_index,
-        horizontal=True,
-        key=f"{key_prefix}_range_preset",
-    )
-    preset = CHART_RANGE_PRESETS[range_label]
-    if preset == "custom":
-        cols = st.columns(2)
-        start_date = cols[0].date_input("开始日期", value=min_date, min_value=min_date, max_value=max_date, key=f"{key_prefix}_range_start")
-        end_date = cols[1].date_input("结束日期", value=max_date, min_value=min_date, max_value=max_date, key=f"{key_prefix}_range_end")
-        if start_date > end_date:
-            st.warning("开始日期晚于结束日期，已临时按完整区间显示。")
-            return prepared
-        return _filter_date_range_frame(prepared, start_date, end_date)
-    if preset is None:
-        return prepared
-
-    start_date = max(min_date, max_date - timedelta(days=int(preset)))
-    return _filter_date_range_frame(prepared, start_date, max_date)
+    return chart_range_controls(frame, key_prefix, range_presets=CHART_RANGE_PRESETS, default_label=default_label)
 
 
 def _filter_date_range_frame(frame: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:
-    prepared = frame.copy()
-    prepared["trade_date"] = pd.to_datetime(prepared["trade_date"])
-    start = pd.Timestamp(start_date)
-    end = pd.Timestamp(end_date)
-    return prepared[(prepared["trade_date"] >= start) & (prepared["trade_date"] <= end)].reset_index(drop=True)
+    return filter_date_range_frame(frame, start_date, end_date)
 
 
 def _research_chart_frame(frame: pd.DataFrame, index_column: str, value_columns: list[str]) -> pd.DataFrame:
