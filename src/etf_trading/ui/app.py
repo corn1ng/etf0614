@@ -1854,7 +1854,13 @@ def main() -> None:
     elif page.slug == "market":
         market.render(store=store, parquet_store=parquet_store, view=section, legacy_render=_tab_market_watch)
     elif page.slug == "portfolio":
-        portfolio.render(store=store, parquet_store=parquet_store, view=section, legacy_render=_tab_portfolio)
+        portfolio.render(
+            store=store,
+            parquet_store=parquet_store,
+            view=section,
+            render_search_and_add=_render_etf_search_and_add,
+            watchlist_status_frame=_watchlist_status_frame,
+        )
     elif page.slug == "research":
         research.render(store=store, parquet_store=parquet_store, view=section, legacy_render=_tab_research)
     else:
@@ -1863,7 +1869,11 @@ def main() -> None:
             parquet_store=parquet_store,
             service=service,
             view=section,
-            legacy_render=_tab_data_and_settings,
+            platform_status=_platform_status,
+            render_data_health=_render_data_health,
+            render_index_quick_sync=_render_index_quick_sync,
+            render_data_center=_tab_data_center,
+            render_settings=_tab_settings,
         )
 
 
@@ -2093,28 +2103,6 @@ def _tab_market_watch(store: SQLiteStore, parquet_store: ParquetStore, view: str
         _tab_index_watch(parquet_store)
 
 
-def _tab_portfolio(store: SQLiteStore, parquet_store: ParquetStore, view: str | None = None) -> None:
-    st.subheader("ETF\u6c60")
-    st.caption("\u641c ETF\u3001\u52a0\u5165\u6bcf\u65e5\u8ba1\u7b97\u6c60\uff0c\u5e76\u68c0\u67e5\u4e70\u5165\u8bb8\u53ef\u548c\u5386\u53f2\u884c\u60c5\u72b6\u6001\u3002")
-    view = view or "\u641c\u7d22\u52a0\u5165"
-    watchlist = store.list_watchlist()
-
-    if view == "\u641c\u7d22\u52a0\u5165":
-        _render_etf_search_and_add(store)
-        st.markdown("### \u6bcf\u65e5\u8ba1\u7b97\u6c60")
-        if watchlist.empty:
-            st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5728\u4e0a\u65b9\u641c\u7d22 ETF \u5e76\u4fdd\u5b58\u3002")
-        else:
-            st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=320)
-        return
-
-    st.markdown("### \u6bcf\u65e5\u8ba1\u7b97\u6c60")
-    if watchlist.empty:
-        st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5728\u201c\u641c\u7d22\u52a0\u5165\u201d\u4e2d\u4fdd\u5b58 ETF\u3002")
-    else:
-        st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=520)
-
-
 def _render_index_quick_sync(store: SQLiteStore, parquet_store: ParquetStore) -> None:
     quick_cols = st.columns([1, 2])
     if quick_cols[0].button("\u4e00\u952e\u8865\u9f50\u5168\u90e8\u6307\u6570", type="primary", width="stretch", key="data_quick_sync_indexes"):
@@ -2127,29 +2115,6 @@ def _render_index_quick_sync(store: SQLiteStore, parquet_store: ParquetStore) ->
         st.session_state["latest_index_sync_summary"] = summary
     quick_cols[1].caption("\u6307\u6570\u5386\u53f2\u662f\u4eca\u65e5\u884c\u52a8\u548c\u7814\u7a76\u8fc7\u6ee4\u7684\u524d\u7f6e\u6570\u636e\uff1b\u8865\u9f50\u540e\u56de\u5230\u201c\u4eca\u65e5\u884c\u52a8\u201d\u67e5\u770b\u53ef\u53c2\u4e0e\u8303\u56f4\u3002")
     _render_latest_index_sync_result()
-
-
-def _tab_data_and_settings(
-    store: SQLiteStore,
-    parquet_store: ParquetStore,
-    service: InitializationService,
-    view: str | None = None,
-) -> None:
-    st.subheader("\u6570\u636e\u7ef4\u62a4")
-    st.caption("\u4f4e\u9891\u7ef4\u62a4\u5165\u53e3\uff1a\u5148\u770b\u6570\u636e\u5065\u5eb7\uff0c\u518d\u521d\u59cb\u5316\u6570\u636e\u3001\u8865\u9f50\u6307\u6570\u5386\u53f2\u3001\u67e5\u770b\u4efb\u52a1\u65e5\u5fd7\u3002")
-    status = _platform_status(store, parquet_store)
-    view = view or "\u6570\u636e\u5065\u5eb7"
-
-    if view == "\u6570\u636e\u5065\u5eb7":
-        _render_data_health(status)
-        _render_index_quick_sync(store, parquet_store)
-    elif view == "\u6570\u636e\u4e2d\u5fc3":
-        _render_data_health(status)
-        _render_index_quick_sync(store, parquet_store)
-        _tab_data_center(store, parquet_store)
-    else:
-        _render_data_health(status)
-        _tab_settings(store, service)
 
 
 def _render_data_health(status: dict[str, object]) -> None:
