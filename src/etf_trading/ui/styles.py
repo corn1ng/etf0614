@@ -13,7 +13,32 @@ def inject_global_styles() -> None:
             padding-top: 1.1rem;
         }
         [data-testid=\"stSidebar\"] {
-            min-width: 15rem;
+            width: 15.5rem !important;
+            min-width: 15.5rem !important;
+            max-width: 15.5rem !important;
+        }
+        [data-testid=\"stSidebar\"] > div:first-child {
+            width: 15.5rem !important;
+            min-width: 15.5rem !important;
+            max-width: 15.5rem !important;
+        }
+        [data-testid=\"stSidebarContent\"] {
+            padding: 0.75rem 0.65rem;
+        }
+        [data-testid=\"stSidebar\"] h3 {
+            font-size: 0.98rem;
+            line-height: 1.2;
+            margin: 0.15rem 0 0.5rem 0;
+        }
+        [data-testid=\"stSidebar\"] .stRadio {
+            margin-top: 0.1rem;
+        }
+        [data-testid=\"stSidebar\"] .stRadio [role=\"radiogroup\"] {
+            gap: 0.18rem;
+        }
+        [data-testid=\"stSidebar\"] .stRadio label {
+            min-height: 1.9rem;
+            padding: 0.18rem 0.3rem;
         }
         [data-testid=\"stMetricLabel\"] p {
             white-space: normal;
