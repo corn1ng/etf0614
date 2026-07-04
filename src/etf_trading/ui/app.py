@@ -27,7 +27,7 @@ from etf_trading.strategy.models import StrategySignal
 from etf_trading.strategy.trend import TrendStrategy
 from etf_trading.ui.chart_renderer import build_lightweight_chart_payload
 from etf_trading.ui.components.status import render_top_status_bar
-from etf_trading.ui.navigation import render_primary_navigation
+from etf_trading.ui.navigation import render_primary_navigation, render_secondary_navigation
 from etf_trading.ui.state import summarize_platform_status
 from etf_trading.ui.styles import inject_global_styles
 from etf_trading.universe.classification import CATEGORIES, is_hk_cross_market
@@ -1951,17 +1951,18 @@ def main() -> None:
     render_top_status_bar(summarize_platform_status(status))
     st.title(page.label)
     st.caption(page.caption)
+    section = render_secondary_navigation(page)
 
     if page.slug == "decision":
-        _tab_decision(store, parquet_store)
+        _tab_decision(store, parquet_store, view=section)
     elif page.slug == "market":
-        _tab_market_watch(store, parquet_store)
+        _tab_market_watch(store, parquet_store, view=section)
     elif page.slug == "portfolio":
-        _tab_portfolio(store, parquet_store)
+        _tab_portfolio(store, parquet_store, view=section)
     elif page.slug == "research":
-        _tab_research(store, parquet_store)
+        _tab_research(store, parquet_store, research_view=section)
     else:
-        _tab_data_and_settings(store, parquet_store, service)
+        _tab_data_and_settings(store, parquet_store, service, view=section)
 
 
 @st.cache_resource
@@ -2119,9 +2120,9 @@ def _watchlist_status_frame(watchlist: pd.DataFrame, parquet_store: ParquetStore
     return display
 
 
-def _tab_decision(store: SQLiteStore, parquet_store: ParquetStore) -> None:
-    st.subheader("今日行动")
-    st.caption("先看市场是否允许参与，再看计算池和今日建议；需要补数据时直接给下一步。")
+def _tab_decision(store: SQLiteStore, parquet_store: ParquetStore, view: str | None = None) -> None:
+    st.subheader("\u4eca\u65e5\u884c\u52a8")
+    st.caption("\u5148\u770b\u5e02\u573a\u662f\u5426\u5141\u8bb8\u53c2\u4e0e\uff0c\u518d\u770b\u8ba1\u7b97\u6c60\u548c\u4eca\u65e5\u5efa\u8bae\uff1b\u9700\u8981\u8865\u6570\u636e\u65f6\u76f4\u63a5\u7ed9\u4e0b\u4e00\u6b65\u3002")
 
     status = _platform_status(store, parquet_store)
     index_summary = status["index_summary"]
@@ -2130,18 +2131,18 @@ def _tab_decision(store: SQLiteStore, parquet_store: ParquetStore) -> None:
 
     _render_status_cards(status)
     if eligible_categories:
-        st.info("当前指数趋势允许参与的分类：" + "、".join(eligible_categories))
+        st.info("\u5f53\u524d\u6307\u6570\u8d8b\u52bf\u5141\u8bb8\u53c2\u4e0e\u7684\u5206\u7c7b\uff1a" + "\u3001".join(eligible_categories))
     else:
-        st.warning("当前没有指数分类满足新开仓条件，今日行动应偏防守。")
+        st.warning("\u5f53\u524d\u6ca1\u6709\u6307\u6570\u5206\u7c7b\u6ee1\u8db3\u65b0\u5f00\u4ed3\u6761\u4ef6\uff0c\u4eca\u65e5\u884c\u52a8\u5e94\u504f\u9632\u5b88\u3002")
     _render_next_steps(status)
 
-    view = st.radio(
-        "今日视图",
-        ["行动摘要", "每日建议", "计算池明细"],
+    view = view or st.radio(
+        "\u4eca\u65e5\u89c6\u56fe",
+        ["\u884c\u52a8\u6458\u8981", "\u6bcf\u65e5\u5efa\u8bae", "\u8ba1\u7b97\u6c60\u660e\u7ec6"],
         horizontal=True,
         key="daily_action_view",
     )
-    if view == "行动摘要":
+    if view == "\u884c\u52a8\u6458\u8981":
         top_indexes = (
             index_summary[index_summary["allows_new_position"].fillna(False).astype(bool)]
             .head(8)
@@ -2149,82 +2150,103 @@ def _tab_decision(store: SQLiteStore, parquet_store: ParquetStore) -> None:
             else pd.DataFrame()
         )
         if top_indexes.empty:
-            st.info("暂无可开仓指数。可到“数据维护”补齐指数历史，或等待趋势条件改善。")
+            st.info("\u6682\u65e0\u53ef\u5f00\u4ed3\u6307\u6570\u3002\u53ef\u5230\u201c\u6570\u636e\u7ef4\u62a4\u201d\u8865\u9f50\u6307\u6570\u5386\u53f2\uff0c\u6216\u7b49\u5f85\u8d8b\u52bf\u6761\u4ef6\u6539\u5584\u3002")
         else:
-            st.markdown("### 当前通过趋势过滤的指数")
+            st.markdown("### \u5f53\u524d\u901a\u8fc7\u8d8b\u52bf\u8fc7\u6ee4\u7684\u6307\u6570")
             _render_research_table(_index_trend_display_frame(top_indexes), height=260)
-        st.markdown("### 今日建议")
+        st.markdown("### \u4eca\u65e5\u5efa\u8bae")
         report = _build_daily_advice_report(store, parquet_store)
         if report is None:
-            st.info("每日计算池为空。请先到“ETF池”加入 ETF。")
+            st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5230\u201cETF\u6c60\u201d\u52a0\u5165 ETF\u3002")
         else:
             st.markdown(report)
-        with st.expander("查看原始计算池", expanded=False):
+        with st.expander("\u67e5\u770b\u539f\u59cb\u8ba1\u7b97\u6c60", expanded=False):
             if watchlist.empty:
-                st.info("每日计算池为空。")
+                st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002")
             else:
                 st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=320)
-    elif view == "每日建议":
+    elif view == "\u6bcf\u65e5\u5efa\u8bae":
         report = _build_daily_advice_report(store, parquet_store)
         if report is None:
-            st.info("每日计算池为空。请先到“ETF池”加入 ETF。")
+            st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5230\u201cETF\u6c60\u201d\u52a0\u5165 ETF\u3002")
         else:
             st.markdown(report)
     else:
         if watchlist.empty:
-            st.info("每日计算池为空。请先到“ETF池”加入 ETF。")
+            st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5230\u201cETF\u6c60\u201d\u52a0\u5165 ETF\u3002")
         else:
             st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=420)
 
 
-def _tab_market_watch(store: SQLiteStore, parquet_store: ParquetStore) -> None:
-    st.subheader("市场地图")
-    st.caption("先看指数过滤和趋势结构，再下钻到 ETF 行情。")
+def _tab_market_watch(store: SQLiteStore, parquet_store: ParquetStore, view: str | None = None) -> None:
+    st.subheader("\u5e02\u573a\u5730\u56fe")
+    st.caption("\u5148\u770b\u6307\u6570\u8fc7\u6ee4\u548c\u8d8b\u52bf\u7ed3\u6784\uff0c\u518d\u4e0b\u94bb\u5230 ETF \u884c\u60c5\u3002")
     index_summary = _build_index_trend_summary(parquet_store)
-    view = st.radio("地图视图", ["指数买卖参考", "ETF行情", "指数K线"], horizontal=True, key="market_map_view")
-    if view == "指数买卖参考":
+    view = view or st.radio("\u5730\u56fe\u89c6\u56fe", ["\u6307\u6570\u4e70\u5356\u53c2\u8003", "ETF\u884c\u60c5", "\u6307\u6570K\u7ebf"], horizontal=True, key="market_map_view")
+    if view == "\u6307\u6570\u4e70\u5356\u53c2\u8003":
         _render_index_filter_explorer(index_summary, parquet_store)
-    elif view == "ETF行情":
+    elif view == "ETF\u884c\u60c5":
         _tab_chart(store, parquet_store)
     else:
         _tab_index_watch(parquet_store)
 
 
-def _tab_portfolio(store: SQLiteStore, parquet_store: ParquetStore) -> None:
-    st.subheader("ETF池")
-    st.caption("找 ETF、加入每日计算池，并检查买入许可和历史行情状态。")
-    _render_etf_search_and_add(store)
-
-    st.markdown("### 每日计算池")
+def _tab_portfolio(store: SQLiteStore, parquet_store: ParquetStore, view: str | None = None) -> None:
+    st.subheader("ETF\u6c60")
+    st.caption("\u641c ETF\u3001\u52a0\u5165\u6bcf\u65e5\u8ba1\u7b97\u6c60\uff0c\u5e76\u68c0\u67e5\u4e70\u5165\u8bb8\u53ef\u548c\u5386\u53f2\u884c\u60c5\u72b6\u6001\u3002")
+    view = view or "\u641c\u7d22\u52a0\u5165"
     watchlist = store.list_watchlist()
+
+    if view == "\u641c\u7d22\u52a0\u5165":
+        _render_etf_search_and_add(store)
+        st.markdown("### \u6bcf\u65e5\u8ba1\u7b97\u6c60")
+        if watchlist.empty:
+            st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5728\u4e0a\u65b9\u641c\u7d22 ETF \u5e76\u4fdd\u5b58\u3002")
+        else:
+            st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=320)
+        return
+
+    st.markdown("### \u6bcf\u65e5\u8ba1\u7b97\u6c60")
     if watchlist.empty:
-        st.info("每日计算池为空。请先在上方搜索 ETF 并保存。")
+        st.info("\u6bcf\u65e5\u8ba1\u7b97\u6c60\u4e3a\u7a7a\u3002\u8bf7\u5148\u5728\u201c\u641c\u7d22\u52a0\u5165\u201d\u4e2d\u4fdd\u5b58 ETF\u3002")
     else:
-        st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=420)
+        st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=520)
 
 
-def _tab_data_and_settings(store: SQLiteStore, parquet_store: ParquetStore, service: InitializationService) -> None:
-    st.subheader("数据维护")
-    st.caption("低频维护入口：先看数据健康，再初始化数据、补齐指数历史、查看任务日志。")
-    status = _platform_status(store, parquet_store)
-    _render_data_health(status)
-
+def _render_index_quick_sync(store: SQLiteStore, parquet_store: ParquetStore) -> None:
     quick_cols = st.columns([1, 2])
-    if quick_cols[0].button("一键补齐全部指数", type="primary", width="stretch", key="data_quick_sync_indexes"):
+    if quick_cols[0].button("\u4e00\u952e\u8865\u9f50\u5168\u90e8\u6307\u6570", type="primary", width="stretch", key="data_quick_sync_indexes"):
         provider = _provider()
         sync_service = InitializationService(store=store, provider=provider, parquet_store=parquet_store)
-        with st.spinner("正在检查并补齐全部指数历史..."):
+        with st.spinner("\u6b63\u5728\u68c0\u67e5\u5e76\u8865\u9f50\u5168\u90e8\u6307\u6570\u5386\u53f2..."):
             summary = sync_service.ensure_all_index_history(date.today())
         level, message = _index_sync_status_message(summary)
         st.session_state["latest_index_sync_message"] = {"level": level, "message": message}
         st.session_state["latest_index_sync_summary"] = summary
-    quick_cols[1].caption("指数历史是今日行动和研究过滤的前置数据；补齐后回到“今日行动”查看可参与范围。")
+    quick_cols[1].caption("\u6307\u6570\u5386\u53f2\u662f\u4eca\u65e5\u884c\u52a8\u548c\u7814\u7a76\u8fc7\u6ee4\u7684\u524d\u7f6e\u6570\u636e\uff1b\u8865\u9f50\u540e\u56de\u5230\u201c\u4eca\u65e5\u884c\u52a8\u201d\u67e5\u770b\u53ef\u53c2\u4e0e\u8303\u56f4\u3002")
     _render_latest_index_sync_result()
 
-    view = st.radio("管理视图", ["数据中心", "日志与设置"], horizontal=True, key="data_settings_view")
-    if view == "数据中心":
+
+def _tab_data_and_settings(
+    store: SQLiteStore,
+    parquet_store: ParquetStore,
+    service: InitializationService,
+    view: str | None = None,
+) -> None:
+    st.subheader("\u6570\u636e\u7ef4\u62a4")
+    st.caption("\u4f4e\u9891\u7ef4\u62a4\u5165\u53e3\uff1a\u5148\u770b\u6570\u636e\u5065\u5eb7\uff0c\u518d\u521d\u59cb\u5316\u6570\u636e\u3001\u8865\u9f50\u6307\u6570\u5386\u53f2\u3001\u67e5\u770b\u4efb\u52a1\u65e5\u5fd7\u3002")
+    status = _platform_status(store, parquet_store)
+    view = view or "\u6570\u636e\u5065\u5eb7"
+
+    if view == "\u6570\u636e\u5065\u5eb7":
+        _render_data_health(status)
+        _render_index_quick_sync(store, parquet_store)
+    elif view == "\u6570\u636e\u4e2d\u5fc3":
+        _render_data_health(status)
+        _render_index_quick_sync(store, parquet_store)
         _tab_data_center(store, parquet_store)
     else:
+        _render_data_health(status)
         _tab_settings(store, service)
 
 
@@ -2519,60 +2541,27 @@ def _tab_backtest(store: SQLiteStore, parquet_store: ParquetStore) -> None:
         st.dataframe(trades_display, width="stretch", hide_index=True)
 
 
-def _tab_research(store: SQLiteStore, parquet_store: ParquetStore) -> None:
-    st.subheader("研究复盘")
-    st.caption("读取已有研究结果，复盘策略表现；需要重新计算时再展开运行研究。")
-    _inject_research_styles()
-    job_manager = _research_job_manager()
-    output_dir = RESEARCH_REPORT_DIR
-    master = store.list_etf_master()
-    index_summary = _build_index_trend_summary(parquet_store)
-    eligible_categories = _eligible_index_categories(index_summary)
-    eligible_codes = _filter_etf_codes_by_categories(master, eligible_categories)
-    min_rows = 252
-    limit = 120
-    use_index_filter = True
-
-    index_cols = st.columns(4)
-    eligible_index_count = int(index_summary["allows_new_position"].sum()) if "allows_new_position" in index_summary.columns else 0
-    index_cols[0].metric("可开仓指数 Eligible Indexes", f"{eligible_index_count}")
-    index_cols[1].metric("趋势分类 Categories", f"{len(eligible_categories)}")
-    index_cols[2].metric("筛后ETF Filtered ETFs", f"{len(eligible_codes)}")
-    index_cols[3].metric("全市场ETF All ETFs", f"{len(master)}")
-    if use_index_filter:
-        if eligible_categories:
-            st.info("当前进入回测的指数分类：" + "、".join(eligible_categories))
-        else:
-            st.warning("当前没有指数分类满足新开仓条件；按两阶段规则，此时不应强行扩大ETF候选池。")
-
-    research_view = st.radio(
-        "复盘视图",
-        ["研究总览", "指数过滤", "策略对比", "ETF复盘", "手动回测", "明细表"],
-        horizontal=True,
-        key="research_view",
-    )
-
-    if research_view == "指数过滤":
-        _render_index_filter_explorer(index_summary, parquet_store)
-        return
-    if research_view == "手动回测":
-        _tab_backtest(store, parquet_store)
-        return
-
-    _render_research_job_status(job_manager)
-
-    with st.expander("运行研究", expanded=False):
-        st.caption("重新运行会在后台执行；停止不会覆盖旧结果。建议先同步指数数据，再运行趋势研究。")
+def _render_research_run_controls(
+    *,
+    store: SQLiteStore,
+    parquet_store: ParquetStore,
+    index_summary: pd.DataFrame,
+    min_rows: int,
+    job_manager: ResearchJobManager,
+    output_dir: Path,
+) -> None:
+    with st.expander("\u8fd0\u884c\u7814\u7a76", expanded=True):
+        st.caption("\u91cd\u65b0\u8fd0\u884c\u4f1a\u5728\u540e\u53f0\u6267\u884c\uff1b\u505c\u6b62\u4e0d\u4f1a\u8986\u76d6\u65e7\u7ed3\u679c\u3002\u5efa\u8bae\u5148\u540c\u6b65\u6307\u6570\u6570\u636e\uff0c\u518d\u8fd0\u884c\u8d8b\u52bf\u7814\u7a76\u3002")
         col1, col2, col3 = st.columns([1, 1, 2])
-        min_rows = int(col1.number_input("最少历史交易日", min_value=60, max_value=2000, value=252, step=20))
-        limit_value = int(col2.number_input("样本上限", min_value=0, max_value=2000, value=120, step=10))
+        min_rows = int(col1.number_input("\u6700\u5c11\u5386\u53f2\u4ea4\u6613\u65e5", min_value=60, max_value=2000, value=min_rows, step=20))
+        limit_value = int(col2.number_input("\u6837\u672c\u4e0a\u9650", min_value=0, max_value=2000, value=120, step=10))
         limit = None if limit_value == 0 else limit_value
-        use_index_filter = col3.checkbox("先按ETF指数趋势筛选范围", value=True)
+        use_index_filter = col3.checkbox("\u5148\u6309ETF\u6307\u6570\u8d8b\u52bf\u7b5b\u9009\u8303\u56f4", value=True, key="research_use_index_filter")
 
         sync_cols = st.columns([1, 1, 2])
         sync_disabled = job_manager.is_running()
-        if sync_cols[0].button("同步指数数据", width="stretch", type="primary", disabled=sync_disabled):
-            with st.spinner("正在同步指数历史到今天..."):
+        if sync_cols[0].button("\u540c\u6b65\u6307\u6570\u6570\u636e", width="stretch", type="primary", disabled=sync_disabled):
+            with st.spinner("\u6b63\u5728\u540c\u6b65\u6307\u6570\u5386\u53f2\u5230\u4eca\u5929..."):
                 try:
                     provider = _provider()
                     service = InitializationService(store=store, provider=provider, parquet_store=parquet_store)
@@ -2580,7 +2569,7 @@ def _tab_research(store: SQLiteStore, parquet_store: ParquetStore) -> None:
                 except Exception as exc:  # noqa: BLE001 - UI should preserve provider failure text
                     st.session_state["latest_index_sync_message"] = {
                         "level": "error",
-                        "message": f"指数同步失败：{exc}",
+                        "message": f"\u6307\u6570\u540c\u6b65\u5931\u8d25\uff1a{exc}",
                     }
                     st.session_state.pop("latest_index_sync_summary", None)
                 else:
@@ -2588,24 +2577,28 @@ def _tab_research(store: SQLiteStore, parquet_store: ParquetStore) -> None:
                     st.session_state["latest_index_sync_message"] = {"level": level, "message": message}
                     st.session_state["latest_index_sync_summary"] = sync_summary
         sync_cols[1].button(
-            "同步 ETF 数据",
+            "\u540c\u6b65 ETF \u6570\u636e",
             width="stretch",
             disabled=True,
-            help="ETF 数据同步将作为独立任务接入，默认按当前指数过滤后的 ETF 范围执行。",
+            help="ETF \u6570\u636e\u540c\u6b65\u5c06\u4f5c\u4e3a\u72ec\u7acb\u4efb\u52a1\u63a5\u5165\uff0c\u9ed8\u8ba4\u6309\u5f53\u524d\u6307\u6570\u8fc7\u6ee4\u540e\u7684 ETF \u8303\u56f4\u6267\u884c\u3002",
         )
-        sync_cols[2].caption("ETF 历史同步仍是独立任务；当前先保留入口提示。")
+        sync_cols[2].caption("ETF \u5386\u53f2\u540c\u6b65\u4ecd\u662f\u72ec\u7acb\u4efb\u52a1\uff1b\u5f53\u524d\u5148\u4fdd\u7559\u5165\u53e3\u63d0\u793a\u3002")
         _render_latest_index_sync_result()
 
+        candidates = load_research_candidates(RESEARCH_CONFIG)
+        categories = _category_map(store)
+        research_codes = None
+        if use_index_filter:
+            eligible_categories = _eligible_index_categories(index_summary)
+            research_codes = _filter_etf_codes_by_categories(store.list_etf_master(), eligible_categories)
+
         confirm_nonce = int(st.session_state.setdefault("research_run_confirm_nonce", 0))
-        confirm_run = st.checkbox("确认运行本次趋势研究", value=False, key=f"confirm_research_run_{confirm_nonce}")
-        if st.button("开始运行趋势研究", width="stretch", disabled=job_manager.is_running() or not confirm_run):
-            research_codes = eligible_codes if use_index_filter else None
+        confirm_run = st.checkbox("\u786e\u8ba4\u8fd0\u884c\u672c\u6b21\u8d8b\u52bf\u7814\u7a76", value=False, key=f"confirm_research_run_{confirm_nonce}")
+        if st.button("\u5f00\u59cb\u8fd0\u884c\u8d8b\u52bf\u7814\u7a76", width="stretch", disabled=job_manager.is_running() or not confirm_run):
             if use_index_filter and not research_codes:
-                st.error("指数趋势过滤后没有可回测ETF，本次不运行策略回测。")
+                st.error("\u6307\u6570\u8d8b\u52bf\u8fc7\u6ee4\u540e\u6ca1\u6709\u53ef\u56de\u6d4bETF\uff0c\u672c\u6b21\u4e0d\u8fd0\u884c\u7b56\u7565\u56de\u6d4b\u3002")
                 return
-            candidates = load_research_candidates(RESEARCH_CONFIG)
-            categories = _category_map(store)
-            scope_text = "指数趋势过滤后" if use_index_filter else "全市场模式"
+            scope_text = "\u6307\u6570\u8d8b\u52bf\u8fc7\u6ee4\u540e" if use_index_filter else "\u5168\u5e02\u573a\u6a21\u5f0f"
             started = job_manager.start(
                 parquet_root=PARQUET_ROOT,
                 candidates=candidates,
@@ -2618,29 +2611,81 @@ def _tab_research(store: SQLiteStore, parquet_store: ParquetStore) -> None:
                 scope_text=scope_text,
             )
             if started:
-                st.success("趋势研究已在后台启动。运行中可以点击停止，不会覆盖旧结果，完成后刷新本页即可查看新结果。")
+                st.success("\u8d8b\u52bf\u7814\u7a76\u5df2\u5728\u540e\u53f0\u542f\u52a8\u3002\u8fd0\u884c\u4e2d\u53ef\u4ee5\u70b9\u51fb\u505c\u6b62\uff0c\u4e0d\u4f1a\u8986\u76d6\u65e7\u7ed3\u679c\uff0c\u5b8c\u6210\u540e\u5237\u65b0\u672c\u9875\u5373\u53ef\u67e5\u770b\u65b0\u7ed3\u679c\u3002")
                 st.session_state["research_run_confirm_nonce"] = confirm_nonce + 1
                 st.rerun()
             else:
-                st.warning("已有趋势研究正在运行。")
+                st.warning("\u5df2\u6709\u8d8b\u52bf\u7814\u7a76\u6b63\u5728\u8fd0\u884c\u3002")
+
+
+def _tab_research(store: SQLiteStore, parquet_store: ParquetStore, research_view: str | None = None) -> None:
+    st.subheader("\u7814\u7a76\u590d\u76d8")
+    st.caption("\u8bfb\u53d6\u5df2\u6709\u7814\u7a76\u7ed3\u679c\uff0c\u590d\u76d8\u7b56\u7565\u8868\u73b0\uff1b\u9700\u8981\u91cd\u65b0\u8ba1\u7b97\u65f6\u518d\u5c55\u5f00\u8fd0\u884c\u7814\u7a76\u3002")
+    _inject_research_styles()
+    job_manager = _research_job_manager()
+    output_dir = RESEARCH_REPORT_DIR
+    master = store.list_etf_master()
+    index_summary = _build_index_trend_summary(parquet_store)
+    eligible_categories = _eligible_index_categories(index_summary)
+    eligible_codes = _filter_etf_codes_by_categories(master, eligible_categories)
+    min_rows = 252
+
+    index_cols = st.columns(4)
+    eligible_index_count = int(index_summary["allows_new_position"].sum()) if "allows_new_position" in index_summary.columns else 0
+    index_cols[0].metric("\u53ef\u5f00\u4ed3\u6307\u6570 Eligible Indexes", f"{eligible_index_count}")
+    index_cols[1].metric("\u8d8b\u52bf\u5206\u7c7b Categories", f"{len(eligible_categories)}")
+    index_cols[2].metric("\u7b5b\u540eETF Filtered ETFs", f"{len(eligible_codes)}")
+    index_cols[3].metric("\u5168\u5e02\u573aETF All ETFs", f"{len(master)}")
+    if eligible_categories:
+        st.info("\u5f53\u524d\u8fdb\u5165\u56de\u6d4b\u7684\u6307\u6570\u5206\u7c7b\uff1a" + "\u3001".join(eligible_categories))
+    else:
+        st.warning("\u5f53\u524d\u6ca1\u6709\u6307\u6570\u5206\u7c7b\u6ee1\u8db3\u65b0\u5f00\u4ed3\u6761\u4ef6\uff1b\u6309\u4e24\u9636\u6bb5\u89c4\u5219\uff0c\u6b64\u65f6\u4e0d\u5e94\u5f3a\u884c\u6269\u5927ETF\u5019\u9009\u6c60\u3002")
+
+    research_view = research_view or st.radio(
+        "\u7814\u7a76\u89c6\u56fe",
+        ["\u7814\u7a76\u603b\u89c8", "\u7b56\u7565\u5bf9\u6bd4", "ETF\u590d\u76d8", "\u660e\u7ec6\u8868", "\u8fd0\u884c\u7814\u7a76"],
+        horizontal=True,
+        key="research_view",
+    )
+
+    _render_research_job_status(job_manager)
+
+    extra_tool = st.selectbox("\u7814\u7a76\u8f85\u52a9\u5de5\u5177", ["\u4e0d\u542f\u7528", "\u6307\u6570\u8fc7\u6ee4", "\u624b\u52a8\u56de\u6d4b"], key="research_extra_tool")
+    if extra_tool == "\u6307\u6570\u8fc7\u6ee4":
+        _render_index_filter_explorer(index_summary, parquet_store)
+        return
+    if extra_tool == "\u624b\u52a8\u56de\u6d4b":
+        _tab_backtest(store, parquet_store)
+        return
+
+    if research_view == "\u8fd0\u884c\u7814\u7a76":
+        _render_research_run_controls(
+            store=store,
+            parquet_store=parquet_store,
+            index_summary=index_summary,
+            min_rows=min_rows,
+            job_manager=job_manager,
+            output_dir=output_dir,
+        )
+        return
 
     results_path = output_dir / "research_results.csv"
     ranking_path = output_dir / "candidate_ranking.csv"
     if not results_path.exists() or not ranking_path.exists():
-        st.info("暂无趋势研究结果。点击“运行趋势研究”生成本地结果。")
+        st.info("\u6682\u65e0\u8d8b\u52bf\u7814\u7a76\u7ed3\u679c\u3002\u70b9\u51fb\u201c\u8fd0\u884c\u8d8b\u52bf\u7814\u7a76\u201d\u751f\u6210\u672c\u5730\u7ed3\u679c\u3002")
         return
 
     results = pd.read_csv(results_path)
     ranking = pd.read_csv(ranking_path)
     if results.empty or ranking.empty:
-        st.warning("趋势研究结果为空。")
+        st.warning("\u8d8b\u52bf\u7814\u7a76\u7ed3\u679c\u4e3a\u7a7a\u3002")
         return
 
-    if research_view == "研究总览":
+    if research_view == "\u7814\u7a76\u603b\u89c8":
         _render_research_overview(results, ranking)
-    elif research_view == "策略对比":
+    elif research_view == "\u7b56\u7565\u5bf9\u6bd4":
         _render_research_comparison_and_category(results)
-    elif research_view == "ETF复盘":
+    elif research_view == "ETF\u590d\u76d8":
         _render_research_replay(results, store, parquet_store, min_rows)
     else:
         _render_research_detail_table(results, store)
