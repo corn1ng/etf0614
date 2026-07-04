@@ -17,17 +17,17 @@ def research_column_config(
     config: dict[str, object] = {}
     for column in frame.columns:
         label = compact_header_labels.get(column, column)
-        if column == "ETF浠ｇ爜 ETF Code":
+        if column == "ETF代码 ETF Code":
             config[column] = st.column_config.TextColumn(label, width=92)
-        elif column == "ETF鍚嶇О ETF Name":
+        elif column == "ETF名称 ETF Name":
             config[column] = st.column_config.TextColumn(label, width=160)
-        elif column == "鎸囨暟浠ｇ爜 Index Code":
+        elif column == "指数代码 Index Code":
             config[column] = st.column_config.TextColumn(label, width=92)
-        elif column == "鎸囨暟鍚嶇О Index Name":
+        elif column == "指数名称 Index Name":
             config[column] = st.column_config.TextColumn(label, width=150)
-        elif column in {"澶ц秼鍔?Large Trend", "涓秼鍔?Medium Trend", "灏忚秼鍔?Small Trend"}:
+        elif column in {"大趋势 Large Trend", "中趋势 Medium Trend", "小趋势 Small Trend"}:
             config[column] = st.column_config.TextColumn(label, width=132)
-        elif column == "鍙紑浠?Eligible":
+        elif column == "可开仓 Eligible":
             config[column] = st.column_config.TextColumn(label, width=118)
         elif column in percent_labels:
             config[column] = st.column_config.NumberColumn(label, format="%.1f%%", width=112)
@@ -35,9 +35,9 @@ def research_column_config(
             config[column] = st.column_config.NumberColumn(label, format="%.0f", width=82)
         elif pd.api.types.is_numeric_dtype(frame[column]):
             config[column] = st.column_config.NumberColumn(label, format="%.2f", width=88)
-        elif column in {"鍊欓€夌瓥鐣?Strategy", "鍩哄噯绛栫暐 Base Strategy"}:
+        elif column in {"候选策略 Strategy", "基准策略 Base Strategy"}:
             config[column] = st.column_config.TextColumn(label, width=260)
-        elif column == "鍒嗙被 Category":
+        elif column == "分类 Category":
             config[column] = st.column_config.TextColumn(label, width=88)
         else:
             config[column] = st.column_config.TextColumn(label, width=90)
@@ -73,38 +73,32 @@ def research_bar_chart(
     height_per_row: int = 34,
 ) -> alt.Chart:
     if index_column not in frame.columns or value_column not in frame.columns:
-        return alt.Chart(pd.DataFrame({"绛栫暐 Strategy": [], "鏁板€?Value": []})).mark_bar()
+        return alt.Chart(pd.DataFrame({"策略 Strategy": [], "数值 Value": []})).mark_bar()
 
     data = frame[[index_column, value_column]].dropna().copy()
     if index_column in {"candidate_name", "base_candidate"}:
         data[index_column] = data[index_column].map(candidate_display_name)
-    data = data.rename(columns={index_column: "绛栫暐 Strategy", value_column: "鏁板€?Value"})
+    data = data.rename(columns={index_column: "策略 Strategy", value_column: "数值 Value"})
     if value_column in percent_columns:
-        data["鏁板€?Value"] = data["鏁板€?Value"] * 100
+        data["数值 Value"] = data["数值 Value"] * 100
         value_format = ".1f"
         axis_title = f"{column_labels.get(value_column, value_column)} (%)"
-        tooltip_title = axis_title
     else:
         value_format = ".3f"
         axis_title = column_labels.get(value_column, value_column)
-        tooltip_title = axis_title
 
-    data = data.sort_values("鏁板€?Value", ascending=False)
-    chart_height = max(180, min(360, len(data) * height_per_row))
+    row_count = max(len(data), 1)
+    chart_height = max(150, min(420, row_count * height_per_row))
+    tooltip_title = column_labels.get(value_column, value_column)
     return (
         alt.Chart(data)
-        .mark_bar(color=color, cornerRadiusEnd=3)
+        .mark_bar(color=color)
         .encode(
-            x=alt.X("鏁板€?Value:Q", title=axis_title, axis=alt.Axis(format=value_format)),
-            y=alt.Y(
-                "绛栫暐 Strategy:N",
-                sort="-x",
-                title=None,
-                axis=alt.Axis(labelLimit=260),
-            ),
+            y=alt.Y("策略 Strategy:N", sort="-x", title=None),
+            x=alt.X("数值 Value:Q", title=axis_title),
             tooltip=[
-                alt.Tooltip("绛栫暐 Strategy:N", title="绛栫暐 Strategy"),
-                alt.Tooltip("鏁板€?Value:Q", title=tooltip_title, format=value_format),
+                alt.Tooltip("策略 Strategy:N", title="策略 Strategy"),
+                alt.Tooltip("数值 Value:Q", title=tooltip_title, format=value_format),
             ],
         )
         .properties(title=title, height=chart_height)
