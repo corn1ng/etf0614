@@ -26,6 +26,10 @@ from etf_trading.strategy.features import add_technical_features
 from etf_trading.strategy.models import StrategySignal
 from etf_trading.strategy.trend import TrendStrategy
 from etf_trading.ui.chart_renderer import build_lightweight_chart_payload
+from etf_trading.ui.components.status import render_top_status_bar
+from etf_trading.ui.navigation import render_primary_navigation
+from etf_trading.ui.state import summarize_platform_status
+from etf_trading.ui.styles import inject_global_styles
 from etf_trading.universe.classification import CATEGORIES, is_hk_cross_market
 
 try:
@@ -39,7 +43,7 @@ PARQUET_ROOT = Path("data/parquet")
 RESEARCH_CONFIG = Path("configs/research.yaml")
 RESEARCH_REPORT_DIR = Path("reports/research_dashboard")
 SAMPLE_CATEGORIES = ["A股宽基", "A股行业", "港股宽基", "港股科技", "港股医药", "商品", "债券"]
-WORKFLOW_TABS = ["今日决策", "趋势研究", "行情观察", "组合与池子", "数据与设置"]
+WORKFLOW_TABS = ["今日行动", "市场地图", "ETF池", "研究复盘", "数据维护"]
 
 
 class ResearchJobManager:
@@ -446,6 +450,21 @@ STABLE_INDEX_SIGNAL_PARAMS = {
 CHART_TYPE_OPTIONS = {
     "收盘折线 Close Line": "line",
     "K线 Candlestick": "candlestick",
+}
+PRICE_SCALE_OPTIONS = {
+    "线性坐标 Linear": "normal",
+    "涨跌幅视图 Return %": "percent",
+    "比例视图 Log Return %": "log_return",
+    "回撤视图 Drawdown %": "drawdown",
+    "距区间低点 Downside %": "downside",
+}
+CHART_RANGE_PRESETS = {
+    "近3月": 90,
+    "近6月": 180,
+    "近1年": 365,
+    "近2年": 730,
+    "全部": None,
+    "自定义": "custom",
 }
 MA_DISPLAY_OPTIONS = {
     "MA51": "ma51",
@@ -1549,16 +1568,9 @@ def _render_index_filter_explorer(index_summary: pd.DataFrame, parquet_store: Pa
     rule_cols[0].info("触发条件：\n" + trigger_text)
     rule_cols[1].warning("风险提示：\n" + risk_text)
 
-    max_days = min(2000, len(featured))
     chart_cols = st.columns([1.7, 1])
-    range_label = chart_cols[0].radio(
-        "图表区间",
-        list(INDEX_CHART_RANGE_OPTIONS),
-        index=2,
-        horizontal=True,
-        key="index_signal_range",
-    )
-    chart_days = min(max_days, INDEX_CHART_RANGE_OPTIONS[range_label])
+    with chart_cols[0]:
+        recent = _chart_range_controls(featured, "index_signal", default_label="近2年")
     signal_rule_label = chart_cols[1].radio(
         "信号规则",
         list(INDEX_SIGNAL_RULE_OPTIONS),
@@ -1581,23 +1593,29 @@ def _render_index_filter_explorer(index_summary: pd.DataFrame, parquet_store: Pa
     else:
         chart_cols[1].caption("原始日切换：当天允许就 BUY，当天失效就 SELL，仅用于对照。")
 
-    recent = featured.tail(chart_days)
     recent_start = pd.Timestamp(recent["trade_date"].min()).normalize()
+    recent_end = pd.Timestamp(recent["trade_date"].max()).normalize()
     with st.spinner("正在计算当前指数信号..."):
         regime_states = _index_regime_signal_states(featured)
         all_markers = _index_signal_markers_for_rule(selected_rule, regime_states)
     visible_markers = [
         marker for marker in all_markers
-        if pd.Timestamp(marker["trade_date"]).normalize() >= recent_start
+        if recent_start <= pd.Timestamp(marker["trade_date"]).normalize() <= recent_end
     ]
     markers = _number_index_signal_segments(visible_markers)
     st.caption(f"当前区间显示 {len(markers)} 个买卖参考信号。")
-    chart_type, ma_columns = _chart_display_controls(
+    chart_type, price_scale_mode, ma_columns = _chart_display_controls(
         "index_signal_chart",
         default_chart_label="收盘折线 Close Line",
         default_ma_labels=[],
     )
-    payload = build_lightweight_chart_payload(recent, trades=markers, chart_type=chart_type, ma_columns=ma_columns)
+    payload = build_lightweight_chart_payload(
+        recent,
+        trades=markers,
+        chart_type=chart_type,
+        price_scale_mode=price_scale_mode,
+        ma_columns=ma_columns,
+    )
     if renderLightweightCharts is None:
         st.json(payload)
     else:
@@ -1686,9 +1704,10 @@ def _chart_display_controls(
     *,
     default_chart_label: str = "K线 Candlestick",
     default_ma_labels: list[str] | None = None,
-) -> tuple[str, list[str]]:
+    default_price_scale_label: str = "线性坐标 Linear",
+) -> tuple[str, str, list[str]]:
     default_ma_labels = default_ma_labels if default_ma_labels is not None else ["MA51", "MA120", "MA250", "MA850"]
-    control_cols = st.columns([1, 2])
+    control_cols = st.columns([1, 1, 2])
     chart_label = control_cols[0].radio(
         "图表类型 Chart Type",
         list(CHART_TYPE_OPTIONS),
@@ -1696,13 +1715,73 @@ def _chart_display_controls(
         horizontal=True,
         key=f"{key_prefix}_chart_type",
     )
-    selected_ma_labels = control_cols[1].multiselect(
+    price_scale_label = control_cols[1].radio(
+        "显示口径 View",
+        list(PRICE_SCALE_OPTIONS),
+        index=list(PRICE_SCALE_OPTIONS).index(default_price_scale_label),
+        horizontal=True,
+        key=f"{key_prefix}_price_scale",
+    )
+    price_scale_help = {
+        "涨跌幅视图 Return %": "纵轴为相对区间起点的累计涨跌幅。",
+        "比例视图 Log Return %": "纵轴为对数涨跌幅，等距离更接近等比例变化。",
+        "回撤视图 Drawdown %": "纵轴为相对此前最高点的回撤。",
+        "距区间低点 Downside %": "纵轴为从当前点位跌到区间最低点还需下跌的比例。",
+    }
+    if price_scale_label in price_scale_help:
+        control_cols[1].caption(price_scale_help[price_scale_label])
+    selected_ma_labels = control_cols[2].multiselect(
         "均线显示 Moving Averages",
         list(MA_DISPLAY_OPTIONS),
         default=default_ma_labels,
         key=f"{key_prefix}_ma_columns",
     )
-    return CHART_TYPE_OPTIONS[chart_label], [MA_DISPLAY_OPTIONS[label] for label in selected_ma_labels]
+    return (
+        CHART_TYPE_OPTIONS[chart_label],
+        PRICE_SCALE_OPTIONS[price_scale_label],
+        [MA_DISPLAY_OPTIONS[label] for label in selected_ma_labels],
+    )
+
+
+def _chart_range_controls(frame: pd.DataFrame, key_prefix: str, *, default_label: str = "近2年") -> pd.DataFrame:
+    if frame.empty or "trade_date" not in frame.columns:
+        return frame
+
+    prepared = frame.copy()
+    prepared["trade_date"] = pd.to_datetime(prepared["trade_date"])
+    min_date = pd.Timestamp(prepared["trade_date"].min()).date()
+    max_date = pd.Timestamp(prepared["trade_date"].max()).date()
+    labels = list(CHART_RANGE_PRESETS)
+    default_index = labels.index(default_label) if default_label in labels else labels.index("近2年")
+    range_label = st.radio(
+        "图表区间",
+        labels,
+        index=default_index,
+        horizontal=True,
+        key=f"{key_prefix}_range_preset",
+    )
+    preset = CHART_RANGE_PRESETS[range_label]
+    if preset == "custom":
+        cols = st.columns(2)
+        start_date = cols[0].date_input("开始日期", value=min_date, min_value=min_date, max_value=max_date, key=f"{key_prefix}_range_start")
+        end_date = cols[1].date_input("结束日期", value=max_date, min_value=min_date, max_value=max_date, key=f"{key_prefix}_range_end")
+        if start_date > end_date:
+            st.warning("开始日期晚于结束日期，已临时按完整区间显示。")
+            return prepared
+        return _filter_date_range_frame(prepared, start_date, end_date)
+    if preset is None:
+        return prepared
+
+    start_date = max(min_date, max_date - timedelta(days=int(preset)))
+    return _filter_date_range_frame(prepared, start_date, max_date)
+
+
+def _filter_date_range_frame(frame: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:
+    prepared = frame.copy()
+    prepared["trade_date"] = pd.to_datetime(prepared["trade_date"])
+    start = pd.Timestamp(start_date)
+    end = pd.Timestamp(end_date)
+    return prepared[(prepared["trade_date"] >= start) & (prepared["trade_date"] <= end)].reset_index(drop=True)
 
 
 def _research_chart_frame(frame: pd.DataFrame, index_column: str, value_columns: list[str]) -> pd.DataFrame:
@@ -1860,24 +1939,28 @@ def _research_bar_chart(
 
 
 def main() -> None:
-    st.set_page_config(page_title="ETF 交易指引工作台", layout="wide")
-    st.title("A 股 ETF 交易指引工作台")
-    st.caption("本系统只输出仓位比例和交易指引，不自动下单。")
+    st.set_page_config(page_title="ETF 今日行动工作台", layout="wide")
+    inject_global_styles()
 
     store = _store()
     parquet_store = _parquet()
     service = InitializationService(store=store, provider=None, parquet_store=parquet_store)
+    page = render_primary_navigation()
+    status = _platform_status(store, parquet_store)
 
-    tabs = st.tabs(WORKFLOW_TABS)
-    with tabs[0]:
+    render_top_status_bar(summarize_platform_status(status))
+    st.title(page.label)
+    st.caption(page.caption)
+
+    if page.slug == "decision":
         _tab_decision(store, parquet_store)
-    with tabs[1]:
-        _tab_research(store, parquet_store)
-    with tabs[2]:
+    elif page.slug == "market":
         _tab_market_watch(store, parquet_store)
-    with tabs[3]:
-        _tab_portfolio(store)
-    with tabs[4]:
+    elif page.slug == "portfolio":
+        _tab_portfolio(store, parquet_store)
+    elif page.slug == "research":
+        _tab_research(store, parquet_store)
+    else:
         _tab_data_and_settings(store, parquet_store, service)
 
 
@@ -1902,40 +1985,163 @@ def _provider() -> AkShareProvider:
     return AkShareProvider()
 
 
-def _tab_decision(store: SQLiteStore, parquet_store: ParquetStore) -> None:
-    st.subheader("今日决策")
-    st.caption("按交易流程看：先判断市场环境，再看可交易池，最后看今日动作。")
-
+def _platform_status(store: SQLiteStore, parquet_store: ParquetStore) -> dict[str, object]:
     master = store.list_etf_master()
     watchlist = store.list_watchlist()
     index_summary = _build_index_trend_summary(parquet_store)
     eligible_categories = _eligible_index_categories(index_summary)
-    eligible_index_count = int(index_summary["allows_new_position"].sum()) if "allows_new_position" in index_summary.columns else 0
-    enabled_watchlist = watchlist[watchlist["enabled"].astype(bool)] if not watchlist.empty and "enabled" in watchlist.columns else watchlist
+    enabled_watchlist = _enabled_watchlist(watchlist)
     buyable_watchlist = (
         enabled_watchlist[enabled_watchlist["allow_buy"].astype(bool)]
         if not enabled_watchlist.empty and "allow_buy" in enabled_watchlist.columns
         else enabled_watchlist
     )
+    missing_etf_history = _missing_watchlist_history(enabled_watchlist, parquet_store)
+    index_history_count = _index_history_count(parquet_store)
+    issues = _platform_issues(
+        master=master,
+        watchlist=watchlist,
+        index_history_count=index_history_count,
+        missing_etf_history=missing_etf_history,
+    )
+    return {
+        "master": master,
+        "watchlist": watchlist,
+        "enabled_watchlist": enabled_watchlist,
+        "buyable_watchlist": buyable_watchlist,
+        "index_summary": index_summary,
+        "eligible_categories": eligible_categories,
+        "eligible_index_count": int(index_summary["allows_new_position"].sum())
+        if "allows_new_position" in index_summary.columns
+        else 0,
+        "index_history_count": index_history_count,
+        "missing_etf_history": missing_etf_history,
+        "issues": issues,
+    }
 
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("可开仓指数 Eligible Indexes", f"{eligible_index_count}")
-    metric_cols[1].metric("趋势分类 Categories", f"{len(eligible_categories)}")
-    metric_cols[2].metric("计算池 Enabled ETFs", f"{len(enabled_watchlist)}")
-    metric_cols[3].metric("允许买入 Buyable", f"{len(buyable_watchlist)}")
 
+def _enabled_watchlist(watchlist: pd.DataFrame) -> pd.DataFrame:
+    if watchlist.empty or "enabled" not in watchlist.columns:
+        return watchlist
+    return watchlist[watchlist["enabled"].astype(bool)]
+
+
+def _index_history_count(parquet_store: ParquetStore) -> int:
+    count = 0
+    for definition in DEFAULT_INDEXES:
+        if not parquet_store.read_index_prices(definition.index_code).empty:
+            count += 1
+    return count
+
+
+def _missing_watchlist_history(watchlist: pd.DataFrame, parquet_store: ParquetStore) -> list[str]:
+    if watchlist.empty or "etf_code" not in watchlist.columns:
+        return []
+    missing: list[str] = []
+    for code in watchlist["etf_code"].astype(str).map(_format_etf_code).drop_duplicates():
+        if parquet_store.read_prices(code).empty:
+            missing.append(code)
+    return missing
+
+
+def _platform_issues(
+    *,
+    master: pd.DataFrame,
+    watchlist: pd.DataFrame,
+    index_history_count: int,
+    missing_etf_history: list[str],
+) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    if master.empty:
+        issues.append(
+            {
+                "title": "初始化 ETF 主列表",
+                "detail": "数据维护 -> 数据中心 -> 主列表，先拉取全量 A 股 ETF 列表。",
+            }
+        )
+    if index_history_count == 0:
+        issues.append(
+            {
+                "title": "补齐指数历史",
+                "detail": "数据维护顶部或数据中心 -> 指数历史，执行一键初始化/补齐全部指数。",
+            }
+        )
+    if watchlist.empty:
+        issues.append(
+            {
+                "title": "建立每日计算池",
+                "detail": "ETF池 -> 搜索并加入常看的 ETF，然后今日行动才会生成建议。",
+            }
+        )
+    if missing_etf_history:
+        preview = "、".join(missing_etf_history[:5])
+        suffix = " 等" if len(missing_etf_history) > 5 else ""
+        issues.append(
+            {
+                "title": "补齐 ETF 历史行情",
+                "detail": f"{preview}{suffix} 缺少本地行情；到数据维护 -> ETF历史补齐。",
+            }
+        )
+    return issues
+
+
+def _render_status_cards(status: dict[str, object]) -> None:
+    cols = st.columns(4)
+    cols[0].metric("可参与指数", f"{int(status['eligible_index_count'])}")
+    cols[1].metric("可参与分类", f"{len(status['eligible_categories'])}")
+    cols[2].metric("计算池 ETF", f"{len(status['enabled_watchlist'])}")
+    cols[3].metric("数据缺口", f"{len(status['issues'])}")
+
+
+def _render_next_steps(status: dict[str, object]) -> None:
+    issues = status["issues"]
+    if not issues:
+        st.success("数据和计算池已就绪，可以直接查看今日建议。")
+        return
+
+    st.warning("当前还有准备项未完成，建议按下面顺序处理：")
+    for index, issue in enumerate(issues, start=1):
+        st.markdown(f"{index}. **{issue['title']}**：{issue['detail']}")
+
+
+def _watchlist_status_frame(watchlist: pd.DataFrame, parquet_store: ParquetStore) -> pd.DataFrame:
+    if watchlist.empty:
+        return watchlist
+    display = watchlist.copy()
+    if "etf_code" in display.columns:
+        display["etf_code"] = display["etf_code"].astype(str).map(_format_etf_code)
+        display["历史行情"] = display["etf_code"].map(
+            lambda code: "缺失" if parquet_store.read_prices(code).empty else "已就绪"
+        )
+    for column in ["enabled", "allow_buy"]:
+        if column in display.columns:
+            display[column] = display[column].map(lambda value: "是" if bool(value) else "否")
+    return display
+
+
+def _tab_decision(store: SQLiteStore, parquet_store: ParquetStore) -> None:
+    st.subheader("今日行动")
+    st.caption("先看市场是否允许参与，再看计算池和今日建议；需要补数据时直接给下一步。")
+
+    status = _platform_status(store, parquet_store)
+    index_summary = status["index_summary"]
+    eligible_categories = status["eligible_categories"]
+    watchlist = status["watchlist"]
+
+    _render_status_cards(status)
     if eligible_categories:
         st.info("当前指数趋势允许参与的分类：" + "、".join(eligible_categories))
     else:
-        st.warning("当前没有指数分类满足新开仓条件，今日决策应偏防守。")
+        st.warning("当前没有指数分类满足新开仓条件，今日行动应偏防守。")
+    _render_next_steps(status)
 
     view = st.radio(
-        "决策视图 Decision View",
-        ["决策摘要", "每日建议", "计算池"],
+        "今日视图",
+        ["行动摘要", "每日建议", "计算池明细"],
         horizontal=True,
-        key="decision_view",
+        key="daily_action_view",
     )
-    if view == "决策摘要":
+    if view == "行动摘要":
         top_indexes = (
             index_summary[index_summary["allows_new_position"].fillna(False).astype(bool)]
             .head(8)
@@ -1943,58 +2149,78 @@ def _tab_decision(store: SQLiteStore, parquet_store: ParquetStore) -> None:
             else pd.DataFrame()
         )
         if top_indexes.empty:
-            st.info("暂无可开仓指数。可到“数据与设置”补齐指数历史，或等待趋势条件改善。")
+            st.info("暂无可开仓指数。可到“数据维护”补齐指数历史，或等待趋势条件改善。")
         else:
             st.markdown("### 当前通过趋势过滤的指数")
             _render_research_table(_index_trend_display_frame(top_indexes), height=260)
-        with st.expander("展开今日建议正文", expanded=True):
-            report = _build_daily_advice_report(store, parquet_store)
-            if report is None:
-                st.info("每日计算池为空。请先到“组合与池子”加入 ETF。")
+        st.markdown("### 今日建议")
+        report = _build_daily_advice_report(store, parquet_store)
+        if report is None:
+            st.info("每日计算池为空。请先到“ETF池”加入 ETF。")
+        else:
+            st.markdown(report)
+        with st.expander("查看原始计算池", expanded=False):
+            if watchlist.empty:
+                st.info("每日计算池为空。")
             else:
-                st.markdown(report)
+                st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=320)
     elif view == "每日建议":
         report = _build_daily_advice_report(store, parquet_store)
         if report is None:
-            st.info("每日计算池为空。请先到“组合与池子”加入 ETF。")
+            st.info("每日计算池为空。请先到“ETF池”加入 ETF。")
         else:
             st.markdown(report)
     else:
         if watchlist.empty:
-            st.info("每日计算池为空。请先到“组合与池子”加入 ETF。")
+            st.info("每日计算池为空。请先到“ETF池”加入 ETF。")
         else:
-            st.dataframe(watchlist, width="stretch", hide_index=True, height=420)
+            st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=420)
 
 
 def _tab_market_watch(store: SQLiteStore, parquet_store: ParquetStore) -> None:
-    st.subheader("行情观察")
-    st.caption("这里只观察价格与趋势结构，不混入策略研究结论。")
-    view = st.radio("观察对象", ["ETF行情", "指数行情", "手动回测"], horizontal=True, key="market_watch_view")
-    if view == "ETF行情":
+    st.subheader("市场地图")
+    st.caption("先看指数过滤和趋势结构，再下钻到 ETF 行情。")
+    index_summary = _build_index_trend_summary(parquet_store)
+    view = st.radio("地图视图", ["指数买卖参考", "ETF行情", "指数K线"], horizontal=True, key="market_map_view")
+    if view == "指数买卖参考":
+        _render_index_filter_explorer(index_summary, parquet_store)
+    elif view == "ETF行情":
         _tab_chart(store, parquet_store)
-    elif view == "指数行情":
+    else:
         _tab_index_watch(parquet_store)
-    else:
-        _tab_backtest(store, parquet_store)
 
 
-def _tab_portfolio(store: SQLiteStore) -> None:
-    st.subheader("组合与池子")
-    st.caption("管理 ETF 候选池、每日计算池和买入许可。")
-    view = st.radio("池子视图", ["ETF搜索与加入", "每日计算池"], horizontal=True, key="portfolio_view")
-    if view == "ETF搜索与加入":
-        _render_etf_search_and_add(store)
+def _tab_portfolio(store: SQLiteStore, parquet_store: ParquetStore) -> None:
+    st.subheader("ETF池")
+    st.caption("找 ETF、加入每日计算池，并检查买入许可和历史行情状态。")
+    _render_etf_search_and_add(store)
+
+    st.markdown("### 每日计算池")
+    watchlist = store.list_watchlist()
+    if watchlist.empty:
+        st.info("每日计算池为空。请先在上方搜索 ETF 并保存。")
     else:
-        watchlist = store.list_watchlist()
-        if watchlist.empty:
-            st.info("每日计算池为空。")
-        else:
-            st.dataframe(watchlist, width="stretch", hide_index=True, height=520)
+        st.dataframe(_watchlist_status_frame(watchlist, parquet_store), width="stretch", hide_index=True, height=420)
 
 
 def _tab_data_and_settings(store: SQLiteStore, parquet_store: ParquetStore, service: InitializationService) -> None:
-    st.subheader("数据与设置")
-    st.caption("低频维护入口：初始化数据、补齐指数历史、查看任务日志。")
+    st.subheader("数据维护")
+    st.caption("低频维护入口：先看数据健康，再初始化数据、补齐指数历史、查看任务日志。")
+    status = _platform_status(store, parquet_store)
+    _render_data_health(status)
+
+    quick_cols = st.columns([1, 2])
+    if quick_cols[0].button("一键补齐全部指数", type="primary", width="stretch", key="data_quick_sync_indexes"):
+        provider = _provider()
+        sync_service = InitializationService(store=store, provider=provider, parquet_store=parquet_store)
+        with st.spinner("正在检查并补齐全部指数历史..."):
+            summary = sync_service.ensure_all_index_history(date.today())
+        level, message = _index_sync_status_message(summary)
+        st.session_state["latest_index_sync_message"] = {"level": level, "message": message}
+        st.session_state["latest_index_sync_summary"] = summary
+    quick_cols[1].caption("指数历史是今日行动和研究过滤的前置数据；补齐后回到“今日行动”查看可参与范围。")
+    _render_latest_index_sync_result()
+
     view = st.radio("管理视图", ["数据中心", "日志与设置"], horizontal=True, key="data_settings_view")
     if view == "数据中心":
         _tab_data_center(store, parquet_store)
@@ -2002,10 +2228,22 @@ def _tab_data_and_settings(store: SQLiteStore, parquet_store: ParquetStore, serv
         _tab_settings(store, service)
 
 
+def _render_data_health(status: dict[str, object]) -> None:
+    master = status["master"]
+    watchlist = status["watchlist"]
+    missing_etf_history = status["missing_etf_history"]
+    cols = st.columns(4)
+    cols[0].metric("ETF 主列表", "已初始化" if not master.empty else "缺失")
+    cols[1].metric("指数历史", f"{int(status['index_history_count'])}/{len(DEFAULT_INDEXES)}")
+    cols[2].metric("每日计算池", f"{len(watchlist)}")
+    cols[3].metric("缺历史 ETF", f"{len(missing_etf_history)}")
+    _render_next_steps(status)
+
+
 def _render_etf_search_and_add(store: SQLiteStore) -> None:
     master = store.list_etf_master()
     if master.empty:
-        st.info("尚未初始化 ETF 主列表。请到“数据与设置”执行轻量初始化。")
+        st.info("尚未初始化 ETF 主列表。请到“数据维护”执行轻量初始化。")
         return
 
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -2022,12 +2260,17 @@ def _render_etf_search_and_add(store: SQLiteStore) -> None:
         view = view[view["category"].map(is_hk_cross_market)]
 
     table_cols = ["etf_code", "name", "exchange", "category", "amount", "latest_price", "is_active"]
-    st.dataframe(view[table_cols], width="stretch", hide_index=True, height=420)
+    search_col, add_col = st.columns([1.7, 1])
+    with search_col:
+        st.markdown("### 搜索结果")
+        st.dataframe(view[table_cols], width="stretch", hide_index=True, height=420)
 
-    with st.expander("加入每日计算池", expanded=True):
+    with add_col:
+        st.markdown("### 加入每日计算池")
         selected = st.selectbox("ETF", view["etf_code"].tolist() if not view.empty else [], key="portfolio_add_etf")
         if selected:
             row = master[master["etf_code"] == selected].iloc[0]
+            st.caption(f"{row['name']} ｜ {row['exchange']} ｜ {row['category']}")
             selected_category = st.selectbox(
                 "分类修正",
                 CATEGORIES,
@@ -2040,6 +2283,8 @@ def _render_etf_search_and_add(store: SQLiteStore) -> None:
             if st.button("保存到每日计算池", key="portfolio_save_watchlist"):
                 store.set_watchlist(selected, enabled=enabled, allow_buy=allow_buy, category=selected_category)
                 st.success(f"{selected} 已保存")
+        else:
+            st.info("当前筛选条件下没有 ETF。")
 
 
 def _build_daily_advice_report(store: SQLiteStore, parquet_store: ParquetStore) -> str | None:
@@ -2128,7 +2373,7 @@ def _tab_chart(store: SQLiteStore, parquet_store: ParquetStore) -> None:
         st.warning("本地尚无该 ETF 历史行情，请先到“数据中心”初始化历史。")
         return
     prices = add_technical_features(prices)
-    recent = prices.tail(st.slider("显示最近交易日数量", 120, 1200, 500))
+    recent = _chart_range_controls(prices, "chart_tab", default_label="近2年")
     master = store.list_etf_master()
     meta = master[master["etf_code"] == etf_code]
     if not meta.empty:
@@ -2138,8 +2383,8 @@ def _tab_chart(store: SQLiteStore, parquet_store: ParquetStore) -> None:
             tags.extend(["底层市场：港股", "跨境类型：A股上市人民币交易", "风险：关注折溢价和底层市场休市"])
         st.info(" ｜ ".join(tags))
 
-    chart_type, ma_columns = _chart_display_controls("chart_tab")
-    payload = build_lightweight_chart_payload(recent, chart_type=chart_type, ma_columns=ma_columns)
+    chart_type, price_scale_mode, ma_columns = _chart_display_controls("chart_tab")
+    payload = build_lightweight_chart_payload(recent, chart_type=chart_type, price_scale_mode=price_scale_mode, ma_columns=ma_columns)
     if renderLightweightCharts is None:
         st.json(payload)
     else:
@@ -2160,9 +2405,9 @@ def _tab_index_watch(parquet_store: ParquetStore) -> None:
         return
 
     featured = add_technical_features(prices.rename(columns={"index_code": "etf_code"}))
-    recent = featured.tail(st.slider("显示最近指数交易日数量", 120, 2000, min(800, len(featured)), key="index_days"))
-    chart_type, ma_columns = _chart_display_controls("index_watch")
-    payload = build_lightweight_chart_payload(recent, chart_type=chart_type, ma_columns=ma_columns)
+    recent = _chart_range_controls(featured, "index_watch", default_label="近2年")
+    chart_type, price_scale_mode, ma_columns = _chart_display_controls("index_watch")
+    payload = build_lightweight_chart_payload(recent, chart_type=chart_type, price_scale_mode=price_scale_mode, ma_columns=ma_columns)
     if renderLightweightCharts is None:
         st.json(payload)
     else:
@@ -2245,17 +2490,26 @@ def _tab_backtest(store: SQLiteStore, parquet_store: ParquetStore) -> None:
         st.metric("总收益", f"{result.metrics.get('total_return', 0) * 100:.2f}%")
         st.metric("最大回撤", f"{result.metrics.get('max_drawdown', 0) * 100:.2f}%")
         st.metric("港股跨境暴露", f"{result.metrics.get('max_hk_cross_market_exposure', 0) * 100:.2f}%")
-        max_days = min(2000, len(featured))
-        chart_days = max_days if max_days <= 120 else st.slider("回测K线显示交易日", 120, max_days, min(800, max_days), 20)
-        recent = featured.tail(chart_days)
+        recent = _chart_range_controls(featured, "backtest_chart", default_label="近2年")
         recent_start = pd.Timestamp(recent["trade_date"].min()).normalize()
-        recent_trades = [trade for trade in result.trades if pd.Timestamp(trade.trade_date).normalize() >= recent_start]
-        chart_type, ma_columns = _chart_display_controls(
+        recent_end = pd.Timestamp(recent["trade_date"].max()).normalize()
+        recent_trades = [
+            trade
+            for trade in result.trades
+            if recent_start <= pd.Timestamp(trade.trade_date).normalize() <= recent_end
+        ]
+        chart_type, price_scale_mode, ma_columns = _chart_display_controls(
             "backtest_chart",
             default_chart_label="收盘折线 Close Line",
             default_ma_labels=["MA51"],
         )
-        payload = build_lightweight_chart_payload(recent, trades=recent_trades, chart_type=chart_type, ma_columns=ma_columns)
+        payload = build_lightweight_chart_payload(
+            recent,
+            trades=recent_trades,
+            chart_type=chart_type,
+            price_scale_mode=price_scale_mode,
+            ma_columns=ma_columns,
+        )
         if renderLightweightCharts is None:
             st.json(payload)
         else:
@@ -2266,52 +2520,19 @@ def _tab_backtest(store: SQLiteStore, parquet_store: ParquetStore) -> None:
 
 
 def _tab_research(store: SQLiteStore, parquet_store: ParquetStore) -> None:
-    st.subheader("趋势研究")
-    st.caption("先用指数判断大/中/小趋势，再在通过趋势的分类里回测ETF候选策略。")
+    st.subheader("研究复盘")
+    st.caption("读取已有研究结果，复盘策略表现；需要重新计算时再展开运行研究。")
     _inject_research_styles()
     job_manager = _research_job_manager()
-
-    col1, col2, col3 = st.columns([1, 1, 2])
-    min_rows = int(col1.number_input("最少历史交易日", min_value=60, max_value=2000, value=252, step=20))
-    limit_value = int(col2.number_input("样本上限", min_value=0, max_value=2000, value=120, step=10))
-    limit = None if limit_value == 0 else limit_value
-    use_index_filter = col3.checkbox("先按ETF指数趋势筛选范围", value=True)
     output_dir = RESEARCH_REPORT_DIR
-
-    sync_cols = st.columns([1, 1, 2])
-    sync_disabled = job_manager.is_running()
-    if sync_cols[0].button("同步指数数据", width="stretch", type="primary", disabled=sync_disabled):
-        with st.spinner("正在同步指数历史到今天..."):
-            try:
-                provider = _provider()
-                service = InitializationService(store=store, provider=provider, parquet_store=parquet_store)
-                sync_summary = service.ensure_all_index_history(date.today())
-            except Exception as exc:  # noqa: BLE001 - UI should preserve provider failure text
-                st.session_state["latest_index_sync_message"] = {
-                    "level": "error",
-                    "message": f"指数同步失败：{exc}",
-                }
-                st.session_state.pop("latest_index_sync_summary", None)
-            else:
-                level, message = _index_sync_status_message(sync_summary)
-                st.session_state["latest_index_sync_message"] = {"level": level, "message": message}
-                st.session_state["latest_index_sync_summary"] = sync_summary
-    sync_cols[1].button(
-        "同步 ETF 数据",
-        width="stretch",
-        disabled=True,
-        help="ETF 数据同步将作为独立任务接入，默认按当前指数过滤后的 ETF 范围执行。",
-    )
-    sync_cols[2].caption("建议先同步指数数据，确认趋势过滤范围后，再单独同步 ETF 历史。")
-    _render_latest_index_sync_result()
-
     master = store.list_etf_master()
     index_summary = _build_index_trend_summary(parquet_store)
     eligible_categories = _eligible_index_categories(index_summary)
     eligible_codes = _filter_etf_codes_by_categories(master, eligible_categories)
+    min_rows = 252
+    limit = 120
+    use_index_filter = True
 
-    st.markdown("### 第一步：指数趋势先验")
-    st.caption("当前 ETF 主表没有可靠 tracking_index 字段，因此先按指数分类收窄范围；后续补齐追踪指数后可升级为精确映射。")
     index_cols = st.columns(4)
     eligible_index_count = int(index_summary["allows_new_position"].sum()) if "allows_new_position" in index_summary.columns else 0
     index_cols[0].metric("可开仓指数 Eligible Indexes", f"{eligible_index_count}")
@@ -2323,9 +2544,10 @@ def _tab_research(store: SQLiteStore, parquet_store: ParquetStore) -> None:
             st.info("当前进入回测的指数分类：" + "、".join(eligible_categories))
         else:
             st.warning("当前没有指数分类满足新开仓条件；按两阶段规则，此时不应强行扩大ETF候选池。")
+
     research_view = st.radio(
-        "研究视图 Research View",
-        ["研究总览", "指数过滤", "策略对比", "ETF复盘", "明细表"],
+        "复盘视图",
+        ["研究总览", "指数过滤", "策略对比", "ETF复盘", "手动回测", "明细表"],
         horizontal=True,
         key="research_view",
     )
@@ -2333,37 +2555,74 @@ def _tab_research(store: SQLiteStore, parquet_store: ParquetStore) -> None:
     if research_view == "指数过滤":
         _render_index_filter_explorer(index_summary, parquet_store)
         return
+    if research_view == "手动回测":
+        _tab_backtest(store, parquet_store)
+        return
 
     _render_research_job_status(job_manager)
 
-    confirm_nonce = int(st.session_state.setdefault("research_run_confirm_nonce", 0))
-    confirm_run = st.checkbox("确认运行本次趋势研究", value=False, key=f"confirm_research_run_{confirm_nonce}")
-    if st.button("开始运行趋势研究", width="stretch", disabled=job_manager.is_running() or not confirm_run):
-        research_codes = eligible_codes if use_index_filter else None
-        if use_index_filter and not research_codes:
-            st.error("指数趋势过滤后没有可回测ETF，本次不运行策略回测。")
-            return
-        candidates = load_research_candidates(RESEARCH_CONFIG)
-        categories = _category_map(store)
-        scope_text = "指数趋势过滤后" if use_index_filter else "全市场模式"
-        started = job_manager.start(
-            parquet_root=PARQUET_ROOT,
-            candidates=candidates,
-            categories=categories,
-            min_rows=min_rows,
-            limit=limit,
-            etf_codes=research_codes,
-            output_dir=output_dir,
-            index_summary=index_summary,
-            scope_text=scope_text,
+    with st.expander("运行研究", expanded=False):
+        st.caption("重新运行会在后台执行；停止不会覆盖旧结果。建议先同步指数数据，再运行趋势研究。")
+        col1, col2, col3 = st.columns([1, 1, 2])
+        min_rows = int(col1.number_input("最少历史交易日", min_value=60, max_value=2000, value=252, step=20))
+        limit_value = int(col2.number_input("样本上限", min_value=0, max_value=2000, value=120, step=10))
+        limit = None if limit_value == 0 else limit_value
+        use_index_filter = col3.checkbox("先按ETF指数趋势筛选范围", value=True)
+
+        sync_cols = st.columns([1, 1, 2])
+        sync_disabled = job_manager.is_running()
+        if sync_cols[0].button("同步指数数据", width="stretch", type="primary", disabled=sync_disabled):
+            with st.spinner("正在同步指数历史到今天..."):
+                try:
+                    provider = _provider()
+                    service = InitializationService(store=store, provider=provider, parquet_store=parquet_store)
+                    sync_summary = service.ensure_all_index_history(date.today())
+                except Exception as exc:  # noqa: BLE001 - UI should preserve provider failure text
+                    st.session_state["latest_index_sync_message"] = {
+                        "level": "error",
+                        "message": f"指数同步失败：{exc}",
+                    }
+                    st.session_state.pop("latest_index_sync_summary", None)
+                else:
+                    level, message = _index_sync_status_message(sync_summary)
+                    st.session_state["latest_index_sync_message"] = {"level": level, "message": message}
+                    st.session_state["latest_index_sync_summary"] = sync_summary
+        sync_cols[1].button(
+            "同步 ETF 数据",
+            width="stretch",
+            disabled=True,
+            help="ETF 数据同步将作为独立任务接入，默认按当前指数过滤后的 ETF 范围执行。",
         )
-        if started:
-            st.success("趋势研究已在后台启动。运行中可以点击停止，不会覆盖旧结果，完成后刷新本页即可查看新结果。")
-            st.session_state["research_run_confirm_nonce"] = confirm_nonce + 1
-            st.rerun()
-        else:
-            st.warning("已有趋势研究正在运行。")
-    st.caption("运行后会出现“停止当前趋势研究”按钮；停止会在当前 ETF 完成后生效，旧结果不会被覆盖。")
+        sync_cols[2].caption("ETF 历史同步仍是独立任务；当前先保留入口提示。")
+        _render_latest_index_sync_result()
+
+        confirm_nonce = int(st.session_state.setdefault("research_run_confirm_nonce", 0))
+        confirm_run = st.checkbox("确认运行本次趋势研究", value=False, key=f"confirm_research_run_{confirm_nonce}")
+        if st.button("开始运行趋势研究", width="stretch", disabled=job_manager.is_running() or not confirm_run):
+            research_codes = eligible_codes if use_index_filter else None
+            if use_index_filter and not research_codes:
+                st.error("指数趋势过滤后没有可回测ETF，本次不运行策略回测。")
+                return
+            candidates = load_research_candidates(RESEARCH_CONFIG)
+            categories = _category_map(store)
+            scope_text = "指数趋势过滤后" if use_index_filter else "全市场模式"
+            started = job_manager.start(
+                parquet_root=PARQUET_ROOT,
+                candidates=candidates,
+                categories=categories,
+                min_rows=min_rows,
+                limit=limit,
+                etf_codes=research_codes,
+                output_dir=output_dir,
+                index_summary=index_summary,
+                scope_text=scope_text,
+            )
+            if started:
+                st.success("趋势研究已在后台启动。运行中可以点击停止，不会覆盖旧结果，完成后刷新本页即可查看新结果。")
+                st.session_state["research_run_confirm_nonce"] = confirm_nonce + 1
+                st.rerun()
+            else:
+                st.warning("已有趋势研究正在运行。")
 
     results_path = output_dir / "research_results.csv"
     ranking_path = output_dir / "candidate_ranking.csv"
@@ -2587,20 +2846,26 @@ def _render_research_replay(
     replay_metrics[2].metric("最大回撤 Max Drawdown", f"{result.metrics.get('max_drawdown', 0) * 100:.1f}%")
     st.caption(f"当前策略 Strategy：{_candidate_display_name(candidate)}")
 
-    max_days = min(2000, len(featured))
-    if max_days <= 60:
-        replay_days = max_days
-    else:
-        replay_days = st.slider("K线复盘显示交易日", min_value=60, max_value=max_days, value=min(800, max_days), step=20)
-    recent = featured.tail(replay_days)
+    recent = _chart_range_controls(featured, "research_replay_chart", default_label="近2年")
     recent_start = pd.Timestamp(recent["trade_date"].min()).normalize()
-    recent_trades = [trade for trade in result.trades if pd.Timestamp(trade.trade_date).normalize() >= recent_start]
-    chart_type, ma_columns = _chart_display_controls(
+    recent_end = pd.Timestamp(recent["trade_date"].max()).normalize()
+    recent_trades = [
+        trade
+        for trade in result.trades
+        if recent_start <= pd.Timestamp(trade.trade_date).normalize() <= recent_end
+    ]
+    chart_type, price_scale_mode, ma_columns = _chart_display_controls(
         "research_replay_chart",
         default_chart_label="收盘折线 Close Line",
         default_ma_labels=["MA51"],
     )
-    payload = build_lightweight_chart_payload(recent, trades=recent_trades, chart_type=chart_type, ma_columns=ma_columns)
+    payload = build_lightweight_chart_payload(
+        recent,
+        trades=recent_trades,
+        chart_type=chart_type,
+        price_scale_mode=price_scale_mode,
+        ma_columns=ma_columns,
+    )
     if renderLightweightCharts is None:
         st.json(payload)
     else:
