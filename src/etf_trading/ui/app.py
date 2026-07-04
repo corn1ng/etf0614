@@ -26,6 +26,7 @@ from etf_trading.strategy.features import add_technical_features
 from etf_trading.strategy.models import StrategySignal
 from etf_trading.strategy.trend import TrendStrategy
 from etf_trading.ui.chart_renderer import build_lightweight_chart_payload
+from etf_trading.ui.components.research_tables import render_research_table, research_bar_chart, research_column_config
 from etf_trading.ui.components.status import render_top_status_bar
 from etf_trading.ui.navigation import render_primary_navigation, render_secondary_navigation
 from etf_trading.ui.state import summarize_platform_status
@@ -1849,45 +1850,16 @@ def _inject_research_styles() -> None:
 
 
 def _research_column_config(frame: pd.DataFrame) -> dict[str, object]:
-    config: dict[str, object] = {}
-    for column in frame.columns:
-        label = RESEARCH_COMPACT_HEADER_LABELS.get(column, column)
-        if column == "ETF代码 ETF Code":
-            config[column] = st.column_config.TextColumn(label, width=92)
-        elif column == "ETF名称 ETF Name":
-            config[column] = st.column_config.TextColumn(label, width=160)
-        elif column == "指数代码 Index Code":
-            config[column] = st.column_config.TextColumn(label, width=92)
-        elif column == "指数名称 Index Name":
-            config[column] = st.column_config.TextColumn(label, width=150)
-        elif column in {"大趋势 Large Trend", "中趋势 Medium Trend", "小趋势 Small Trend"}:
-            config[column] = st.column_config.TextColumn(label, width=132)
-        elif column == "可开仓 Eligible":
-            config[column] = st.column_config.TextColumn(label, width=118)
-        elif column in RESEARCH_PERCENT_LABELS:
-            config[column] = st.column_config.NumberColumn(label, format="%.1f%%", width=112)
-        elif column in RESEARCH_COUNT_LABELS:
-            config[column] = st.column_config.NumberColumn(label, format="%.0f", width=82)
-        elif pd.api.types.is_numeric_dtype(frame[column]):
-            config[column] = st.column_config.NumberColumn(label, format="%.2f", width=88)
-        elif column in {"候选策略 Strategy", "基准策略 Base Strategy"}:
-            config[column] = st.column_config.TextColumn(label, width=260)
-        elif column == "分类 Category":
-            config[column] = st.column_config.TextColumn(label, width=88)
-        else:
-            config[column] = st.column_config.TextColumn(label, width=90)
-    return config
+    return research_column_config(
+        frame,
+        compact_header_labels=RESEARCH_COMPACT_HEADER_LABELS,
+        percent_labels=RESEARCH_PERCENT_LABELS,
+        count_labels=RESEARCH_COUNT_LABELS,
+    )
 
 
 def _render_research_table(frame: pd.DataFrame, *, height: int | None = None) -> None:
-    st.dataframe(
-        frame,
-        width="stretch",
-        height=height or "auto",
-        hide_index=True,
-        column_config=_research_column_config(frame),
-        row_height=34,
-    )
+    render_research_table(frame, column_config=_research_column_config(frame), height=height)
 
 
 def _research_bar_chart(
@@ -1899,42 +1871,16 @@ def _research_bar_chart(
     color: str,
     height_per_row: int = 34,
 ) -> alt.Chart:
-    if index_column not in frame.columns or value_column not in frame.columns:
-        return alt.Chart(pd.DataFrame({"策略 Strategy": [], "数值 Value": []})).mark_bar()
-
-    data = frame[[index_column, value_column]].dropna().copy()
-    if index_column in {"candidate_name", "base_candidate"}:
-        data[index_column] = data[index_column].map(_candidate_display_name)
-    data = data.rename(columns={index_column: "策略 Strategy", value_column: "数值 Value"})
-    if value_column in RESEARCH_PERCENT_COLUMNS:
-        data["数值 Value"] = data["数值 Value"] * 100
-        value_format = ".1f"
-        axis_title = f"{RESEARCH_COLUMN_LABELS.get(value_column, value_column)} (%)"
-        tooltip_title = axis_title
-    else:
-        value_format = ".3f"
-        axis_title = RESEARCH_COLUMN_LABELS.get(value_column, value_column)
-        tooltip_title = axis_title
-
-    data = data.sort_values("数值 Value", ascending=False)
-    chart_height = max(180, min(360, len(data) * height_per_row))
-    return (
-        alt.Chart(data)
-        .mark_bar(color=color, cornerRadiusEnd=3)
-        .encode(
-            x=alt.X("数值 Value:Q", title=axis_title, axis=alt.Axis(format=value_format)),
-            y=alt.Y(
-                "策略 Strategy:N",
-                sort="-x",
-                title=None,
-                axis=alt.Axis(labelLimit=260),
-            ),
-            tooltip=[
-                alt.Tooltip("策略 Strategy:N", title="策略 Strategy"),
-                alt.Tooltip("数值 Value:Q", title=tooltip_title, format=value_format),
-            ],
-        )
-        .properties(title=title, height=chart_height)
+    return research_bar_chart(
+        frame,
+        index_column,
+        value_column,
+        title=title,
+        color=color,
+        percent_columns=RESEARCH_PERCENT_COLUMNS,
+        column_labels=RESEARCH_COLUMN_LABELS,
+        candidate_display_name=_candidate_display_name,
+        height_per_row=height_per_row,
     )
 
 
