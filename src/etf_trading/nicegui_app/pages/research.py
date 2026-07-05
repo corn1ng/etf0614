@@ -12,7 +12,14 @@ from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.charts import render_lightweight_chart
 from etf_trading.nicegui_app.components.tables import table_columns
 from etf_trading.nicegui_app.state import index_chart_payload
-from etf_trading.nicegui_app.view_models import PlatformSnapshot, code_from_option, current_ui_audit_findings, index_choice_options
+from etf_trading.nicegui_app.view_models import (
+    PlatformSnapshot,
+    code_from_option,
+    current_ui_audit_findings,
+    etf_choice_options,
+    etf_overview_rows,
+    index_choice_options,
+)
 from etf_trading.research.comparison import compare_regime_pairs
 from etf_trading.research.config import append_research_candidate, load_research_candidates
 from etf_trading.research.index_etf_universe import selected_etf_codes
@@ -182,6 +189,74 @@ def _render_run_controls(snapshot: PlatformSnapshot, candidates: list[StrategyCa
         ).props("dense unelevated color=primary")
 
     ui.label("回测会写入 reports/research_dashboard，完成后可在策略比较和 ETF复盘查看。").classes("text-xs text-slate-500")
+    _render_manual_backtest(snapshot, store, parquet_store)
+
+
+def _render_manual_backtest(snapshot: PlatformSnapshot, store, parquet_store) -> None:
+    options = etf_choice_options(etf_overview_rows(snapshot))
+    with ui.expansion("单 ETF 手动回测", icon="science").classes("workbench-task-panel w-full"):
+        if not options:
+            empty_state("暂无 ETF 主列表", "请先初始化 ETF 主列表。")
+            return
+        result_area = ui.column().classes("w-full gap-2")
+        with ui.row().classes("workbench-toolbar w-full"):
+            selected = ui.select(options, value=options[0], label="ETF").props("dense outlined").classes("w-96")
+            target_weight = ui.number("测试目标仓位", value=0.06, min=0.01, max=0.15, step=0.01).props("dense outlined").classes("w-44")
+            signal_date = ui.input("首个买入信号日期", value="").props("dense outlined type=date").classes("w-44")
+            backtest_button = ui.button(
+                "运行单 ETF 回测",
+                icon="play_arrow",
+                on_click=lambda: _run_manual_backtest(
+                    backtest_button,
+                    result_area,
+                    store,
+                    parquet_store,
+                    code_from_option(selected.value),
+                    float(target_weight.value or 0.06),
+                    str(signal_date.value or ""),
+                ),
+            ).props("dense outline")
+        ui.label("不写入研究结果文件，只用于快速验证单只 ETF 的手动买入信号表现。").classes("text-xs text-slate-500")
+
+
+def _run_manual_backtest(button, result_area, store, parquet_store, etf_code: str, target_weight: float, first_signal_date: str) -> None:
+    if store is None or parquet_store is None:
+        ui.notify("当前页面没有可用数据连接", type="negative")
+        return
+    result_area.clear()
+    button.disable()
+    try:
+        prices = parquet_store.read_prices(etf_code)
+        if prices.empty:
+            raise ValueError("本地尚无该 ETF 历史行情，请先初始化历史。")
+        featured = add_technical_features(prices)
+        start = pd.Timestamp(first_signal_date).normalize() if first_signal_date else pd.Timestamp(featured["trade_date"].min()).normalize()
+        category = _category_for_code(store, etf_code)
+        signal = StrategySignal(
+            etf_code=etf_code,
+            trade_date=start,
+            action="BUY",
+            target_weight=target_weight,
+            reason="手动回测信号",
+            trigger_rules=["manual_backtest"],
+        )
+        result = BacktestEngine().run_single_etf(etf_code, featured, [signal], category=category)
+    except Exception as exc:  # noqa: BLE001 - UI should show manual backtest failures clearly
+        ui.notify(f"单 ETF 回测失败：{exc}", type="negative")
+        with result_area:
+            empty_state("单 ETF 回测失败", str(exc))
+    else:
+        with result_area:
+            with ui.row().classes("w-full gap-2"):
+                _metric("总收益", f"{result.metrics.get('total_return', 0) * 100:.2f}%", "Total Return")
+                _metric("最大回撤", f"{result.metrics.get('max_drawdown', 0) * 100:.2f}%", "Max Drawdown")
+                _metric("港股跨境暴露", f"{result.metrics.get('max_hk_cross_market_exposure', 0) * 100:.2f}%", "HK Exposure")
+            payload = _chart_payload_with_trades(featured.tail(500), result.trades, etf_code)
+            render_lightweight_chart(payload, element_id=f"manual-backtest-{etf_code}")
+            _render_rows(_trade_rows(result.trades), "该回测没有产生交易", "检查信号日期是否落在历史区间内。")
+        ui.notify("单 ETF 回测完成", type="positive")
+    finally:
+        button.enable()
 
 
 def _run_research(button, result_area, snapshot: PlatformSnapshot, store, parquet_store, candidates: list[StrategyCandidate], index_code: str, confirmed: bool) -> None:
@@ -437,6 +512,10 @@ def _category_map(store) -> dict[str, str]:
     if master.empty:
         return {}
     return dict(zip(master["etf_code"].astype(str).str.zfill(6), master["category"].fillna("A股宽基").astype(str), strict=False))
+
+
+def _category_for_code(store, etf_code: str) -> str:
+    return _category_map(store).get(str(etf_code).zfill(6), "A股宽基")
 
 
 def _load_candidates() -> list[StrategyCandidate]:
