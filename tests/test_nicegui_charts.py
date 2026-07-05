@@ -1,6 +1,6 @@
 import pandas as pd
 
-from etf_trading.nicegui_app.components.charts import build_chart_html, build_static_chart_html
+from etf_trading.nicegui_app.components.charts import build_chart_html, build_echart_options, build_static_chart_html
 from etf_trading.nicegui_app.state import etf_chart_payload, index_chart_payload
 
 
@@ -32,6 +32,80 @@ def test_build_static_chart_html_renders_svg_without_script_tags():
     assert "<svg" in html
     assert "<script" not in html
     assert "K线图" in html
+
+
+def test_build_echart_options_preserves_candles_ma_volume_and_zoom():
+    payload = [
+        {
+            "chart": {"height": 520},
+            "series": [
+                {
+                    "type": "Candlestick",
+                    "data": [
+                        {"time": "2026-01-01", "open": 10, "high": 11, "low": 9, "close": 10.5},
+                        {"time": "2026-01-02", "open": 10.5, "high": 12, "low": 10, "close": 11.5},
+                    ],
+                },
+                {
+                    "type": "Line",
+                    "options": {"title": "MA51", "color": "#eab308"},
+                    "data": [
+                        {"time": "2026-01-01", "value": 10.2},
+                        {"time": "2026-01-02", "value": 10.4},
+                    ],
+                },
+            ],
+        },
+        {
+            "chart": {"height": 160},
+            "series": [
+                {
+                    "type": "Histogram",
+                    "data": [
+                        {"time": "2026-01-01", "value": 1000, "color": "#dc2626"},
+                        {"time": "2026-01-02", "value": 1200, "color": "#16a34a"},
+                    ],
+                }
+            ],
+        },
+    ]
+
+    options = build_echart_options(payload)
+
+    assert options["xAxis"][0]["data"] == ["2026-01-01", "2026-01-02"]
+    assert options["series"][0]["type"] == "candlestick"
+    assert options["series"][0]["data"] == [[10, 10.5, 9, 11], [10.5, 11.5, 10, 12]]
+    assert any(series["name"] == "MA51" and series["type"] == "line" for series in options["series"])
+    assert any(series["type"] == "bar" and series["xAxisIndex"] == 1 for series in options["series"])
+    assert len(options["dataZoom"]) == 2
+    assert {zoom["type"] for zoom in options["dataZoom"]} == {"inside", "slider"}
+
+
+def test_build_echart_options_maps_trade_markers_to_candle_prices():
+    payload = [
+        {
+            "chart": {"height": 520},
+            "series": [
+                {
+                    "type": "Candlestick",
+                    "data": [{"time": "2026-01-01", "open": 10, "high": 11, "low": 9, "close": 10.5}],
+                    "markers": [{"time": "2026-01-01", "position": "belowBar", "text": "BUY", "color": "#16a34a"}],
+                },
+            ],
+        }
+    ]
+
+    options = build_echart_options(payload)
+
+    assert options["series"][0]["markPoint"]["data"] == [
+        {
+            "name": "BUY",
+            "coord": ["2026-01-01", 9],
+            "value": "BUY",
+            "itemStyle": {"color": "#16a34a"},
+            "label": {"formatter": "BUY", "color": "#16a34a"},
+        }
+    ]
 
 
 class FakeParquetStore:

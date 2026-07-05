@@ -46,7 +46,141 @@ def _build_chart_script(payload: list[dict], safe_id: str) -> str:
 
 
 def render_lightweight_chart(payload: list[dict], element_id: str = "workbench-chart") -> None:
-    ui.html(build_static_chart_html(payload, element_id=element_id)).classes("w-full")
+    options = build_echart_options(payload)
+    height = _echart_height(payload)
+    ui.echart(options).classes("workbench-echart-panel w-full").style(f"height: {height}px")
+
+
+def build_echart_options(payload: list[dict]) -> dict:
+    main = payload[0] if payload else {"series": []}
+    volume_panel = payload[1] if len(payload) > 1 else {"series": []}
+    main_series = main.get("series", [])
+    volume_series = volume_panel.get("series", [])
+    candle = _first_series(main_series, "Candlestick")
+    categories = [str(point.get("time", "")) for point in candle.get("data", [])] if candle else []
+    series: list[dict] = []
+
+    if candle:
+        candle_data = [
+            [point.get("open"), point.get("close"), point.get("low"), point.get("high")]
+            for point in candle.get("data", [])
+        ]
+        series.append(
+            {
+                "name": "K线",
+                "type": "candlestick",
+                "data": candle_data,
+                "xAxisIndex": 0,
+                "yAxisIndex": 0,
+                "itemStyle": {
+                    "color": "#dc2626",
+                    "color0": "#16a34a",
+                    "borderColor": "#dc2626",
+                    "borderColor0": "#16a34a",
+                },
+                "markPoint": _marker_points(candle),
+            }
+        )
+
+    for item in main_series:
+        if item.get("type") != "Line":
+            continue
+        options = item.get("options", {})
+        series.append(
+            {
+                "name": str(options.get("title") or "均线"),
+                "type": "line",
+                "data": [point.get("value") for point in item.get("data", [])],
+                "xAxisIndex": 0,
+                "yAxisIndex": 0,
+                "showSymbol": False,
+                "smooth": True,
+                "lineStyle": {"width": options.get("lineWidth", 1), "color": options.get("color", "#2563eb")},
+            }
+        )
+
+    histogram = _first_series(volume_series, "Histogram")
+    if histogram:
+        if not categories:
+            categories = [str(point.get("time", "")) for point in histogram.get("data", [])]
+        series.append(
+            {
+                "name": "成交量",
+                "type": "bar",
+                "data": [
+                    {
+                        "value": point.get("value"),
+                        "itemStyle": {"color": point.get("color", "#94a3b8")},
+                    }
+                    for point in histogram.get("data", [])
+                ],
+                "xAxisIndex": 1,
+                "yAxisIndex": 1,
+            }
+        )
+
+    return {
+        "animation": False,
+        "backgroundColor": "#ffffff",
+        "legend": {
+            "top": 8,
+            "left": 12,
+            "itemWidth": 12,
+            "itemHeight": 8,
+            "textStyle": {"color": "#475569", "fontSize": 11},
+        },
+        "tooltip": {
+            "trigger": "axis",
+            "axisPointer": {"type": "cross"},
+            "confine": True,
+        },
+        "axisPointer": {"link": [{"xAxisIndex": "all"}]},
+        "grid": [
+            {"left": 56, "right": 56, "top": 42, "height": "66%"},
+            {"left": 56, "right": 56, "top": "78%", "height": "13%"},
+        ],
+        "xAxis": [
+            {
+                "type": "category",
+                "data": categories,
+                "boundaryGap": True,
+                "axisLine": {"lineStyle": {"color": "#cbd5e1"}},
+                "axisLabel": {"color": "#64748b", "fontSize": 11},
+                "min": "dataMin",
+                "max": "dataMax",
+            },
+            {
+                "type": "category",
+                "data": categories,
+                "gridIndex": 1,
+                "boundaryGap": True,
+                "axisLine": {"lineStyle": {"color": "#cbd5e1"}},
+                "axisLabel": {"show": False},
+                "min": "dataMin",
+                "max": "dataMax",
+            },
+        ],
+        "yAxis": [
+            {
+                "scale": True,
+                "splitArea": {"show": True},
+                "splitLine": {"lineStyle": {"color": "#e5e7eb"}},
+                "axisLabel": {"color": "#64748b", "fontSize": 11},
+            },
+            {
+                "scale": True,
+                "gridIndex": 1,
+                "splitNumber": 2,
+                "axisLabel": {"color": "#64748b", "fontSize": 10},
+                "splitLine": {"lineStyle": {"color": "#eef2f7"}},
+            },
+        ],
+        "dataZoom": [
+            {"type": "inside", "xAxisIndex": [0, 1], "start": 0, "end": 100},
+            {"type": "slider", "xAxisIndex": [0, 1], "bottom": 8, "height": 24, "start": 0, "end": 100},
+        ],
+        "series": series,
+    }
 
 
 def build_static_chart_html(payload: list[dict], element_id: str = "workbench-chart") -> str:
@@ -63,6 +197,40 @@ def build_static_chart_html(payload: list[dict], element_id: str = "workbench-ch
     else:
         svg = _empty_svg(height=height)
     return f'<div id="{safe_id}" class="workbench-chart-panel">{svg}</div>'
+
+
+def _echart_height(payload: list[dict]) -> int:
+    if not payload:
+        return 520
+    total = 0
+    for item in payload[:2]:
+        total += int(item.get("chart", {}).get("height", 0) or 0)
+    return max(520, min(760, total or 680))
+
+
+def _marker_points(candle: dict) -> dict:
+    markers = candle.get("markers") or []
+    candles_by_time = {str(point.get("time")): point for point in candle.get("data", [])}
+    data = []
+    for marker in markers:
+        time = marker.get("time")
+        if not time:
+            continue
+        candle_point = candles_by_time.get(str(time))
+        if not candle_point:
+            continue
+        position = str(marker.get("position", "aboveBar"))
+        price = candle_point.get("low") if position == "belowBar" else candle_point.get("high")
+        data.append(
+            {
+                "name": str(marker.get("text", "")),
+                "coord": [str(time), price],
+                "value": str(marker.get("text", "")),
+                "itemStyle": {"color": marker.get("color", "#2563eb")},
+                "label": {"formatter": str(marker.get("text", "")), "color": marker.get("color", "#2563eb")},
+            }
+        )
+    return {"symbolSize": 42, "data": data} if data else {"data": []}
 
 
 def _first_series(series: list[dict], kind: str) -> dict | None:

@@ -200,6 +200,14 @@ body {
   overflow: hidden;
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
 }
+.workbench-echart-panel {
+  min-height: 520px;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+}
 .workbench-alert {
   border: 1px solid var(--wb-line);
   border-radius: 8px;
