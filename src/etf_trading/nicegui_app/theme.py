@@ -91,6 +91,7 @@ body {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .workbench-section-tab {
   height: 32px;
@@ -147,6 +148,18 @@ body {
   height: 34px;
   font-size: 13px;
 }
+.workbench-action-panel {
+  width: 360px;
+  max-width: 100%;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+}
+.workbench-action-panel .q-field {
+  width: 100%;
+}
 .workbench-chart-panel {
   min-height: 420px;
   border: 1px solid var(--wb-line);
@@ -170,6 +183,8 @@ body {
   .workbench-brand { padding: 0 8px; font-size: 0; }
   .workbench-page { padding: 10px; }
   .workbench-page-title { font-size: 20px; }
+  .workbench-action-panel { width: 100%; }
+  .workbench-page .q-field { max-width: 100%; }
 }
 """
 

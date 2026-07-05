@@ -8,7 +8,13 @@ from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.charts import render_lightweight_chart
 from etf_trading.nicegui_app.components.tables import table_columns
 from etf_trading.nicegui_app.state import index_chart_payload
-from etf_trading.nicegui_app.view_models import PlatformSnapshot, current_ui_audit_findings, market_overview
+from etf_trading.nicegui_app.view_models import (
+    PlatformSnapshot,
+    code_from_option,
+    current_ui_audit_findings,
+    index_choice_options,
+    market_overview,
+)
 
 
 def render(snapshot: PlatformSnapshot, section: str, parquet_store=None) -> None:
@@ -45,22 +51,40 @@ def _render_index_reference(snapshot: PlatformSnapshot) -> None:
 
 
 def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
-    if snapshot.index_summary.empty or parquet_store is None:
+    options = index_choice_options(snapshot.index_summary)
+    if not options or parquet_store is None:
         empty_state("暂无指数K线", "先补齐指数历史。")
         _render_audit("market")
         return
 
-    selected = str(snapshot.index_summary.iloc[0]["index_code"])
-    payload = index_chart_payload(parquet_store, selected)
-    if not payload[0]["series"]:
-        empty_state("暂无指数K线", "先补齐指数历史。")
-        _render_audit("market")
-        return
+    def draw_chart(option: str | None) -> None:
+        selected = code_from_option(option)
+        chart_area.clear()
+        with chart_area:
+            if not selected:
+                empty_state("暂无指数K线", "请选择一个指数。")
+                return
+
+            payload = index_chart_payload(parquet_store, selected)
+            if not payload[0]["series"]:
+                empty_state("暂无指数K线", "先补齐该指数历史。")
+                return
+
+            with ui.row().classes("workbench-toolbar w-full justify-between"):
+                ui.label(f"指数：{selected}").classes("text-sm font-semibold text-slate-700")
+                ui.label("近500条记录").classes("text-xs text-slate-500")
+            render_lightweight_chart(payload, element_id=f"index-chart-{selected}")
 
     with ui.row().classes("workbench-toolbar w-full justify-between"):
-        ui.label(f"指数：{selected}").classes("text-sm font-semibold text-slate-700")
-        ui.label("近500条记录").classes("text-xs text-slate-500")
-    render_lightweight_chart(payload, element_id=f"index-chart-{selected}")
+        ui.select(
+            options,
+            value=options[0],
+            label="选择指数",
+            on_change=lambda event: draw_chart(event.value),
+        ).props("dense outlined").classes("w-96")
+        ui.label("指数只做市场状态判断，ETF 交易载体在 ETF 数据页处理。").classes("text-xs text-slate-500")
+    chart_area = ui.column().classes("w-full gap-2")
+    draw_chart(options[0])
     _render_audit("market")
 
 

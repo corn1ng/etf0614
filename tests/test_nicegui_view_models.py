@@ -4,8 +4,13 @@ import pandas as pd
 
 from etf_trading.nicegui_app.view_models import (
     PlatformSnapshot,
+    category_options,
+    code_from_option,
     current_ui_audit_findings,
     etf_overview_rows,
+    etf_choice_options,
+    filter_etf_rows,
+    index_choice_options,
     maintenance_rows,
     market_overview,
     status_metrics,
@@ -87,3 +92,28 @@ def test_etf_and_maintenance_audit_notes_are_explicit():
 
     assert any("ETF" in item.problem for item in by_page["etf-data"])
     assert any("健康" in item.problem or "补齐" in item.fix for item in by_page["maintenance"])
+
+
+def test_choice_options_keep_codes_readable_for_chart_selectors():
+    snapshot = _snapshot()
+
+    assert index_choice_options(snapshot.index_summary) == [
+        "000300 沪深300 · A股宽基 · 可参与",
+        "000905 中证500 · A股宽基 · 观察",
+    ]
+    assert etf_choice_options(etf_overview_rows(snapshot)) == [
+        "510300 沪深300ETF · A股宽基",
+        "512880 证券ETF · A股行业",
+    ]
+    assert code_from_option("510300 沪深300ETF · A股宽基") == "510300"
+    assert code_from_option(None) == ""
+
+
+def test_etf_search_filters_by_query_category_and_limit():
+    rows = etf_overview_rows(_snapshot())
+
+    assert category_options(rows) == ["全部分类", "A股宽基", "A股行业"]
+    assert [row["ETF代码"] for row in filter_etf_rows(rows, query="300")] == ["510300"]
+    assert [row["ETF代码"] for row in filter_etf_rows(rows, query="证券")] == ["512880"]
+    assert [row["ETF代码"] for row in filter_etf_rows(rows, category="A股行业")] == ["512880"]
+    assert len(filter_etf_rows(rows, limit=1)) == 1

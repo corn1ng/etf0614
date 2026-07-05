@@ -70,10 +70,10 @@ def _render_page(page_slug: str, section: str) -> None:
         market.render(snapshot, section, parquet_store=parquet_store)
         return
     if page_slug == "etf-data":
-        etf_data.render(snapshot, section, parquet_store=parquet_store)
+        etf_data.render(snapshot, section, parquet_store=parquet_store, store=store)
         return
     if page_slug == "maintenance":
-        maintenance.render(snapshot, section)
+        maintenance.render(snapshot, section, store=store, parquet_store=parquet_store)
         return
     if page_slug == "research":
         research.render(snapshot, section)

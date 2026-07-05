@@ -77,6 +77,97 @@ def maintenance_rows(snapshot: PlatformSnapshot) -> list[dict[str, object]]:
     return _records(snapshot.gaps)
 
 
+def code_from_option(option: str | None) -> str:
+    if not option:
+        return ""
+    return str(option).strip().split(maxsplit=1)[0]
+
+
+def index_choice_options(index_summary: pd.DataFrame) -> list[str]:
+    if index_summary.empty:
+        return []
+
+    options: list[str] = []
+    for row in index_summary.fillna("").to_dict("records"):
+        code = str(row.get("index_code", "")).strip()
+        if not code:
+            continue
+        name = str(row.get("index_name", "")).strip()
+        category = str(row.get("category", "")).strip()
+        status = "可参与" if bool(row.get("allows_new_position", False)) else "观察"
+        pieces = [code]
+        if name:
+            pieces.append(name)
+        label = " ".join(pieces)
+        suffix = [item for item in (category, status) if item]
+        if suffix:
+            label = f"{label} · {' · '.join(suffix)}"
+        options.append(label)
+    return options
+
+
+def etf_choice_options(rows: list[dict[str, object]]) -> list[str]:
+    options: list[str] = []
+    for row in rows:
+        code = _row_value(row, "ETF代码", "etf_code")
+        if not code:
+            continue
+        name = _row_value(row, "ETF名称", "name")
+        category = _row_value(row, "分类", "category")
+        label = f"{code} {name}".strip()
+        if category:
+            label = f"{label} · {category}"
+        options.append(label)
+    return options
+
+
+def category_options(rows: list[dict[str, object]]) -> list[str]:
+    categories: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        category = _row_value(row, "分类", "category")
+        if category and category not in seen:
+            categories.append(category)
+            seen.add(category)
+    return ["全部分类", *categories]
+
+
+def filter_etf_rows(
+    rows: list[dict[str, object]],
+    query: str = "",
+    category: str = "全部分类",
+    limit: int = 100,
+) -> list[dict[str, object]]:
+    normalized_query = query.strip().lower()
+    filtered: list[dict[str, object]] = []
+    for row in rows:
+        row_category = _row_value(row, "分类", "category")
+        if category not in {"", "全部", "全部分类"} and row_category != category:
+            continue
+        searchable = " ".join(
+            _row_value(row, *keys)
+            for keys in (
+                ("ETF代码", "etf_code"),
+                ("ETF名称", "name"),
+                ("分类", "category"),
+                ("交易所", "exchange"),
+            )
+        ).lower()
+        if normalized_query and normalized_query not in searchable:
+            continue
+        filtered.append(row)
+        if len(filtered) >= limit:
+            break
+    return filtered
+
+
+def etf_category_for_code(rows: list[dict[str, object]], etf_code: str, default: str = "其他") -> str:
+    for row in rows:
+        if _row_value(row, "ETF代码", "etf_code") == etf_code:
+            return _row_value(row, "分类", "category") or default
+    return default
+
+
 def _count_allowed_indexes(index_summary: pd.DataFrame) -> int:
     if index_summary.empty:
         return 0
@@ -93,3 +184,11 @@ def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
     if frame.empty:
         return []
     return frame.fillna("").to_dict("records")
+
+
+def _row_value(row: dict[str, object], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and value != "":
+            return str(value).strip()
+    return ""
