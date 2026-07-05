@@ -64,7 +64,7 @@ def _render_page(page_slug: str, section: str) -> None:
     snapshot = load_snapshot(store, parquet_store)
 
     if page_slug == "action":
-        action.render(snapshot, section)
+        action.render(snapshot, section, store=store, parquet_store=parquet_store)
         return
     if page_slug == "market":
         market.render(snapshot, section, parquet_store=parquet_store)
@@ -76,7 +76,7 @@ def _render_page(page_slug: str, section: str) -> None:
         maintenance.render(snapshot, section, store=store, parquet_store=parquet_store)
         return
     if page_slug == "research":
-        research.render(snapshot, section)
+        research.render(snapshot, section, store=store, parquet_store=parquet_store)
         return
 
     action.render(snapshot, "行动摘要")

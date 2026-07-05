@@ -35,14 +35,14 @@ NICEGUI_PAGES: tuple[NicePageSpec, ...] = (
     NicePageSpec(
         slug="research",
         label="策略实验室",
-        caption="查看研究任务和已有结果，复杂回测迁移到后续版本。",
-        sections=("策略概览", "已有结果"),
+        caption="创建策略、运行回测、比较表现并复盘 ETF 的 B/S 点。",
+        sections=("策略库", "新建策略", "运行回测", "策略比较", "ETF复盘", "指数过滤实验"),
     ),
     NicePageSpec(
         slug="maintenance",
         label="数据维护",
-        caption="检查数据缺口、补齐历史和查看任务结果。",
-        sections=("数据健康", "补齐任务", "任务日志", "设置"),
+        caption="统一检查全局数据缺口、补齐历史和查看日志。",
+        sections=("数据总览", "缺口明细", "补齐任务", "日志与设置"),
     ),
 )
 

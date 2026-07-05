@@ -160,6 +160,38 @@ body {
 .workbench-action-panel .q-field {
   width: 100%;
 }
+.workbench-form-panel {
+  width: 100%;
+}
+.workbench-markdown-panel {
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px 14px;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
+}
+.workbench-success-line,
+.workbench-warning-line {
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.workbench-success-line {
+  border: 1px solid rgba(22, 163, 74, 0.24);
+  background: #ecfdf5;
+  color: #047857;
+}
+.workbench-warning-line {
+  border: 1px solid rgba(217, 119, 6, 0.24);
+  background: #fffbeb;
+  color: #b45309;
+}
+.workbench-task-panel {
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: #ffffff;
+}
 .workbench-chart-panel {
   min-height: 420px;
   border: 1px solid var(--wb-line);
