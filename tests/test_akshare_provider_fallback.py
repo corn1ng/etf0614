@@ -33,6 +33,35 @@ def test_fetch_etf_daily_falls_back_to_sina_when_eastmoney_fails():
     assert result["close"].tolist() == [0.996]
 
 
+class _FakeSse52Ak:
+    def fund_etf_hist_em(self, **kwargs):
+        raise RuntimeError("eastmoney down")
+
+    def fund_etf_hist_sina(self, symbol):
+        assert symbol == "sh520500"
+        return pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2026-07-03"]),
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [100],
+                "amount": [1000],
+            }
+        )
+
+
+def test_fetch_etf_daily_uses_sh_prefix_for_52_sina_fallback():
+    provider = AkShareProvider.__new__(AkShareProvider)
+    provider.ak = _FakeSse52Ak()
+
+    result = provider.fetch_etf_daily("520500", "2026-07-01", "2026-07-05")
+
+    assert result["etf_code"].tolist() == ["520500"]
+    assert result["trade_date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-07-03"]
+
+
 class _FakeEtfListAk:
     def fund_etf_spot_em(self):
         return pd.DataFrame(

@@ -140,7 +140,7 @@ def _fmt_date(value: date | str) -> str:
 
 
 def _infer_exchange(code: str) -> str:
-    if code.startswith(("51", "56", "58")):
+    if code.startswith(("51", "52", "53", "56", "58")):
         return "SSE"
     if code.startswith(("15", "16")):
         return "SZSE"
