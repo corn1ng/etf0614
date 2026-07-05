@@ -1,6 +1,6 @@
 import pandas as pd
 
-from etf_trading.nicegui_app.components.charts import build_chart_html
+from etf_trading.nicegui_app.components.charts import build_chart_html, build_static_chart_html
 from etf_trading.nicegui_app.state import etf_chart_payload, index_chart_payload
 
 
@@ -11,6 +11,27 @@ def test_build_chart_html_embeds_payload_and_container():
     assert "LightweightCharts" in html
     assert '"height": 320' in html
     assert "ResizeObserver" in html
+
+
+def test_build_static_chart_html_renders_svg_without_script_tags():
+    payload = [
+        {
+            "chart": {"height": 320},
+            "series": [
+                {
+                    "type": "Candlestick",
+                    "data": [{"time": "2026-01-01", "open": 10, "high": 11, "low": 9, "close": 10.5}],
+                }
+            ],
+        }
+    ]
+
+    html = build_static_chart_html(payload, element_id="static-a")
+
+    assert 'id="static-a"' in html
+    assert "<svg" in html
+    assert "<script" not in html
+    assert "K线图" in html
 
 
 class FakeParquetStore:

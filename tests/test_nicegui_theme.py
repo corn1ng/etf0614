@@ -8,6 +8,7 @@ def test_theme_contains_dense_professional_workbench_rules():
     assert ".workbench-topbar" in WORKBENCH_CSS
     assert ".workbench-data-table" in WORKBENCH_CSS
     assert "height: 34px" in WORKBENCH_CSS
+    assert "overflow-x: auto" in WORKBENCH_CSS
     assert "#0f172a" in WORKBENCH_CSS
 
 

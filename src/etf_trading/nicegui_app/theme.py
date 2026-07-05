@@ -129,8 +129,12 @@ body {
 .workbench-data-table {
   border: 1px solid var(--wb-line);
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: #ffffff;
+}
+.workbench-data-table .q-table__middle {
+  overflow-x: auto;
 }
 .workbench-data-table .q-table th {
   height: 34px;
