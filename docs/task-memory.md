@@ -31,3 +31,11 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
 - Watch out next time:
   - Do not stage local virtual environments such as `.venv-win/` or generated agent/runtime folders such as `.superpowers/`.
   - Re-run `git status --short --untracked-files=all` after ignore-rule changes so the staged set is visible and reviewable.
+
+## 2026-07-05 - Design market and ETF page boundary
+
+- Summary: Added the approved design for separating `市场地图` as an index decision layer from `ETF数据` as the ETF asset layer.
+- Verification: Documentation-only change; `rg -n "TBD|TODO|待定|待补|不确定|FIXME" docs\superpowers\specs\2026-07-05-market-etf-boundary-design.md` returned no matches.
+- Watch out next time:
+  - Keep ETF K line views under `ETF数据`; `市场地图` should stay focused on index and market participation decisions.
+  - Treat `指数样本池` as ETF mapping/sample attribution, not as an index analysis page.
