@@ -54,13 +54,26 @@ class _FakeEtfListAk:
         )
 
 
-def test_fetch_etf_list_merges_fund_name_etf_fallback():
+def test_fetch_etf_list_uses_spot_only_for_tradable_master():
     provider = AkShareProvider.__new__(AkShareProvider)
     provider.ak = _FakeEtfListAk()
 
     result = provider.fetch_etf_list()
 
-    assert {"510300", "515080"}.issubset(set(result["etf_code"]))
-    fallback = result[result["etf_code"] == "515080"].iloc[0]
-    assert fallback["name"] == "中证红利ETF招商"
-    assert fallback["is_active"] == 1
+    assert result["etf_code"].tolist() == ["510300"]
+    assert result.iloc[0]["tradability_status"] == "exchange_traded"
+    assert result.iloc[0]["data_source"] == "fund_etf_spot_em"
+    assert "515080" not in set(result["etf_code"])
+
+
+def test_fetch_exchange_traded_etf_spot_normalizes_realtime_fields():
+    provider = AkShareProvider.__new__(AkShareProvider)
+    provider.ak = _FakeEtfListAk()
+
+    result = provider.fetch_exchange_traded_etf_spot()
+
+    row = result.iloc[0]
+    assert row["etf_code"] == "510300"
+    assert row["exchange"] == "SSE"
+    assert row["is_active"] == 1
+    assert row["tradability_status"] == "exchange_traded"

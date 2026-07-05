@@ -26,29 +26,18 @@ class AkShareProvider(DataProvider):
         self.ak = ak
 
     def fetch_etf_list(self) -> pd.DataFrame:
-        raw = _call_with_retries(self.ak.fund_etf_spot_em, "AkShare ETF列表")
-        spot = _normalize_etf_spot(raw)
-        frames = [spot]
-        try:
-            fund_names = _call_with_retries(self.ak.fund_name_em, "AkShare 基金名称库", attempts=2)
-        except Exception:
-            fund_names = pd.DataFrame()
-        name_etfs = _normalize_fund_name_etfs(fund_names)
-        if not name_etfs.empty:
-            frames.append(name_etfs)
+        return self.fetch_exchange_traded_etf_spot()
 
-        frame = pd.concat(frames, ignore_index=True)
+    def fetch_exchange_traded_etf_spot(self) -> pd.DataFrame:
+        raw = _call_with_retries(self.ak.fund_etf_spot_em, "AkShare ETF实时列表")
+        frame = _normalize_etf_spot(raw)
         frame["etf_code"] = frame["etf_code"].astype(str).str.zfill(6)
-        frame = frame.sort_values(
-            by=["etf_code", "latest_price", "amount"],
-            ascending=[True, False, False],
-            na_position="last",
-        )
-        frame = frame.drop_duplicates(subset=["etf_code"], keep="first").reset_index(drop=True)
         frame["exchange"] = frame["etf_code"].map(_infer_exchange)
         frame["category"] = frame.apply(lambda r: classify_etf(r["etf_code"], r.get("name", ""), r.get("tracking_index", "")), axis=1)
-        frame["is_active"] = frame.get("is_active", 1)
-        return frame
+        frame["is_active"] = 1
+        frame["tradability_status"] = "exchange_traded"
+        frame["data_source"] = "fund_etf_spot_em"
+        return frame.sort_values("etf_code").drop_duplicates(subset=["etf_code"], keep="first").reset_index(drop=True)
 
     def fetch_etf_daily(self, code: str, start_date: date | str, end_date: date | str, adjust: str = "qfq") -> pd.DataFrame:
         normalized_code = str(code).zfill(6)
@@ -164,8 +153,13 @@ def _normalize_etf_spot(raw: pd.DataFrame) -> pd.DataFrame:
         "代码": "etf_code",
         "名称": "name",
         "最新价": "latest_price",
+        "IOPV实时估值": "iopv",
+        "基金折价率": "premium_rate",
         "成交额": "amount",
         "成交量": "volume",
+        "最新份额": "latest_share",
+        "流通市值": "float_market_value",
+        "总市值": "total_market_value",
         "涨跌幅": "pct_change",
     }
     frame = frame.rename(columns={k: v for k, v in rename_map.items() if k in frame.columns})

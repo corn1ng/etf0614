@@ -20,6 +20,11 @@ class DataProvider(ABC):
     def fetch_etf_list(self) -> pd.DataFrame:
         raise NotImplementedError
 
+    def fetch_exchange_traded_etf_spot(self) -> pd.DataFrame:
+        """Return the current exchange-traded ETF spot universe."""
+
+        return self.fetch_etf_list()
+
     @abstractmethod
     def fetch_etf_daily(self, code: str, start_date: date | str, end_date: date | str, adjust: str = "qfq") -> pd.DataFrame:
         raise NotImplementedError
