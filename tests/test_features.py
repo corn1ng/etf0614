@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from etf_trading.strategy.features import add_technical_features
+from etf_trading.strategy.features import add_technical_features, add_weekly_trend_features
 
 
 def _price_frame(days: int) -> pd.DataFrame:
@@ -75,3 +75,27 @@ def test_atr_is_missing_when_recent_high_values_are_missing():
 
     assert result["atr20"].tail(20).isna().all()
     assert result["distance_ma20_atr"].tail(20).isna().all()
+
+
+def test_adds_atomic_daily_feature_columns():
+    result = add_technical_features(_price_frame(120))
+
+    last = result.iloc[-1]
+    assert np.isclose(last["return_20"], last["momentum_20"])
+    assert np.isclose(last["return_60"], last["momentum_60"])
+    assert np.isclose(last["avg_amount_5"], 1_000_000)
+    assert np.isclose(last["amount_ratio_5_20"], 1.0)
+    assert np.isclose(last["distance_ma20_pct"], last["close"] / last["ma20"] - 1.0)
+    assert last["rolling_high_close_60"] == result["close"].tail(60).max()
+    assert bool(last["is_60d_close_breakout"]) is True
+
+
+def test_add_weekly_trend_features_backfills_latest_week_state():
+    result = add_weekly_trend_features(_price_frame(220))
+
+    last = result.iloc[-1]
+    assert "weekly_ma10" in result.columns
+    assert not pd.isna(last["weekly_close"])
+    assert not pd.isna(last["weekly_ma10"])
+    assert not pd.isna(last["weekly_ma30"])
+    assert isinstance(bool(last["weekly_close_above_ma10"]), bool)
