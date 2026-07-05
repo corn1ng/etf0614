@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from threading import RLock
+import time
 
 import pandas as pd
 
@@ -20,6 +22,10 @@ from etf_trading.ui.data_coverage import (
 )
 
 from .view_models import PlatformSnapshot
+
+SNAPSHOT_CACHE_TTL_SECONDS = 60.0
+_SNAPSHOT_CACHE: dict[tuple[str, str], tuple[float, PlatformSnapshot]] = {}
+_SNAPSHOT_CACHE_LOCK = RLock()
 
 
 def create_store(db_path: str | Path | None = None) -> SQLiteStore:
@@ -48,6 +54,42 @@ def load_snapshot(store: SQLiteStore, parquet_store: ParquetStore) -> PlatformSn
         coverage=coverage,
         generated_at=datetime.now(),
     )
+
+
+def load_snapshot_cached(
+    store: SQLiteStore,
+    parquet_store: ParquetStore,
+    *,
+    now: float | None = None,
+    ttl_seconds: float = SNAPSHOT_CACHE_TTL_SECONDS,
+) -> PlatformSnapshot:
+    cache_key = _snapshot_cache_key(store, parquet_store)
+    timestamp = time.monotonic() if now is None else now
+    with _SNAPSHOT_CACHE_LOCK:
+        cached = _SNAPSHOT_CACHE.get(cache_key)
+        if cached is not None:
+            cached_at, snapshot = cached
+            if timestamp - cached_at <= ttl_seconds:
+                return snapshot
+
+    snapshot = load_snapshot(store, parquet_store)
+    with _SNAPSHOT_CACHE_LOCK:
+        _SNAPSHOT_CACHE[cache_key] = (timestamp, snapshot)
+    return snapshot
+
+
+def invalidate_snapshot_cache(store: SQLiteStore | None = None, parquet_store: ParquetStore | None = None) -> None:
+    with _SNAPSHOT_CACHE_LOCK:
+        if store is None or parquet_store is None:
+            _SNAPSHOT_CACHE.clear()
+            return
+        _SNAPSHOT_CACHE.pop(_snapshot_cache_key(store, parquet_store), None)
+
+
+def _snapshot_cache_key(store: SQLiteStore, parquet_store: ParquetStore) -> tuple[str, str]:
+    db_path = Path(getattr(store, "db_path", "")).resolve()
+    parquet_root = Path(getattr(parquet_store, "root", "")).resolve()
+    return (str(db_path), str(parquet_root))
 
 
 def build_index_trend_summary(

@@ -57,11 +57,11 @@ def _render_page_header(page: NicePageSpec, active_section: str) -> None:
 
 def _render_page(page_slug: str, section: str) -> None:
     from .pages import action, etf_data, maintenance, market, research
-    from .state import create_parquet_store, create_store, load_snapshot
+    from .state import create_parquet_store, create_store, load_snapshot_cached
 
     store = create_store()
     parquet_store = create_parquet_store()
-    snapshot = load_snapshot(store, parquet_store)
+    snapshot = load_snapshot_cached(store, parquet_store)
 
     if page_slug == "action":
         action.render(snapshot, section, store=store, parquet_store=parquet_store)

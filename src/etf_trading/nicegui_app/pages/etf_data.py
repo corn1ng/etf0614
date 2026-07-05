@@ -7,7 +7,7 @@ from nicegui import ui
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.charts import render_lightweight_chart
 from etf_trading.nicegui_app.components.tables import table_columns
-from etf_trading.nicegui_app.state import etf_chart_payload
+from etf_trading.nicegui_app.state import etf_chart_payload, invalidate_snapshot_cache
 from etf_trading.nicegui_app.view_models import (
     PlatformSnapshot,
     category_options,
@@ -155,6 +155,7 @@ def _save_watchlist(store, etf_code: str, enabled: bool, allow_buy: bool, catego
         ui.notify("请先选择 ETF", type="warning")
         return
     store.set_watchlist(etf_code, enabled=enabled, allow_buy=allow_buy, category=category)
+    invalidate_snapshot_cache()
     ui.notify(f"{etf_code} 已保存到每日计算池", type="positive")
 
 

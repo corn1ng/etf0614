@@ -12,6 +12,7 @@ from etf_trading.data.initialization import InitializationService
 from etf_trading.data.providers.akshare_provider import AkShareProvider
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.tables import table_columns
+from etf_trading.nicegui_app.state import invalidate_snapshot_cache
 from etf_trading.nicegui_app.view_models import (
     PlatformSnapshot,
     code_from_option,
@@ -239,6 +240,7 @@ def _run_task(button, result_area, title: str, action, success_message) -> None:
         with result_area:
             empty_state(f"{title}失败", str(exc))
     else:
+        invalidate_snapshot_cache()
         message = success_message(result)
         ui.notify(message, type="positive")
         with result_area:
