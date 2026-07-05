@@ -24,11 +24,25 @@ DEFAULT_INDEXES: tuple[IndexDefinition, ...] = (
     IndexDefinition("000300", "沪深300", "A股", "A股宽基", "000300"),
     IndexDefinition("000905", "中证500", "A股", "A股宽基", "000905"),
     IndexDefinition("000852", "中证1000", "A股", "A股宽基", "000852"),
+    IndexDefinition("932000", "中证2000", "A股", "A股宽基", "932000"),
+    IndexDefinition("000510", "中证A500", "A股", "A股宽基", "000510"),
+    IndexDefinition("930050", "中证A50", "A股", "A股宽基", "930050"),
+    IndexDefinition("000903", "中证A100", "A股", "A股宽基", "000903"),
+    IndexDefinition("000906", "中证800", "A股", "A股宽基", "000906"),
     IndexDefinition("000016", "上证50", "A股", "A股宽基", "000016"),
     IndexDefinition("000001", "上证指数", "A股", "A股综合", "000001"),
     IndexDefinition("399001", "深证成指", "A股", "A股综合", "399001"),
     IndexDefinition("399006", "创业板指", "A股", "A股成长", "399006"),
     IndexDefinition("000688", "科创50", "A股", "A股成长", "000688"),
+    IndexDefinition("931643", "科创创业50", "A股", "A股成长", "931643"),
+    IndexDefinition("000922", "中证红利", "A股", "A股主题", "000922"),
+    IndexDefinition("000015", "上证红利", "A股", "A股主题", "000015"),
+    IndexDefinition("H30269", "红利低波", "A股", "A股主题", "H30269"),
+    IndexDefinition("930955", "红利低波100", "A股", "A股主题", "930955"),
+    IndexDefinition("931446", "东证红利低波", "A股", "A股主题", "931446"),
+    IndexDefinition("000919", "沪深300价值", "A股", "A股主题", "000919"),
+    IndexDefinition("000029", "上证180价值", "A股", "A股主题", "000029"),
+    IndexDefinition("930782", "行业中性低波", "A股", "A股主题", "930782"),
     IndexDefinition("399986", "中证银行", "A股", "A股行业", "399986"),
     IndexDefinition("399975", "证券公司", "A股", "A股行业", "399975"),
     IndexDefinition("000933", "中证医药", "A股", "A股行业", "000933"),
@@ -74,24 +88,39 @@ def normalize_index_daily(raw: pd.DataFrame, index_code: str, source: str) -> pd
     columns = ["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount", "data_source"]
     if raw.empty:
         return pd.DataFrame(columns=columns)
+
     frame = raw.rename(
         columns={
             "date": "trade_date",
             "日期": "trade_date",
+            "交易日": "trade_date",
+            "cal_date": "trade_date",
+            "calendar_date": "trade_date",
             "open": "open",
             "开盘": "open",
+            "開盤": "open",
             "high": "high",
             "最高": "high",
             "low": "low",
             "最低": "low",
             "close": "close",
             "收盘": "close",
+            "收盤": "close",
             "volume": "volume",
             "成交量": "volume",
             "amount": "amount",
+            "成交金额": "amount",
+            "成交額": "amount",
             "成交额": "amount",
         }
     ).copy()
+
+    date_column = _find_trade_date_column(frame)
+    if date_column is None:
+        return pd.DataFrame(columns=columns)
+    if date_column != "trade_date":
+        frame = frame.rename(columns={date_column: "trade_date"})
+
     frame["index_code"] = index_code
     frame["trade_date"] = pd.to_datetime(frame["trade_date"])
     for col in ["open", "high", "low", "close", "volume", "amount"]:
@@ -100,3 +129,27 @@ def normalize_index_daily(raw: pd.DataFrame, index_code: str, source: str) -> pd
         frame[col] = pd.to_numeric(frame[col], errors="coerce")
     frame["data_source"] = source
     return frame[columns].sort_values("trade_date").reset_index(drop=True)
+
+
+def _find_trade_date_column(frame: pd.DataFrame) -> str | None:
+    if "trade_date" in frame.columns:
+        return "trade_date"
+
+    exact_candidates = ("date", "日期", "交易日", "cal_date", "calendar_date")
+    for candidate in exact_candidates:
+        if candidate in frame.columns:
+            return candidate
+
+    lower_map = {str(col).lower().strip(): col for col in frame.columns}
+    for key in ("date", "time", "datetime", "trade"):
+        if key in lower_map:
+            return lower_map[key]
+    for col_lower, original in lower_map.items():
+        if "date" in col_lower or "time" in col_lower or "交易" in col_lower or "时间" in col_lower:
+            return original
+
+    for col in frame.columns:
+        parsed = pd.to_datetime(frame[col], errors="coerce")
+        if parsed.notna().mean() >= 0.95:
+            return col
+    return None

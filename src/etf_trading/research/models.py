@@ -27,6 +27,7 @@ class StrategyCandidate:
     min_trade_interval_days: int = 10
     target_weight: float = 1.0
     require_trend_regime: bool = False
+    status: str = "experimental"
 
 
 @dataclass(frozen=True)

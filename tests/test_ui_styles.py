@@ -14,8 +14,15 @@ def test_global_styles_keep_sidebar_compact(monkeypatch):
 
     css = rendered["body"]
     assert rendered["unsafe"] is True
-    assert 'width: 15.5rem !important;' in css
-    assert 'max-width: 15.5rem !important;' in css
+    assert 'width: 11.5rem !important;' in css
+    assert 'max-width: 11.5rem !important;' in css
+    assert '15.5rem' not in css
     assert '[data-testid="stSidebarContent"]' in css
-    assert 'padding: 0.75rem 0.65rem;' in css
+    assert 'padding: 0.55rem 0.5rem;' in css
     assert '[data-testid="stSidebar"] .stRadio' in css
+    assert ".workbench-page-header" in css
+    assert ".workbench-page-header__title" in css
+    assert ".workbench-page-header__caption" in css
+    assert "margin: 0 0 0.35rem 0;" in css
+    assert '[data-testid="stVerticalBlock"]' in css
+    assert '[data-testid="stAlert"]' in css

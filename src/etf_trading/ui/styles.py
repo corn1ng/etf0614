@@ -10,20 +10,21 @@ def inject_global_styles() -> None:
         """
         <style>
         .block-container {
-            padding-top: 1.1rem;
+            padding-top: 0.55rem;
+            padding-bottom: 1rem;
         }
         [data-testid=\"stSidebar\"] {
-            width: 15.5rem !important;
-            min-width: 15.5rem !important;
-            max-width: 15.5rem !important;
+            width: 11.5rem !important;
+            min-width: 11.5rem !important;
+            max-width: 11.5rem !important;
         }
         [data-testid=\"stSidebar\"] > div:first-child {
-            width: 15.5rem !important;
-            min-width: 15.5rem !important;
-            max-width: 15.5rem !important;
+            width: 11.5rem !important;
+            min-width: 11.5rem !important;
+            max-width: 11.5rem !important;
         }
         [data-testid=\"stSidebarContent\"] {
-            padding: 0.75rem 0.65rem;
+            padding: 0.55rem 0.5rem;
         }
         [data-testid=\"stSidebar\"] h3 {
             font-size: 0.98rem;
@@ -37,14 +38,27 @@ def inject_global_styles() -> None:
             gap: 0.18rem;
         }
         [data-testid=\"stSidebar\"] .stRadio label {
-            min-height: 1.9rem;
-            padding: 0.18rem 0.3rem;
+            min-height: 1.75rem;
+            padding: 0.14rem 0.2rem;
         }
         [data-testid=\"stMetricLabel\"] p {
             white-space: normal;
             overflow: visible;
             text-overflow: clip;
             line-height: 1.25;
+        }
+        [data-testid=\"stVerticalBlock\"] {
+            gap: 0.45rem;
+        }
+        [data-testid=\"stAlert\"] {
+            padding: 0.55rem 0.7rem;
+        }
+        div[data-testid=\"stCaptionContainer\"] {
+            margin-bottom: 0.15rem;
+        }
+        h1, h2, h3 {
+            margin-top: 0.25rem;
+            margin-bottom: 0.35rem;
         }
         .workbench-topbar {
             display: grid;
@@ -54,11 +68,11 @@ def inject_global_styles() -> None:
             border-radius: 6px;
             overflow: hidden;
             background: #e5e7eb;
-            margin: 0 0 1rem 0;
+            margin: 0 0 0.45rem 0;
         }
         .workbench-topbar__item {
             background: #ffffff;
-            padding: 0.65rem 0.8rem;
+            padding: 0.48rem 0.65rem;
             min-width: 0;
         }
         .workbench-topbar__label {
@@ -68,12 +82,28 @@ def inject_global_styles() -> None:
         }
         .workbench-topbar__value {
             color: #111827;
-            font-size: 1.05rem;
+            font-size: 0.98rem;
             font-weight: 650;
             line-height: 1.25;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+        .workbench-page-header {
+            margin: 0 0 0.35rem 0;
+        }
+        .workbench-page-header__title {
+            color: #111827;
+            font-size: 1.35rem;
+            font-weight: 720;
+            line-height: 1.15;
+            margin: 0;
+        }
+        .workbench-page-header__caption {
+            color: #6b7280;
+            font-size: 0.86rem;
+            line-height: 1.25;
+            margin-top: 0.12rem;
         }
         .index-status-code {
             display: grid;
@@ -82,12 +112,12 @@ def inject_global_styles() -> None:
             border: 1px solid #e5e7eb;
             border-radius: 6px;
             overflow: hidden;
-            margin: 0.35rem 0 1rem 0;
+            margin: 0.2rem 0 0.45rem 0;
             background: #e5e7eb;
         }
         .index-status-code__item {
             background: #ffffff;
-            padding: 0.75rem 0.9rem;
+            padding: 0.52rem 0.65rem;
             min-width: 0;
         }
         .index-status-code__label {

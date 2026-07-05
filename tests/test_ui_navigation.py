@@ -16,18 +16,35 @@ from etf_trading.ui.navigation import (
 
 
 def test_primary_navigation_follows_investment_workflow():
-    assert page_labels() == ["今日行动", "市场地图", "ETF池", "研究复盘", "数据维护"]
+    assert page_labels() == ["今日行动", "市场地图", "ETF数据", "策略实验室", "数据维护"]
     assert [page.slug for page in PAGE_SPECS] == ["decision", "market", "portfolio", "research", "data"]
+
+
+def test_price_scale_options_are_ordered_by_investment_workflow():
+    assert list(app.PRICE_SCALE_OPTIONS.items()) == [
+        ("价格走势 Price", "normal"),
+        ("累计涨跌幅 Return %", "percent"),
+        ("回撤风险 Drawdown %", "drawdown"),
+        ("回到低点需跌幅 Down to Low %", "downside"),
+        ("对数收益 Log Return %", "log_return"),
+    ]
 
 
 def test_each_page_exposes_expected_secondary_sections():
     sections_by_label = {page.label: section_options(page) for page in PAGE_SPECS}
 
     assert sections_by_label["今日行动"] == ["行动摘要", "每日建议", "计算池明细"]
-    assert sections_by_label["市场地图"] == ["指数买卖参考", "ETF行情", "指数K线"]
-    assert sections_by_label["ETF池"] == ["搜索加入", "每日计算池"]
-    assert sections_by_label["研究复盘"] == ["研究总览", "策略对比", "ETF复盘", "明细表", "运行研究"]
-    assert sections_by_label["数据维护"] == ["数据健康", "数据中心", "日志与设置"]
+    assert sections_by_label["市场地图"] == ["ETF行情", "指数K线"]
+    assert sections_by_label["ETF数据"] == ["数据总览", "搜索加入", "每日计算池", "指数样本池"]
+    assert sections_by_label["策略实验室"] == [
+        "策略库",
+        "新建策略",
+        "运行回测",
+        "策略比较",
+        "ETF复盘",
+        "指数过滤实验",
+    ]
+    assert sections_by_label["数据维护"] == ["数据总览", "缺口明细", "补齐任务", "日志与设置"]
 
 
 def test_navigation_defaults_to_daily_action_summary():
@@ -42,6 +59,33 @@ def test_unknown_page_and_section_fall_back_to_safe_defaults():
 
     assert page.label == "今日行动"
     assert resolve_section(page, "不存在") == "行动摘要"
+
+
+def test_render_page_header_outputs_compact_markup(monkeypatch):
+    from etf_trading.ui.navigation import PageSpec, render_page_header
+
+    rendered = {}
+
+    def capture_markdown(body, *, unsafe_allow_html=False):
+        rendered["body"] = body
+        rendered["unsafe"] = unsafe_allow_html
+
+    monkeypatch.setattr("etf_trading.ui.navigation.st.markdown", capture_markdown)
+    page = PageSpec(
+        slug="market",
+        label="市场地图",
+        caption="观察指数、ETF行情和趋势结构。",
+        sections=("指数买卖参考",),
+    )
+
+    render_page_header(page)
+
+    assert rendered["unsafe"] is True
+    assert 'class="workbench-page-header"' in rendered["body"]
+    assert 'class="workbench-page-header__title"' in rendered["body"]
+    assert 'class="workbench-page-header__caption"' in rendered["body"]
+    assert "市场地图" in rendered["body"]
+    assert "观察指数、ETF行情和趋势结构。" in rendered["body"]
 
 
 def test_research_secondary_navigation_is_not_overridden_by_sticky_auxiliary_tool(monkeypatch):
@@ -59,7 +103,7 @@ def test_research_secondary_navigation_is_not_overridden_by_sticky_auxiliary_too
     monkeypatch.setattr(app, "_render_research_job_status", lambda job_manager: None)
     monkeypatch.setattr(
         app,
-        "_render_research_run_controls",
+        "_render_strategy_lab_run_controls",
         lambda **kwargs: calls.__setitem__("run_controls", calls["run_controls"] + 1),
     )
     monkeypatch.setattr(
@@ -76,7 +120,7 @@ def test_research_secondary_navigation_is_not_overridden_by_sticky_auxiliary_too
     monkeypatch.setattr(app.st, "expander", lambda *args, **kwargs: nullcontext())
     store = SimpleNamespace(list_etf_master=lambda: pd.DataFrame({"etf_code": []}))
 
-    app._tab_research(store, object(), research_view="运行研究")
+    app._tab_research(store, object(), research_view="运行回测")
 
     assert calls["run_controls"] == 1
 
@@ -92,6 +136,7 @@ def test_main_reuses_platform_status_for_decision_page(monkeypatch):
         "eligible_index_count": 0,
     }
     calls = {"platform_status": 0}
+    header_calls = {"page_header": 0}
 
     def fake_platform_status(store, parquet_store):
         calls["platform_status"] += 1
@@ -106,6 +151,12 @@ def test_main_reuses_platform_status_for_decision_page(monkeypatch):
     monkeypatch.setattr(app, "InitializationService", lambda **kwargs: object())
     monkeypatch.setattr(app, "render_primary_navigation", lambda: decision_page)
     monkeypatch.setattr(app, "render_secondary_navigation", lambda page: page.sections[1])
+    monkeypatch.setattr(
+        app,
+        "render_page_header",
+        lambda page: header_calls.__setitem__("page_header", header_calls["page_header"] + 1),
+        raising=False,
+    )
     monkeypatch.setattr(app, "_platform_status", fake_platform_status)
     monkeypatch.setattr(app, "summarize_platform_status", lambda current_status: object())
     monkeypatch.setattr(app, "render_top_status_bar", lambda summary: None)
@@ -121,6 +172,7 @@ def test_main_reuses_platform_status_for_decision_page(monkeypatch):
     app.main()
 
     assert calls["platform_status"] == 1
+    assert header_calls["page_header"] == 1
 
 
 def test_main_reuses_precomputed_index_summary_for_market_page(monkeypatch):
@@ -155,9 +207,146 @@ def test_main_reuses_precomputed_index_summary_for_market_page(monkeypatch):
     monkeypatch.setattr(app, "_render_index_filter_explorer", lambda index_summary, parquet_store: None)
     monkeypatch.setattr(app, "_tab_chart", lambda store, parquet_store: None)
     monkeypatch.setattr(app, "_tab_index_watch", lambda parquet_store: None)
-    monkeypatch.setattr(app.market.st, "subheader", lambda *args, **kwargs: None)
-    monkeypatch.setattr(app.market.st, "caption", lambda *args, **kwargs: None)
 
     app.main()
 
     assert calls["build_index_summary"] == 0
+
+
+def test_page_modules_do_not_render_duplicate_page_titles(monkeypatch):
+    calls = {"subheader": 0, "caption": 0}
+
+    def count_subheader(*args, **kwargs):
+        calls["subheader"] += 1
+
+    def count_caption(*args, **kwargs):
+        calls["caption"] += 1
+
+    monkeypatch.setattr(app.decision.st, "subheader", count_subheader)
+    monkeypatch.setattr(app.decision.st, "caption", count_caption)
+    monkeypatch.setattr(app.decision.st, "info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app.decision.st, "warning", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app.decision.st, "markdown", lambda *args, **kwargs: None)
+
+    status = {
+        "index_summary": pd.DataFrame(),
+        "eligible_categories": [],
+        "watchlist": pd.DataFrame(),
+        "enabled_watchlist": pd.DataFrame(),
+        "issues": [],
+        "eligible_index_count": 0,
+    }
+
+    app.decision.render(
+        store=object(),
+        parquet_store=object(),
+        view="每日建议",
+        status=status,
+        render_status_cards=lambda current_status: None,
+        render_next_steps=lambda current_status: None,
+        index_trend_display_frame=lambda frame: frame,
+        render_research_table=lambda frame, height=None: None,
+        build_daily_advice_report=lambda store, parquet_store: None,
+        watchlist_status_frame=lambda watchlist, parquet_store: watchlist,
+    )
+
+    assert calls["subheader"] == 0
+    assert calls["caption"] == 0
+
+
+def test_portfolio_page_routes_etf_data_views():
+    calls = {"overview": 0, "index_pool": 0}
+    store = SimpleNamespace(list_watchlist=lambda: pd.DataFrame({"etf_code": ["510300"]}))
+    parquet_store = object()
+
+    app.portfolio.render(
+        store=store,
+        parquet_store=parquet_store,
+        view="数据总览",
+        render_data_overview=lambda store, parquet_store: calls.__setitem__("overview", calls["overview"] + 1),
+        render_index_etf_pool=lambda store, parquet_store: calls.__setitem__("index_pool", calls["index_pool"] + 1),
+        render_search_and_add=lambda store: None,
+        watchlist_status_frame=lambda watchlist, parquet_store: watchlist,
+    )
+
+    app.portfolio.render(
+        store=store,
+        parquet_store=parquet_store,
+        view="指数样本池",
+        render_data_overview=lambda store, parquet_store: calls.__setitem__("overview", calls["overview"] + 1),
+        render_index_etf_pool=lambda store, parquet_store: calls.__setitem__("index_pool", calls["index_pool"] + 1),
+        render_search_and_add=lambda store: None,
+        watchlist_status_frame=lambda watchlist, parquet_store: watchlist,
+    )
+
+    assert calls == {"overview": 1, "index_pool": 1}
+
+
+def test_data_maintenance_routes_data_console_views():
+    calls = {"overview": 0, "gaps": 0, "repair": 0, "settings": 0}
+    store = object()
+    parquet_store = object()
+    service = object()
+    status = {}
+
+    for view in ["数据总览", "缺口明细", "补齐任务", "日志与设置"]:
+        app.data_maintenance.render(
+            store=store,
+            parquet_store=parquet_store,
+            service=service,
+            view=view,
+            status=status,
+            render_data_overview=lambda store, parquet_store, status: calls.__setitem__("overview", calls["overview"] + 1),
+            render_gap_detail=lambda store, parquet_store, status: calls.__setitem__("gaps", calls["gaps"] + 1),
+            render_repair_tasks=lambda store, parquet_store: calls.__setitem__("repair", calls["repair"] + 1),
+            render_settings=lambda store, service: calls.__setitem__("settings", calls["settings"] + 1),
+        )
+
+    assert calls == {"overview": 1, "gaps": 1, "repair": 1, "settings": 1}
+
+
+def test_data_maintenance_overview_sizes_short_tables_to_content(monkeypatch):
+    class FakeMetricColumn:
+        def metric(self, *args, **kwargs):
+            return None
+
+    dataframe_calls = []
+    master = pd.DataFrame({"etf_code": ["510300"]})
+    watchlist = pd.DataFrame(columns=["etf_code"])
+    gaps = pd.DataFrame(
+        {
+            "数据类型": ["ETF历史", "指数历史"],
+            "状态": ["缺少", "历史不足"],
+        }
+    )
+    index_summary = pd.DataFrame({"index_code": ["000300"]})
+
+    monkeypatch.setattr(app, "_data_maintenance_context", lambda store, parquet_store, status: (gaps, pd.DataFrame(), index_summary))
+    monkeypatch.setattr(app.st, "columns", lambda count: [FakeMetricColumn() for _ in range(count)])
+    monkeypatch.setattr(app.st, "markdown", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        app.st,
+        "dataframe",
+        lambda frame, *args, **kwargs: dataframe_calls.append({"rows": len(frame), "height": kwargs.get("height")}),
+    )
+
+    app._render_data_coverage_overview(object(), object(), {"master": master, "watchlist": watchlist})
+
+    assert dataframe_calls[0] == {"rows": 5, "height": 222}
+    assert dataframe_calls[1] == {"rows": 2, "height": 114}
+
+
+def test_index_filter_explorer_folds_long_rule_copy(monkeypatch):
+    markdown_calls = []
+    info_calls = []
+
+    monkeypatch.setattr(app.st, "markdown", lambda body, *args, **kwargs: markdown_calls.append(str(body)))
+    monkeypatch.setattr(app.st, "info", lambda body, *args, **kwargs: info_calls.append(str(body)))
+    monkeypatch.setattr(app.st, "caption", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app.st, "expander", lambda *args, **kwargs: nullcontext())
+
+    app._render_index_filter_explorer(pd.DataFrame(), object())
+
+    assert all("### 指数级买卖参考" not in call for call in markdown_calls)
+    assert all("#### 选择指数" not in call for call in markdown_calls)
+    assert all("当前规则：三层趋势过滤" not in call for call in info_calls)

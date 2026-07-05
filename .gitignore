@@ -1,8 +1,10 @@
 .venv/
+.venv-win/
 __pycache__/
 .pytest_cache/
 *.pyc
 *.egg-info/
+.superpowers/
 
 /data/
 /database/*.sqlite

@@ -27,7 +27,7 @@ def test_status_summary_marks_attention_when_issues_exist():
         "enabled_watchlist": pd.DataFrame(),
         "issues": [
             {"title": "补齐指数历史", "detail": "数据维护中执行一键补齐。"},
-            {"title": "建立每日计算池", "detail": "ETF池中加入常看 ETF。"},
+            {"title": "建立每日计算池", "detail": "ETF数据中加入常看 ETF。"},
         ],
     }
 

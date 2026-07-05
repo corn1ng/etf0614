@@ -10,10 +10,13 @@ from etf_trading.ui.app import (
     _candidate_display_name,
     _eligible_index_categories,
     _filter_index_picker_frame,
+    _filter_date_range_frame,
     _filter_etf_codes_by_categories,
     _format_index_rule_names,
     _format_index_risk_names,
+    _index_etf_universe_display_frame,
     _index_gate_markers,
+    _index_trend_display_frame,
     _index_signal_diagnostic_display_frame,
     _index_signal_markers_for_rule,
     _index_sync_display_frame,
@@ -32,7 +35,20 @@ from etf_trading.ui.app import (
 
 
 def test_workspace_tabs_follow_investment_workflow():
-    assert WORKFLOW_TABS == ["今日决策", "趋势研究", "行情观察", "组合与池子", "数据与设置"]
+    assert WORKFLOW_TABS == ["今日行动", "市场地图", "ETF数据", "策略实验室", "数据维护"]
+
+
+def test_filter_date_range_frame_keeps_arbitrary_chart_window():
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2024-01-02", "2024-02-01", "2024-03-01"]),
+            "close": [1.0, 1.1, 1.2],
+        }
+    )
+
+    result = _filter_date_range_frame(frame, pd.Timestamp("2024-01-15").date(), pd.Timestamp("2024-02-15").date())
+
+    assert result["trade_date"].dt.strftime("%Y-%m-%d").tolist() == ["2024-02-01"]
 
 
 def test_candidate_display_name_uses_standard_chinese_and_english_names():
@@ -128,12 +144,12 @@ def test_research_attach_etf_names_adds_name_after_code():
 
     assert list(display.columns) == [
         "ETF代码 ETF Code",
-        "ETF名称 ETF Name",
+        "ETF名称",
         "分类 Category",
         "总收益 Total Return",
     ]
     assert display.iloc[0]["ETF代码 ETF Code"] == "159008"
-    assert display.iloc[0]["ETF名称 ETF Name"] == "证券ETF景顺"
+    assert display.iloc[0]["ETF名称"] == "证券ETF景顺"
 
 
 def test_index_trend_filter_keeps_only_etfs_in_trending_categories():
@@ -185,6 +201,53 @@ def test_build_index_trend_summary_classifies_latest_index_regime(tmp_path):
     assert summary.iloc[0]["index_name"] == "沪深300"
     assert summary.iloc[0]["latest_date"] == dates[-1].strftime("%Y-%m-%d")
     assert bool(summary.iloc[0]["allows_new_position"]) is True
+
+
+def test_index_trend_display_uses_chinese_index_names_and_headers():
+    summary = pd.DataFrame(
+        {
+            "index_code": ["000905", "399001"],
+            "index_name": ["中证500", "深证成指"],
+            "market": ["A股", "A股"],
+            "category": ["A股宽基", "A股综合"],
+            "large_trend": ["上升 UP", "上升 UP"],
+            "medium_trend": ["上升 UP", "上升 UP"],
+            "small_trend": ["右侧开始 RIGHT SIDE", "回踩 PULLBACK"],
+            "allows_new_position": [True, True],
+            "latest_date": ["2026-07-03", "2026-07-03"],
+        }
+    )
+
+    display = _index_trend_display_frame(summary)
+
+    assert "指数名称" in display.columns
+    assert "指数 Name" not in display.columns
+    assert display["指数名称"].tolist() == ["中证500", "深证成指"]
+
+
+def test_index_etf_universe_display_uses_chinese_headers():
+    frame = pd.DataFrame(
+        {
+            "index_code": ["000300"],
+            "index_name": ["沪深300"],
+            "etf_code": ["510300"],
+            "etf_name": ["沪深300ETF华泰柏瑞"],
+            "mapping_source": ["name_inferred"],
+            "confidence": ["medium"],
+            "amount": [100_000_000],
+            "history_rows": [300],
+            "is_top_sample": [True],
+        }
+    )
+
+    display = _index_etf_universe_display_frame(frame)
+
+    assert "追踪指数" in display.columns
+    assert "映射来源" in display.columns
+    assert "置信度" in display.columns
+    assert display.iloc[0]["追踪指数"] == "沪深300"
+    assert display.iloc[0]["映射来源"] == "名称推断"
+    assert display.iloc[0]["置信度"] == "中"
 
 
 def test_index_sync_summary_displays_status_counts_and_latest_date():

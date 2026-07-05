@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from etf_trading.research.config import load_research_candidates
+from etf_trading.research.config import append_research_candidate, adopted_candidates, load_research_candidates
+from etf_trading.research.models import StrategyCandidate
 
 
 def test_load_research_candidates_from_yaml(tmp_path: Path):
@@ -31,6 +32,7 @@ candidates:
     assert candidates[0].momentum_windows == (20, 60)
     assert candidates[0].rs_rank_max == 0.30
     assert candidates[0].target_weight == 1.0
+    assert candidates[0].status == "experimental"
 
 
 def test_load_research_candidates_parses_trend_v1_fields(tmp_path: Path):
@@ -65,6 +67,39 @@ candidates:
     assert candidate.slope_field == "ma60_slope_20"
     assert candidate.max_atr_distance_from_ma == 2.0
     assert candidate.trailing_atr_multiple == 3.0
+
+
+def test_append_research_candidate_writes_parameterized_strategy(tmp_path: Path):
+    config_path = tmp_path / "research.yaml"
+    config_path.write_text("candidates: []\n", encoding="utf-8")
+
+    append_research_candidate(
+        config_path,
+        StrategyCandidate(name="custom_strategy", entry_ma="ma60", status="experimental"),
+    )
+
+    loaded = load_research_candidates(config_path)
+    assert len(loaded) == 1
+    assert loaded[0].name == "custom_strategy"
+    assert loaded[0].entry_ma == "ma60"
+    assert loaded[0].status == "experimental"
+
+
+def test_append_research_candidate_rejects_duplicate_names(tmp_path: Path):
+    config_path = tmp_path / "research.yaml"
+    config_path.write_text("candidates:\n  - name: custom_strategy\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate strategy name"):
+        append_research_candidate(config_path, StrategyCandidate(name="custom_strategy"))
+
+
+def test_adopted_candidates_filters_only_adopted():
+    candidates = [
+        StrategyCandidate(name="live", status="adopted"),
+        StrategyCandidate(name="trial", status="experimental"),
+    ]
+
+    assert [candidate.name for candidate in adopted_candidates(candidates)] == ["live"]
 
 
 @pytest.mark.parametrize(

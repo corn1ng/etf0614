@@ -19,11 +19,11 @@ def research_column_config(
         label = compact_header_labels.get(column, column)
         if column == "ETF代码 ETF Code":
             config[column] = st.column_config.TextColumn(label, width=92)
-        elif column == "ETF名称 ETF Name":
+        elif column == "ETF名称":
             config[column] = st.column_config.TextColumn(label, width=160)
         elif column == "指数代码 Index Code":
             config[column] = st.column_config.TextColumn(label, width=92)
-        elif column == "指数名称 Index Name":
+        elif column == "指数名称":
             config[column] = st.column_config.TextColumn(label, width=150)
         elif column in {"大趋势 Large Trend", "中趋势 Medium Trend", "小趋势 Small Trend"}:
             config[column] = st.column_config.TextColumn(label, width=132)

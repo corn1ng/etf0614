@@ -27,24 +27,27 @@ class AkShareProvider(DataProvider):
 
     def fetch_etf_list(self) -> pd.DataFrame:
         raw = _call_with_retries(self.ak.fund_etf_spot_em, "AkShare ETF列表")
-        frame = raw.copy()
-        rename_map = {
-            "代码": "etf_code",
-            "名称": "name",
-            "最新价": "latest_price",
-            "成交额": "amount",
-            "成交量": "volume",
-            "涨跌幅": "pct_change",
-        }
-        frame = frame.rename(columns={k: v for k, v in rename_map.items() if k in frame.columns})
-        if "etf_code" not in frame.columns:
-            raise ValueError("AkShare fund_etf_spot_em response missing ETF code column")
-        if "name" not in frame.columns:
-            frame["name"] = ""
+        spot = _normalize_etf_spot(raw)
+        frames = [spot]
+        try:
+            fund_names = _call_with_retries(self.ak.fund_name_em, "AkShare 基金名称库", attempts=2)
+        except Exception:
+            fund_names = pd.DataFrame()
+        name_etfs = _normalize_fund_name_etfs(fund_names)
+        if not name_etfs.empty:
+            frames.append(name_etfs)
+
+        frame = pd.concat(frames, ignore_index=True)
         frame["etf_code"] = frame["etf_code"].astype(str).str.zfill(6)
+        frame = frame.sort_values(
+            by=["etf_code", "latest_price", "amount"],
+            ascending=[True, False, False],
+            na_position="last",
+        )
+        frame = frame.drop_duplicates(subset=["etf_code"], keep="first").reset_index(drop=True)
         frame["exchange"] = frame["etf_code"].map(_infer_exchange)
         frame["category"] = frame.apply(lambda r: classify_etf(r["etf_code"], r.get("name", ""), r.get("tracking_index", "")), axis=1)
-        frame["is_active"] = 1
+        frame["is_active"] = frame.get("is_active", 1)
         return frame
 
     def fetch_etf_daily(self, code: str, start_date: date | str, end_date: date | str, adjust: str = "qfq") -> pd.DataFrame:
@@ -101,23 +104,22 @@ class AkShareProvider(DataProvider):
                 )
                 frame = normalize_index_daily(raw, definition.index_code, "akshare_hk_sina")
         else:
-            frame = pd.DataFrame()
+            candidates: list[pd.DataFrame] = []
             try:
                 raw = _call_with_retries(self.ak.stock_zh_index_daily_em, f"AkShare A股指数行情 {code}", symbol=definition.provider_symbol)
-                frame = normalize_index_daily(raw, definition.index_code, "akshare_zh_em")
+                candidates.append(normalize_index_daily(raw, definition.index_code, "akshare_zh_em"))
             except Exception:
-                frame = pd.DataFrame()
-            if frame.empty:
-                try:
-                    raw = _call_with_retries(
-                        self.ak.stock_zh_index_daily,
-                        f"AkShare A股指数新浪行情 {code}",
-                        symbol=_sina_index_symbol(definition.provider_symbol),
-                    )
-                    frame = normalize_index_daily(raw, definition.index_code, "akshare_zh_sina")
-                except Exception:
-                    frame = pd.DataFrame()
-            if frame.empty:
+                pass
+            try:
+                raw = _call_with_retries(
+                    self.ak.stock_zh_index_daily,
+                    f"AkShare A股指数新浪行情 {code}",
+                    symbol=_sina_index_symbol(definition.provider_symbol),
+                )
+                candidates.append(normalize_index_daily(raw, definition.index_code, "akshare_zh_sina"))
+            except Exception:
+                pass
+            try:
                 raw = _call_with_retries(
                     self.ak.stock_zh_index_hist_csindex,
                     f"AkShare 中证官网指数行情 {code}",
@@ -125,7 +127,14 @@ class AkShareProvider(DataProvider):
                     start_date=_fmt_date(start_date),
                     end_date=_fmt_date(end_date),
                 )
-                frame = normalize_index_daily(raw, definition.index_code, "akshare_csindex")
+                candidates.append(normalize_index_daily(raw, definition.index_code, "akshare_csindex"))
+            except Exception:
+                pass
+            frame = _choose_latest_index_frame(candidates)
+        if frame.empty:
+            return pd.DataFrame(columns=["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount", "data_source"])
+        if "trade_date" not in frame.columns:
+            return pd.DataFrame(columns=["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount", "data_source"])
         start = pd.Timestamp(start_date)
         end = pd.Timestamp(end_date)
         return frame[(frame["trade_date"] >= start) & (frame["trade_date"] <= end)].reset_index(drop=True)
@@ -147,6 +156,59 @@ def _infer_exchange(code: str) -> str:
     if code.startswith(("15", "16")):
         return "SZSE"
     return "UNKNOWN"
+
+
+def _normalize_etf_spot(raw: pd.DataFrame) -> pd.DataFrame:
+    frame = raw.copy()
+    rename_map = {
+        "代码": "etf_code",
+        "名称": "name",
+        "最新价": "latest_price",
+        "成交额": "amount",
+        "成交量": "volume",
+        "涨跌幅": "pct_change",
+    }
+    frame = frame.rename(columns={k: v for k, v in rename_map.items() if k in frame.columns})
+    if "etf_code" not in frame.columns:
+        raise ValueError("AkShare fund_etf_spot_em response missing ETF code column")
+    if "name" not in frame.columns:
+        frame["name"] = ""
+    frame["etf_code"] = frame["etf_code"].astype(str).str.zfill(6)
+    frame["is_active"] = 1
+    return frame
+
+
+def _normalize_fund_name_etfs(raw: pd.DataFrame) -> pd.DataFrame:
+    if raw.empty:
+        return pd.DataFrame()
+    frame = raw.rename(
+        columns={
+            "基金代码": "etf_code",
+            "基金简称": "name",
+            "基金类型": "fund_type",
+        }
+    ).copy()
+    if "etf_code" not in frame.columns or "name" not in frame.columns:
+        return pd.DataFrame()
+    frame["etf_code"] = frame["etf_code"].astype(str).str.zfill(6)
+    frame["name"] = frame["name"].fillna("").astype(str)
+    is_exchange_code = frame["etf_code"].str.startswith(("15", "16", "51", "52", "53", "56", "58"))
+    is_etf_name = frame["name"].str.contains("ETF", case=False, na=False)
+    frame = frame[is_exchange_code & is_etf_name].copy()
+    if frame.empty:
+        return pd.DataFrame()
+    frame["latest_price"] = None
+    frame["amount"] = None
+    frame["volume"] = None
+    frame["is_active"] = 1
+    return frame[["etf_code", "name", "latest_price", "amount", "volume", "is_active"]]
+
+
+def _choose_latest_index_frame(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    available = [frame for frame in frames if not frame.empty and "trade_date" in frame.columns]
+    if not available:
+        return pd.DataFrame()
+    return max(available, key=lambda frame: (pd.Timestamp(frame["trade_date"].max()), len(frame)))
 
 
 def _normalize_eastmoney_daily(raw: pd.DataFrame, code: str) -> pd.DataFrame:

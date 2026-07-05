@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from datetime import date, timedelta
 from pathlib import Path
@@ -17,8 +18,14 @@ from etf_trading.data.providers.akshare_provider import AkShareProvider
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.report.daily_report import DailyAdviceReport
 from etf_trading.research.comparison import compare_regime_pairs
-from etf_trading.research.config import load_research_candidates
+from etf_trading.research.config import append_research_candidate, load_research_candidates
 from etf_trading.research.experiment import ResearchRunCancelled
+from etf_trading.research.index_etf_universe import (
+    IndexEtfSampleConfig,
+    build_index_etf_universe,
+    selected_etf_codes,
+)
+from etf_trading.research.models import StrategyCandidate
 from etf_trading.research.regime import TrendRegimeClassifier, add_trend_regime_features
 from etf_trading.research.runner import attach_relative_strength_rank, load_price_frames, run_research
 from etf_trading.research.signals import generate_candidate_signals
@@ -29,7 +36,8 @@ from etf_trading.ui.chart_renderer import build_lightweight_chart_payload
 from etf_trading.ui.components.charts import chart_display_controls, chart_range_controls, filter_date_range_frame
 from etf_trading.ui.components.research_tables import render_research_table, research_bar_chart, research_column_config
 from etf_trading.ui.components.status import render_next_steps, render_status_cards, render_top_status_bar
-from etf_trading.ui.navigation import render_primary_navigation, render_secondary_navigation
+from etf_trading.ui.data_coverage import build_data_coverage_summary, build_data_gap_detail, build_etf_data_overview
+from etf_trading.ui.navigation import render_page_header, render_primary_navigation, render_secondary_navigation
 from etf_trading.ui.pages import data_maintenance, decision, market, portfolio, research
 from etf_trading.ui.state import summarize_platform_status
 from etf_trading.ui.styles import inject_global_styles
@@ -45,8 +53,18 @@ DB_PATH = Path("database/etf_system.sqlite")
 PARQUET_ROOT = Path("data/parquet")
 RESEARCH_CONFIG = Path("configs/research.yaml")
 RESEARCH_REPORT_DIR = Path("reports/research_dashboard")
+UI_PREFERENCES_PATH = Path("data/ui_preferences.json")
 SAMPLE_CATEGORIES = ["A股宽基", "A股行业", "港股宽基", "港股科技", "港股医药", "商品", "债券"]
-WORKFLOW_TABS = ["今日行动", "市场地图", "ETF池", "研究复盘", "数据维护"]
+WORKFLOW_TABS = ["今日行动", "市场地图", "ETF数据", "策略实验室", "数据维护"]
+INDEX_WATCH_COMMON_CODES = ("000300", "000905", "000852", "000510", "399006", "000688")
+INDEX_WATCH_RECENT_KEY = "recent_index_codes"
+INDEX_WATCH_RECENT_LIMIT = 6
+INDEX_WATCH_SELECTED_KEY = "index_watch_selected_code"
+INDEX_WATCH_SELECTBOX_KEY = "index_watch_selectbox"
+INDEX_WATCH_CATEGORY_KEY = "index_watch_category_filter"
+INDEX_WATCH_SEARCH_KEY = "index_watch_search"
+COMPACT_DATAFRAME_HEADER_HEIGHT = 42
+COMPACT_DATAFRAME_ROW_HEIGHT = 36
 
 
 class ResearchJobManager:
@@ -185,7 +203,7 @@ RESEARCH_COLUMN_LABELS = {
     "base_candidate": "基准策略 Base Strategy",
     "category": "分类 Category",
     "index_code": "指数代码 Index Code",
-    "index_name": "指数名称 Index Name",
+    "index_name": "指数名称",
     "market": "市场 Market",
     "large_trend": "大趋势 Large Trend",
     "medium_trend": "中趋势 Medium Trend",
@@ -194,7 +212,7 @@ RESEARCH_COLUMN_LABELS = {
     "latest_date": "最新日期 Latest Date",
     "history_rows": "历史长度 Rows",
     "etf_code": "ETF代码 ETF Code",
-    "etf_name": "ETF名称 ETF Name",
+    "etf_name": "ETF名称",
     "sample_count": "样本数 Samples",
     "mean_total_return": "平均总收益 Mean Total Return",
     "median_total_return": "中位总收益 Median Total Return",
@@ -282,7 +300,7 @@ RESEARCH_COMPACT_HEADER_LABELS = {
     "基准策略 Base Strategy": "基准 Base",
     "分类 Category": "分类 Category",
     "指数代码 Index Code": "代码 Code",
-    "指数名称 Index Name": "指数 Name",
+    "指数名称": "指数名称",
     "市场 Market": "市场 Market",
     "大趋势 Large Trend": "大趋势 Large",
     "中趋势 Medium Trend": "中趋势 Medium",
@@ -291,7 +309,7 @@ RESEARCH_COMPACT_HEADER_LABELS = {
     "最新日期 Latest Date": "日期 Date",
     "历史长度 Rows": "长度 Rows",
     "ETF代码 ETF Code": "代码 Code",
-    "ETF名称 ETF Name": "名称 Name",
+    "ETF名称": "ETF名称",
     "样本数 Samples": "样本 Samples",
     "平均总收益 Mean Total Return": "收益 Return",
     "中位年化收益 Median Annual Return": "年化 Ann.",
@@ -380,6 +398,41 @@ INDEX_SYNC_STATUS_DISPLAY_NAMES = {
     "EMPTY": "无返回数据 Empty",
     "FAILED": "同步失败 Failed",
 }
+INDEX_ETF_UNIVERSE_COLUMNS = [
+    "index_code",
+    "index_name",
+    "etf_code",
+    "etf_name",
+    "mapping_source",
+    "confidence",
+    "amount",
+    "history_rows",
+    "sample_rank",
+    "is_top_sample",
+]
+INDEX_ETF_UNIVERSE_COLUMN_LABELS = {
+    "index_code": "指数代码",
+    "index_name": "追踪指数",
+    "etf_code": "ETF代码",
+    "etf_name": "ETF名称",
+    "mapping_source": "映射来源",
+    "confidence": "置信度",
+    "amount": "成交额",
+    "history_rows": "历史长度",
+    "sample_rank": "样本排名",
+    "is_top_sample": "纳入默认样本",
+}
+MAPPING_SOURCE_DISPLAY_NAMES = {
+    "official": "官方",
+    "data_source": "数据源",
+    "manual": "人工确认",
+    "name_inferred": "名称推断",
+}
+MAPPING_CONFIDENCE_DISPLAY_NAMES = {
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+}
 TREND_DISPLAY_NAMES = {
     "UP": "上升 UP",
     "RECOVERY": "修复 RECOVERY",
@@ -455,11 +508,11 @@ CHART_TYPE_OPTIONS = {
     "K线 Candlestick": "candlestick",
 }
 PRICE_SCALE_OPTIONS = {
-    "线性坐标 Linear": "normal",
-    "涨跌幅视图 Return %": "percent",
-    "比例视图 Log Return %": "log_return",
-    "回撤视图 Drawdown %": "drawdown",
-    "距区间低点 Downside %": "downside",
+    "价格走势 Price": "normal",
+    "累计涨跌幅 Return %": "percent",
+    "回撤风险 Drawdown %": "drawdown",
+    "回到低点需跌幅 Down to Low %": "downside",
+    "对数收益 Log Return %": "log_return",
 }
 CHART_RANGE_PRESETS = {
     "近3月": 90,
@@ -613,6 +666,23 @@ def _index_trend_display_frame(index_summary: pd.DataFrame) -> pd.DataFrame:
     return _research_display_frame(display)
 
 
+def _index_etf_universe_display_frame(universe: pd.DataFrame) -> pd.DataFrame:
+    display = _research_select_columns(universe, INDEX_ETF_UNIVERSE_COLUMNS)
+    if display.empty:
+        return pd.DataFrame(columns=list(INDEX_ETF_UNIVERSE_COLUMN_LABELS.values()))
+    if "mapping_source" in display.columns:
+        display["mapping_source"] = display["mapping_source"].map(
+            lambda value: MAPPING_SOURCE_DISPLAY_NAMES.get(str(value), str(value))
+        )
+    if "confidence" in display.columns:
+        display["confidence"] = display["confidence"].map(
+            lambda value: MAPPING_CONFIDENCE_DISPLAY_NAMES.get(str(value), str(value))
+        )
+    if "is_top_sample" in display.columns:
+        display["is_top_sample"] = display["is_top_sample"].map(lambda value: "是" if bool(value) else "否")
+    return display.rename(columns=INDEX_ETF_UNIVERSE_COLUMN_LABELS)
+
+
 def _index_sync_status_message(summary: pd.DataFrame) -> tuple[str, str]:
     if summary.empty or "status" not in summary.columns:
         return "warning", "指数同步没有返回结果。"
@@ -695,6 +765,170 @@ def _format_index_risk_names(risks: list[str]) -> list[str]:
 def _index_option_label(row: pd.Series) -> str:
     status = "可找买点" if bool(row.get("allows_new_position", False)) else "暂不参与"
     return f"{row['index_code']} {row['index_name']}｜{row['category']}｜{status}"
+
+
+def _index_definition_label(definition: IndexDefinition) -> str:
+    return f"{definition.index_code} {definition.name}"
+
+
+def _index_definition_for_code(index_code: str) -> IndexDefinition | None:
+    try:
+        return get_index_definition(str(index_code))
+    except KeyError:
+        return None
+
+
+def _index_definitions_for_codes(index_codes: list[str] | tuple[str, ...]) -> list[IndexDefinition]:
+    definitions: list[IndexDefinition] = []
+    seen: set[str] = set()
+    for index_code in index_codes:
+        definition = _index_definition_for_code(index_code)
+        if definition is None or definition.index_code in seen:
+            continue
+        definitions.append(definition)
+        seen.add(definition.index_code)
+    return definitions
+
+
+def _load_ui_preferences(path: Path = UI_PREFERENCES_PATH) -> dict[str, object]:
+    preferences_path = Path(path)
+    if not preferences_path.exists():
+        return {}
+    try:
+        data = json.loads(preferences_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_ui_preferences(preferences: dict[str, object], path: Path = UI_PREFERENCES_PATH) -> None:
+    preferences_path = Path(path)
+    preferences_path.parent.mkdir(parents=True, exist_ok=True)
+    preferences_path.write_text(json.dumps(preferences, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_recent_index_codes(path: Path = UI_PREFERENCES_PATH) -> list[str]:
+    recent = _load_ui_preferences(path).get(INDEX_WATCH_RECENT_KEY, [])
+    if not isinstance(recent, list):
+        return []
+
+    valid_codes: list[str] = []
+    seen: set[str] = set()
+    for raw_code in recent:
+        if not isinstance(raw_code, str) or raw_code in seen:
+            continue
+        definition = _index_definition_for_code(raw_code)
+        if definition is None:
+            continue
+        valid_codes.append(definition.index_code)
+        seen.add(definition.index_code)
+        if len(valid_codes) >= INDEX_WATCH_RECENT_LIMIT:
+            break
+    return valid_codes
+
+
+def _remember_recent_index_code(index_code: str, path: Path = UI_PREFERENCES_PATH) -> list[str]:
+    definition = _index_definition_for_code(index_code)
+    if definition is None:
+        return _load_recent_index_codes(path)
+
+    recent = [definition.index_code]
+    recent.extend(code for code in _load_recent_index_codes(path) if code != definition.index_code)
+    recent = recent[:INDEX_WATCH_RECENT_LIMIT]
+
+    preferences = _load_ui_preferences(path)
+    preferences[INDEX_WATCH_RECENT_KEY] = recent
+    _write_ui_preferences(preferences, path)
+    return recent
+
+
+def _filter_index_definitions(
+    *,
+    category_filter: str,
+    query: str,
+    definitions: tuple[IndexDefinition, ...] = DEFAULT_INDEXES,
+) -> list[IndexDefinition]:
+    normalized_query = query.strip().lower()
+    filtered: list[IndexDefinition] = []
+    for definition in definitions:
+        if category_filter != "全部分类" and definition.category != category_filter:
+            continue
+        haystack = " ".join(
+            [
+                definition.index_code,
+                definition.name,
+                definition.market,
+                definition.category,
+            ]
+        ).lower()
+        if normalized_query and normalized_query not in haystack:
+            continue
+        filtered.append(definition)
+    return filtered
+
+
+def _render_index_quick_buttons(title: str, definitions: list[IndexDefinition], key_prefix: str) -> str | None:
+    if not definitions:
+        return None
+
+    st.markdown(f"###### {title}")
+    columns = st.columns(min(len(definitions), 6))
+    for idx, definition in enumerate(definitions):
+        column = columns[idx % len(columns)]
+        if column.button(definition.name, key=f"{key_prefix}_{definition.index_code}", use_container_width=True):
+            return definition.index_code
+    return None
+
+
+def _select_index_for_watch() -> str:
+    default_code = DEFAULT_INDEXES[0].index_code
+    current_code = default_code
+    selectbox_label = st.session_state.get(INDEX_WATCH_SELECTBOX_KEY)
+    stored_code = st.session_state.get(INDEX_WATCH_SELECTED_KEY)
+    if isinstance(selectbox_label, str) and _index_definition_for_code(selectbox_label.split()[0]) is not None:
+        current_code = selectbox_label.split()[0]
+    elif isinstance(stored_code, str):
+        current_code = stored_code
+    if _index_definition_for_code(current_code) is None:
+        current_code = default_code
+
+    clicked_code = _render_index_quick_buttons(
+        "常用指数",
+        _index_definitions_for_codes(INDEX_WATCH_COMMON_CODES),
+        "index_watch_common",
+    )
+    recent_definitions = _index_definitions_for_codes(_load_recent_index_codes())
+    recent_clicked_code = _render_index_quick_buttons("最近选择", recent_definitions, "index_watch_recent")
+    if clicked_code or recent_clicked_code:
+        current_code = clicked_code or recent_clicked_code or current_code
+        st.session_state[INDEX_WATCH_SELECTED_KEY] = current_code
+        st.session_state[INDEX_WATCH_CATEGORY_KEY] = "全部分类"
+        st.session_state[INDEX_WATCH_SEARCH_KEY] = ""
+
+    picker_cols = st.columns([1.1, 1.4, 2.4])
+    category_options = ["全部分类"] + sorted({definition.category for definition in DEFAULT_INDEXES})
+    category_filter = picker_cols[0].selectbox("分类", category_options, key=INDEX_WATCH_CATEGORY_KEY)
+    query = picker_cols[1].text_input("搜索指数", key=INDEX_WATCH_SEARCH_KEY, placeholder="代码 / 名称 / 分类")
+    picker_definitions = _filter_index_definitions(category_filter=category_filter, query=query)
+    if not picker_definitions:
+        st.warning("没有匹配的指数，已显示全部指数。")
+        picker_definitions = list(DEFAULT_INDEXES)
+
+    labels = [_index_definition_label(definition) for definition in picker_definitions]
+    selected_index = next(
+        (idx for idx, definition in enumerate(picker_definitions) if definition.index_code == current_code),
+        0,
+    )
+    if (clicked_code or recent_clicked_code) and current_code in {definition.index_code for definition in picker_definitions}:
+        st.session_state[INDEX_WATCH_SELECTBOX_KEY] = _index_definition_label(
+            picker_definitions[selected_index]
+        )
+
+    selected_label = picker_cols[2].selectbox("指数", labels, index=selected_index, key=INDEX_WATCH_SELECTBOX_KEY)
+    selected_code = selected_label.split()[0]
+    st.session_state[INDEX_WATCH_SELECTED_KEY] = selected_code
+    _remember_recent_index_code(selected_code)
+    return selected_code
 
 
 def _index_status_code_items(regime: object, last: pd.Series) -> list[dict[str, str]]:
@@ -1518,18 +1752,14 @@ def _render_index_signal_diagnostics(prices: pd.DataFrame, markers: list[dict[st
 
 
 def _render_index_filter_explorer(index_summary: pd.DataFrame, parquet_store: ParquetStore) -> None:
-    st.markdown("### 指数级买卖参考")
-    st.info(
-        "当前规则：三层趋势过滤 + 长期趋势退出。入场先看大趋势是否向上或修复，再看中趋势是否转强，最后看小趋势是否出现右侧开始或回踩。"
-        "持仓后不因短线过热或中期震荡直接卖出，只有长期趋势连续失效才退出。图上的 BUY/SELL 是指数过滤层参考，不是具体 ETF 下单。"
-    )
+    with st.expander("指数过滤规则", expanded=False):
+        st.caption("三层趋势过滤 + 长期趋势退出。BUY/SELL 是指数过滤层参考，不是具体 ETF 下单。")
 
     available = index_summary.copy()
     if available.empty:
         st.info("暂无指数趋势数据。")
         return
 
-    st.markdown("#### 选择指数")
     picker_cols = st.columns([1.1, 1.1, 2.4])
     status_filter = picker_cols[0].radio(
         "指数状态",
@@ -1707,13 +1937,14 @@ def _chart_display_controls(
     *,
     default_chart_label: str = "K线 Candlestick",
     default_ma_labels: list[str] | None = None,
-    default_price_scale_label: str = "线性坐标 Linear",
+    default_price_scale_label: str = "价格走势 Price",
 ) -> tuple[str, str, list[str]]:
     price_scale_help = {
-        "涨跌幅视图 Return %": "纵轴为相对区间起点的累计涨跌幅。",
-        "比例视图 Log Return %": "纵轴为对数涨跌幅，等距离更接近等比例变化。",
-        "回撤视图 Drawdown %": "纵轴为相对此前最高点的回撤。",
-        "距区间低点 Downside %": "纵轴为从当前点位跌到区间最低点还需下跌的比例。",
+        "价格走势 Price": "原始价格走势，适合观察K线、均线和买卖点。",
+        "累计涨跌幅 Return %": "纵轴为相对当前图表区间起点的累计涨跌幅。",
+        "回撤风险 Drawdown %": "纵轴为相对此前最高点的回撤，适合观察风险暴露和修复状态。",
+        "回到低点需跌幅 Down to Low %": "纵轴为从当前价格回到图表区间最低点仍需下跌的比例。",
+        "对数收益 Log Return %": "纵轴为对数收益，适合长周期、等比例比较。",
     }
     return chart_display_controls(
         key_prefix,
@@ -1845,8 +2076,7 @@ def main() -> None:
     status = _platform_status(store, parquet_store)
 
     render_top_status_bar(summarize_platform_status(status))
-    st.title(page.label)
-    st.caption(page.caption)
+    render_page_header(page)
     section = render_secondary_navigation(page)
 
     if page.slug == "decision":
@@ -1877,6 +2107,8 @@ def main() -> None:
             store=store,
             parquet_store=parquet_store,
             view=section,
+            render_data_overview=_render_etf_data_overview,
+            render_index_etf_pool=_render_portfolio_index_etf_pool,
             render_search_and_add=_render_etf_search_and_add,
             watchlist_status_frame=_watchlist_status_frame,
         )
@@ -1889,9 +2121,9 @@ def main() -> None:
             service=service,
             view=section,
             status=status,
-            render_data_health=_render_data_health,
-            render_index_quick_sync=_render_index_quick_sync,
-            render_data_center=_tab_data_center,
+            render_data_overview=_render_data_coverage_overview,
+            render_gap_detail=_render_data_gap_detail,
+            render_repair_tasks=_render_data_repair_tasks,
             render_settings=_tab_settings,
         )
 
@@ -1988,21 +2220,21 @@ def _platform_issues(
         issues.append(
             {
                 "title": "初始化 ETF 主列表",
-                "detail": "数据维护 -> 数据中心 -> 主列表，先拉取全量 A 股 ETF 列表。",
+                "detail": "数据维护 -> 补齐任务 -> 主列表，先拉取全量 A 股 ETF 列表。",
             }
         )
     if index_history_count == 0:
         issues.append(
             {
                 "title": "补齐指数历史",
-                "detail": "数据维护顶部或数据中心 -> 指数历史，执行一键初始化/补齐全部指数。",
+                "detail": "数据维护 -> 补齐任务 -> 指数历史，执行一键初始化/补齐全部指数。",
             }
         )
     if watchlist.empty:
         issues.append(
             {
                 "title": "建立每日计算池",
-                "detail": "ETF池 -> 搜索并加入常看的 ETF，然后今日行动才会生成建议。",
+                "detail": "ETF数据 -> 搜索加入，保存常看的 ETF，然后今日行动才会生成建议。",
             }
         )
     if missing_etf_history:
@@ -2011,7 +2243,7 @@ def _platform_issues(
         issues.append(
             {
                 "title": "补齐 ETF 历史行情",
-                "detail": f"{preview}{suffix} 缺少本地行情；到数据维护 -> ETF历史补齐。",
+                "detail": f"{preview}{suffix} 缺少本地行情；到数据维护 -> 补齐任务 -> ETF历史补齐。",
             }
         )
     return issues
@@ -2058,10 +2290,162 @@ def _render_data_health(status: dict[str, object]) -> None:
     render_next_steps(status)
 
 
+def _build_ui_index_etf_universe(
+    master: pd.DataFrame,
+    parquet_store: ParquetStore,
+    *,
+    min_rows: int = 252,
+) -> pd.DataFrame:
+    return build_index_etf_universe(
+        master,
+        parquet_store,
+        config=IndexEtfSampleConfig(max_per_index=10, min_history_rows=min_rows),
+    )
+
+
+def _render_etf_data_overview(store: SQLiteStore, parquet_store: ParquetStore) -> None:
+    master = store.list_etf_master()
+    if master.empty:
+        st.info("尚未初始化 ETF 主列表。请到“数据维护 -> 补齐任务”初始化。")
+        return
+
+    watchlist = store.list_watchlist()
+    universe = _build_ui_index_etf_universe(master, parquet_store)
+    overview = build_etf_data_overview(master, watchlist, parquet_store, universe)
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("ETF总数", f"{len(overview)}")
+    metric_cols[1].metric("每日计算池", f"{int((overview['每日计算池'] == '是').sum())}")
+    metric_cols[2].metric("指数样本池", f"{int((overview['指数样本池'] == '是').sum())}")
+    metric_cols[3].metric("缺历史", f"{int((overview['本地历史'] == '缺失').sum())}")
+
+    filter_cols = st.columns([2, 1, 1, 1])
+    query = filter_cols[0].text_input("搜索ETF", key="etf_data_overview_query")
+    history_status = filter_cols[1].selectbox("历史状态", ["全部"] + sorted(overview["本地历史"].dropna().unique().tolist()), key="etf_data_history_status")
+    watchlist_status = filter_cols[2].selectbox("每日计算池", ["全部", "是", "否"], key="etf_data_watchlist_status")
+    sample_status = filter_cols[3].selectbox("指数样本池", ["全部", "是", "否"], key="etf_data_sample_status")
+
+    view = overview.copy()
+    if query:
+        text = query.strip()
+        view = view[
+            view["ETF代码"].astype(str).str.contains(text, case=False, regex=False)
+            | view["ETF名称"].astype(str).str.contains(text, case=False, regex=False)
+            | view["追踪指数"].astype(str).str.contains(text, case=False, regex=False)
+        ]
+    if history_status != "全部":
+        view = view[view["本地历史"] == history_status]
+    if watchlist_status != "全部":
+        view = view[view["每日计算池"] == watchlist_status]
+    if sample_status != "全部":
+        view = view[view["指数样本池"] == sample_status]
+
+    st.dataframe(view, width="stretch", hide_index=True, height=560)
+
+
+def _render_portfolio_index_etf_pool(store: SQLiteStore, parquet_store: ParquetStore) -> None:
+    universe = _build_ui_index_etf_universe(store.list_etf_master(), parquet_store)
+    _render_index_etf_pool(universe)
+
+
+def _data_maintenance_context(
+    store: SQLiteStore,
+    parquet_store: ParquetStore,
+    status: dict[str, object],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    master = status.get("master")
+    if not isinstance(master, pd.DataFrame):
+        master = store.list_etf_master()
+    watchlist = status.get("watchlist")
+    if not isinstance(watchlist, pd.DataFrame):
+        watchlist = store.list_watchlist()
+    index_summary = status.get("index_summary")
+    if not isinstance(index_summary, pd.DataFrame):
+        index_summary = _build_index_trend_summary(parquet_store)
+    universe = _build_ui_index_etf_universe(master, parquet_store)
+    gaps = build_data_gap_detail(master, watchlist, index_summary, universe, parquet_store)
+    return gaps, universe, index_summary
+
+
+def _compact_dataframe_height(frame: pd.DataFrame, *, max_height: int) -> int:
+    visible_rows = max(1, len(frame))
+    content_height = COMPACT_DATAFRAME_HEADER_HEIGHT + COMPACT_DATAFRAME_ROW_HEIGHT * visible_rows
+    return min(max_height, content_height)
+
+
+def _render_data_coverage_overview(
+    store: SQLiteStore,
+    parquet_store: ParquetStore,
+    status: dict[str, object],
+) -> None:
+    master = status["master"]
+    watchlist = status["watchlist"]
+    gaps, universe, index_summary = _data_maintenance_context(store, parquet_store, status)
+    summary = build_data_coverage_summary(gaps, master, watchlist, index_summary, universe)
+
+    issue_count = int(summary[["缺失", "缺少", "历史不足", "读取失败"]].sum().sum()) if not summary.empty else 0
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("ETF主列表", "已初始化" if not master.empty else "缺失")
+    metric_cols[1].metric("ETF历史缺口", f"{len(gaps[gaps['数据类型'] == 'ETF历史']) if not gaps.empty else 0}")
+    metric_cols[2].metric("指数历史缺口", f"{len(gaps[gaps['数据类型'] == '指数历史']) if not gaps.empty else 0}")
+    metric_cols[3].metric("总缺口", f"{issue_count}")
+
+    st.dataframe(
+        summary,
+        width="stretch",
+        hide_index=True,
+        height=_compact_dataframe_height(summary, max_height=320),
+        row_height=COMPACT_DATAFRAME_ROW_HEIGHT,
+    )
+    if not gaps.empty:
+        st.markdown("### 主要缺口")
+        gap_preview = gaps.head(12)
+        st.dataframe(
+            gap_preview,
+            width="stretch",
+            hide_index=True,
+            height=_compact_dataframe_height(gap_preview, max_height=360),
+            row_height=COMPACT_DATAFRAME_ROW_HEIGHT,
+        )
+
+
+def _render_data_gap_detail(
+    store: SQLiteStore,
+    parquet_store: ParquetStore,
+    status: dict[str, object],
+) -> None:
+    gaps, _, _ = _data_maintenance_context(store, parquet_store, status)
+    if gaps.empty:
+        st.success("当前没有明显数据缺口。")
+        return
+
+    filter_cols = st.columns([1, 1, 2])
+    data_type = filter_cols[0].selectbox("数据类型", ["全部"] + sorted(gaps["数据类型"].dropna().unique().tolist()), key="data_gap_type")
+    state = filter_cols[1].selectbox("状态", ["全部"] + sorted(gaps["状态"].dropna().unique().tolist()), key="data_gap_state")
+    query = filter_cols[2].text_input("搜索代码或名称", key="data_gap_query")
+
+    view = gaps.copy()
+    if data_type != "全部":
+        view = view[view["数据类型"] == data_type]
+    if state != "全部":
+        view = view[view["状态"] == state]
+    if query:
+        text = query.strip()
+        view = view[
+            view["代码"].astype(str).str.contains(text, case=False, regex=False)
+            | view["名称"].astype(str).str.contains(text, case=False, regex=False)
+        ]
+    st.dataframe(view, width="stretch", hide_index=True, height=560)
+
+
+def _render_data_repair_tasks(store: SQLiteStore, parquet_store: ParquetStore) -> None:
+    _tab_data_center(store, parquet_store)
+
+
 def _render_etf_search_and_add(store: SQLiteStore) -> None:
     master = store.list_etf_master()
     if master.empty:
-        st.info("尚未初始化 ETF 主列表。请到“数据维护”执行轻量初始化。")
+        st.info("尚未初始化 ETF 主列表。请到“数据维护 -> 补齐任务”执行轻量初始化。")
         return
 
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -2148,7 +2532,7 @@ def _tab_universe(store: SQLiteStore) -> None:
     st.subheader("ETF 池")
     master = store.list_etf_master()
     if master.empty:
-        st.info("尚未初始化 ETF 主列表。请到“数据中心”执行轻量初始化。")
+        st.info("尚未初始化 ETF 主列表。请到“数据维护 -> 补齐任务”执行轻量初始化。")
         return
 
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -2188,7 +2572,7 @@ def _tab_chart(store: SQLiteStore, parquet_store: ParquetStore) -> None:
         return
     prices = parquet_store.read_prices(etf_code)
     if prices.empty:
-        st.warning("本地尚无该 ETF 历史行情，请先到“数据中心”初始化历史。")
+        st.warning("本地尚无该 ETF 历史行情，请先到“数据维护 -> 补齐任务”初始化历史。")
         return
     prices = add_technical_features(prices)
     recent = _chart_range_controls(prices, "chart_tab", default_label="近2年")
@@ -2212,14 +2596,13 @@ def _tab_chart(store: SQLiteStore, parquet_store: ParquetStore) -> None:
 def _tab_index_watch(parquet_store: ParquetStore) -> None:
     st.subheader("指数观察")
     st.caption("指数用于判断底层市场趋势；ETF 是后续交易载体。这里不输出具体买卖建议。")
-    selected = st.selectbox("选择指数", index_options(), key="index_watch")
-    index_code = selected.split()[0]
+    index_code = _select_index_for_watch()
     definition = get_index_definition(index_code)
     st.info(f"指数：{definition.name} ｜ 市场：{definition.market} ｜ 分类：{definition.category}")
 
     prices = parquet_store.read_index_prices(index_code)
     if prices.empty:
-        st.warning("本地尚无该指数历史数据。请在“数据中心”拉取指数历史。")
+        st.warning("本地尚无该指数历史数据。请在“数据维护 -> 补齐任务”拉取指数历史。")
         return
 
     featured = add_technical_features(prices.rename(columns={"index_code": "etf_code"}))
@@ -2410,6 +2793,8 @@ def _render_research_run_controls(
 
 
 def _tab_research(store: SQLiteStore, parquet_store: ParquetStore, research_view: str | None = None) -> None:
+    return _tab_strategy_lab(store, parquet_store, research_view)
+
     st.subheader("\u7814\u7a76\u590d\u76d8")
     st.caption("\u8bfb\u53d6\u5df2\u6709\u7814\u7a76\u7ed3\u679c\uff0c\u590d\u76d8\u7b56\u7565\u8868\u73b0\uff1b\u9700\u8981\u91cd\u65b0\u8ba1\u7b97\u65f6\u518d\u5c55\u5f00\u8fd0\u884c\u7814\u7a76\u3002")
     _inject_research_styles()
@@ -2477,6 +2862,275 @@ def _tab_research(store: SQLiteStore, parquet_store: ParquetStore, research_view
                 _render_index_filter_explorer(index_summary, parquet_store)
             else:
                 _tab_backtest(store, parquet_store)
+
+
+def _tab_strategy_lab(store: SQLiteStore, parquet_store: ParquetStore, research_view: str | None = None) -> None:
+    st.subheader("策略实验室")
+    st.caption("创建策略、按指数样本池回测、比较策略表现，并复盘 ETF 的 B/S 点。")
+    _inject_research_styles()
+    job_manager = _research_job_manager()
+    output_dir = RESEARCH_REPORT_DIR
+    master = store.list_etf_master()
+    min_rows = 252
+    index_summary = _build_index_trend_summary(parquet_store)
+    universe = build_index_etf_universe(
+        master,
+        parquet_store,
+        config=IndexEtfSampleConfig(max_per_index=10, min_history_rows=min_rows),
+    )
+    candidates = load_research_candidates(RESEARCH_CONFIG)
+
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("策略数", f"{len(candidates)}")
+    summary_cols[1].metric("已采用", f"{sum(1 for candidate in candidates if candidate.status == 'adopted')}")
+    summary_cols[2].metric("覆盖指数", f"{universe['index_code'].nunique() if not universe.empty else 0}")
+    summary_cols[3].metric("默认ETF样本", f"{int(universe['is_top_sample'].sum()) if not universe.empty else 0}")
+
+    _render_research_job_status(job_manager)
+    view = research_view or "策略库"
+    if view == "策略库":
+        _render_strategy_library(candidates)
+    elif view == "新建策略":
+        _render_strategy_form()
+    elif view == "运行回测":
+        _render_strategy_lab_run_controls(
+            store=store,
+            index_summary=index_summary,
+            universe=universe,
+            min_rows=min_rows,
+            job_manager=job_manager,
+            output_dir=output_dir,
+        )
+    elif view == "指数过滤实验":
+        _render_index_filter_explorer(index_summary, parquet_store)
+    else:
+        _render_strategy_lab_results(view, store, parquet_store, min_rows, output_dir)
+
+
+def _render_strategy_library(candidates: list[StrategyCandidate]) -> None:
+    st.markdown("### 策略库")
+    if not candidates:
+        st.info("当前没有策略。")
+        return
+    rows = []
+    for candidate in candidates:
+        rows.append(
+            {
+                "策略名称": _candidate_display_name(candidate.name),
+                "状态": _strategy_status_name(candidate.status),
+                "入场均线": candidate.entry_ma.upper(),
+                "趋势均线": candidate.trend_ma.upper(),
+                "退出均线": candidate.exit_ma.upper(),
+                "动量窗口": ",".join(str(item) for item in candidate.momentum_windows) or "不启用",
+                "相对强度": "不启用" if candidate.rs_rank_max is None else f"前{int(candidate.rs_rank_max * 100)}%",
+                "指数过滤": "启用" if candidate.require_trend_regime else "不启用",
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, height=420)
+
+
+def _strategy_status_name(status: str) -> str:
+    return {
+        "experimental": "实验中",
+        "adopted": "已采用",
+        "disabled": "停用",
+    }.get(status, status)
+
+
+def _render_strategy_form() -> None:
+    st.markdown("### 新建参数化策略")
+    with st.form("new_strategy_candidate_form"):
+        name = st.text_input("策略名称", value="")
+        cols = st.columns(3)
+        entry_ma = cols[0].selectbox("入场均线", ["ma20", "ma51", "ma60", "ma120"], index=1)
+        trend_ma = cols[1].selectbox("趋势均线", ["ma60", "ma120", "ma250"], index=1)
+        exit_ma = cols[2].selectbox("退出均线", ["ma51", "ma60", "ma120"], index=2)
+        momentum_windows = st.multiselect("动量窗口", [20, 60, 120], default=[20, 60])
+        skip_momentum_windows = st.multiselect("跳过近5日动量窗口", [60, 120], default=[])
+        relation_enabled = st.checkbox("要求 MA20 > MA60", value=False)
+        slope_field = st.selectbox("斜率要求", ["不启用", "ma60_slope_20", "ma120_slope_20", "ma250_slope_60"])
+
+        filter_cols = st.columns(4)
+        rs_rank_label = filter_cols[0].selectbox("相对强度排名", ["不启用", "前20%", "前30%", "前40%"], index=2)
+        max_recent_return_20 = filter_cols[1].number_input("20日涨幅上限", min_value=0.0, max_value=1.0, value=0.25, step=0.01)
+        max_distance = filter_cols[2].number_input("距入场均线最大乖离", min_value=0.0, max_value=1.0, value=0.12, step=0.01)
+        min_interval = int(filter_cols[3].number_input("最小交易间隔", min_value=1, max_value=120, value=10, step=1))
+
+        atr_cols = st.columns(3)
+        max_atr_distance = atr_cols[0].selectbox("ATR过热过滤", ["不启用", "1.5ATR", "2ATR", "3ATR"], index=0)
+        trailing_atr = atr_cols[1].selectbox("ATR移动止损", ["不启用", "1.5ATR", "2ATR", "3ATR"], index=0)
+        target_weight = atr_cols[2].number_input("目标仓位", min_value=0.01, max_value=1.0, value=1.0, step=0.01)
+        require_trend_regime = st.checkbox("启用指数过滤实验因子", value=False)
+        submitted = st.form_submit_button("保存策略")
+
+    if not submitted:
+        return
+    strategy_name = name.strip()
+    if not strategy_name:
+        st.error("策略名称不能为空。")
+        return
+    candidate = StrategyCandidate(
+        name=strategy_name,
+        entry_ma=entry_ma,
+        trend_ma=trend_ma,
+        exit_ma=exit_ma,
+        momentum_windows=tuple(int(item) for item in momentum_windows),
+        skip_momentum_windows=tuple(int(item) for item in skip_momentum_windows),
+        required_ma_relations=(("ma20", "ma60"),) if relation_enabled else (),
+        slope_field=None if slope_field == "不启用" else slope_field,
+        rs_rank_max=_parse_rank_limit(rs_rank_label),
+        max_distance_from_entry_ma=float(max_distance),
+        max_recent_return_20=float(max_recent_return_20),
+        max_atr_distance_from_ma=_parse_atr_value(max_atr_distance),
+        trailing_atr_multiple=_parse_atr_value(trailing_atr),
+        min_trade_interval_days=min_interval,
+        target_weight=float(target_weight),
+        require_trend_regime=require_trend_regime,
+        status="experimental",
+    )
+    try:
+        append_research_candidate(RESEARCH_CONFIG, candidate)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+    st.success("策略已保存为实验中。")
+
+
+def _parse_rank_limit(label: str) -> float | None:
+    if label == "不启用":
+        return None
+    return int(label.removeprefix("前").removesuffix("%")) / 100
+
+
+def _parse_atr_value(label: str) -> float | None:
+    if label == "不启用":
+        return None
+    return float(label.removesuffix("ATR"))
+
+
+def _render_strategy_lab_run_controls(
+    *,
+    store: SQLiteStore,
+    index_summary: pd.DataFrame,
+    universe: pd.DataFrame,
+    min_rows: int,
+    job_manager: ResearchJobManager,
+    output_dir: Path,
+) -> None:
+    st.markdown("### 运行回测")
+    candidates = load_research_candidates(RESEARCH_CONFIG)
+    if not candidates:
+        st.warning("当前没有可回测策略。")
+        return
+    if universe.empty:
+        st.warning("当前没有可用指数样本池。请先初始化ETF主数据和历史行情。")
+        return
+
+    candidate_names = [candidate.name for candidate in candidates]
+    selected_candidate_names = st.multiselect(
+        "选择策略",
+        candidate_names,
+        default=candidate_names[: min(3, len(candidate_names))],
+        format_func=_candidate_display_name,
+        key="research_run_candidates",
+    )
+    selected_candidates = [candidate for candidate in candidates if candidate.name in selected_candidate_names]
+
+    label_to_index = _index_pool_label_map(universe)
+    selected_index_labels = st.multiselect(
+        "选择指数样本池",
+        list(label_to_index),
+        default=list(label_to_index)[:1],
+        key="research_run_indexes",
+    )
+    selected_index_codes = [label_to_index[label] for label in selected_index_labels]
+    research_codes = selected_etf_codes(universe, selected_index_codes)
+    task_count = len(research_codes) * len(selected_candidates)
+    st.info(
+        f"本次将测试：{len(selected_index_codes)} 个指数 / {len(research_codes)} 只 ETF / "
+        f"{len(selected_candidates)} 个策略 = {task_count} 个回测任务。"
+    )
+
+    confirm_nonce = int(st.session_state.setdefault("research_run_confirm_nonce", 0))
+    confirm_run = st.checkbox("确认运行本次策略回测", value=False, key=f"confirm_research_run_{confirm_nonce}")
+    if st.button("开始回测", width="stretch", disabled=job_manager.is_running() or not confirm_run):
+        if not selected_candidates:
+            st.error("请至少选择一个策略。")
+            return
+        if not research_codes:
+            st.error("所选指数样本池没有可回测ETF。")
+            return
+        started = job_manager.start(
+            parquet_root=PARQUET_ROOT,
+            candidates=selected_candidates,
+            categories=_category_map(store),
+            min_rows=min_rows,
+            limit=None,
+            etf_codes=research_codes,
+            output_dir=output_dir,
+            index_summary=index_summary,
+            scope_text="指数样本池",
+        )
+        if started:
+            st.success("策略回测已在后台启动。运行中可以停止；完成后刷新本页查看新结果。")
+            st.session_state["research_run_confirm_nonce"] = confirm_nonce + 1
+            st.rerun()
+        else:
+            st.warning("已有策略回测正在运行。")
+
+
+def _index_pool_label_map(universe: pd.DataFrame) -> dict[str, str]:
+    if universe.empty:
+        return {}
+    top = universe[universe["is_top_sample"].fillna(False).astype(bool)].copy()
+    if top.empty:
+        return {}
+    counts = top.groupby(["index_code", "index_name"], as_index=False).agg(etf_count=("etf_code", "nunique"))
+    labels: dict[str, str] = {}
+    for row in counts.sort_values(["index_code"]).itertuples(index=False):
+        labels[f"{row.index_code} {row.index_name}（{int(row.etf_count)}只ETF）"] = str(row.index_code)
+    return labels
+
+
+def _render_index_etf_pool(universe: pd.DataFrame) -> None:
+    st.markdown("### 指数样本池")
+    if universe.empty:
+        st.info("当前没有可用指数样本池。请先初始化 ETF 主数据和历史行情。")
+        return
+    market_options = ["全部市场"] + sorted(universe["market"].dropna().astype(str).unique().tolist())
+    market_filter = st.selectbox("市场", market_options, key="index_etf_pool_market")
+    top_only = st.checkbox("只看默认Top样本", value=True, key="index_etf_pool_top_only")
+    view = universe.copy()
+    if market_filter != "全部市场":
+        view = view[view["market"].astype(str) == market_filter]
+    if top_only:
+        view = view[view["is_top_sample"].fillna(False).astype(bool)]
+    _render_research_table(_index_etf_universe_display_frame(view), height=520)
+
+
+def _render_strategy_lab_results(
+    view: str,
+    store: SQLiteStore,
+    parquet_store: ParquetStore,
+    min_rows: int,
+    output_dir: Path,
+) -> None:
+    results_path = output_dir / "research_results.csv"
+    ranking_path = output_dir / "candidate_ranking.csv"
+    if not results_path.exists() or not ranking_path.exists():
+        st.info("暂无策略回测结果。请先在“运行回测”生成本地结果。")
+        return
+    results = pd.read_csv(results_path)
+    ranking = pd.read_csv(ranking_path)
+    if results.empty or ranking.empty:
+        st.warning("策略回测结果为空。")
+    elif view == "策略比较":
+        _render_research_overview(results, ranking)
+        _render_research_comparison_and_category(results)
+    elif view == "ETF复盘":
+        _render_research_replay(results, store, parquet_store, min_rows)
+    else:
+        _render_research_detail_table(results, store)
 
 
 def _render_research_job_status(job_manager: ResearchJobManager) -> None:
@@ -2721,9 +3375,9 @@ def _render_research_replay(
 
 
 def _tab_data_center(store: SQLiteStore, parquet_store: ParquetStore) -> None:
-    st.subheader("数据中心")
-    st.caption("初始化采用“主列表 -> ETF 历史 -> 指数历史 -> 批量任务”的顺序。")
-    data_view = st.radio("数据任务", ["主列表", "ETF历史", "指数历史", "批量任务"], horizontal=True, key="data_center_view")
+    st.subheader("补齐任务")
+    st.caption("初始化采用“主列表 -> ETF历史 -> 指数历史 -> 批量任务”的顺序。")
+    data_view = st.radio("任务类型", ["主列表", "ETF历史", "指数历史", "批量任务"], horizontal=True, key="data_center_view")
 
     if data_view == "主列表":
         if st.button("轻量初始化：拉取全量 A 股 ETF 列表"):

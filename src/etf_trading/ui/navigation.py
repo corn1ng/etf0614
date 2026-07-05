@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass
 
 import streamlit as st
@@ -25,26 +26,26 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec(
         slug="market",
         label="市场地图",
-        caption="观察指数、ETF行情和趋势结构。",
-        sections=("指数买卖参考", "ETF行情", "指数K线"),
+        caption="观察 ETF 行情和指数趋势，不输出未验证交易建议。",
+        sections=("ETF行情", "指数K线"),
     ),
     PageSpec(
         slug="portfolio",
-        label="ETF池",
-        caption="搜索 ETF、加入每日计算池并检查历史行情。",
-        sections=("搜索加入", "每日计算池"),
+        label="ETF数据",
+        caption="统一查看 ETF 主列表、计算池和指数样本池。",
+        sections=("数据总览", "搜索加入", "每日计算池", "指数样本池"),
     ),
     PageSpec(
         slug="research",
-        label="研究复盘",
-        caption="查看策略研究、对比结果和单 ETF 复盘。",
-        sections=("研究总览", "策略对比", "ETF复盘", "明细表", "运行研究"),
+        label="策略实验室",
+        caption="创建策略、运行回测、比较表现并复盘 ETF 的 B/S 点。",
+        sections=("策略库", "新建策略", "运行回测", "策略比较", "ETF复盘", "指数过滤实验"),
     ),
     PageSpec(
         slug="data",
         label="数据维护",
-        caption="检查数据健康、补齐历史和查看日志。",
-        sections=("数据健康", "数据中心", "日志与设置"),
+        caption="统一检查全局数据缺口、补齐历史和查看日志。",
+        sections=("数据总览", "缺口明细", "补齐任务", "日志与设置"),
     ),
 )
 
@@ -76,6 +77,20 @@ def resolve_section(page: PageSpec, selected: str | None) -> str:
     if selected in page.sections:
         return str(selected)
     return default_section(page)
+
+
+def render_page_header(page: PageSpec) -> None:
+    title = html.escape(page.label)
+    caption = html.escape(page.caption)
+    st.markdown(
+        (
+            '<div class="workbench-page-header">'
+            f'<div class="workbench-page-header__title">{title}</div>'
+            f'<div class="workbench-page-header__caption">{caption}</div>'
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def render_primary_navigation() -> PageSpec:

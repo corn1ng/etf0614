@@ -59,6 +59,24 @@ def test_default_indexes_include_more_verified_sector_and_theme_indexes():
         assert by_code[code].category == category
 
 
+def test_default_indexes_include_dividend_value_and_new_broad_indexes():
+    by_code = {item.index_code: item for item in DEFAULT_INDEXES}
+
+    expected = {
+        "000510": ("中证A500", "A股宽基"),
+        "930050": ("中证A50", "A股宽基"),
+        "932000": ("中证2000", "A股宽基"),
+        "931643": ("科创创业50", "A股成长"),
+        "000922": ("中证红利", "A股主题"),
+        "H30269": ("红利低波", "A股主题"),
+        "930955": ("红利低波100", "A股主题"),
+        "931446": ("东证红利低波", "A股主题"),
+    }
+    for code, (name, category) in expected.items():
+        assert by_code[code].name == name
+        assert by_code[code].category == category
+
+
 def test_index_history_auto_start_requests_full_available_history():
     assert INDEX_HISTORY_AUTO_START == date(1990, 1, 1)
 
@@ -183,6 +201,38 @@ class _FakeCsindexAfterSinaErrorAk:
         )
 
 
+class _FakeStaleEmFreshCsindexAk:
+    def stock_zh_index_daily_em(self, **kwargs):
+        return pd.DataFrame(
+            {
+                "date": ["2019-01-30"],
+                "open": [5000.0],
+                "high": [5100.0],
+                "low": [4900.0],
+                "close": [5050.0],
+                "volume": [100],
+            }
+        )
+
+    def stock_zh_index_daily(self, symbol):
+        return pd.DataFrame()
+
+    def stock_zh_index_hist_csindex(self, symbol, start_date, end_date):
+        assert symbol == "000922"
+        return pd.DataFrame(
+            {
+                "日期": ["2024-01-02"],
+                "指数代码": ["000922"],
+                "开盘": [6100.0],
+                "最高": [6120.0],
+                "最低": [6080.0],
+                "收盘": [6110.0],
+                "成交量": [1000],
+                "成交金额": [2000],
+            }
+        )
+
+
 class _FakeHongKongIndexAk:
     def stock_hk_index_daily_em(self, **kwargs):
         raise RuntimeError("hk em down")
@@ -233,6 +283,17 @@ def test_ashare_index_daily_falls_back_to_csindex_when_sina_errors():
 
     assert len(result) == 1
     assert result.iloc[0]["data_source"] == "akshare_csindex"
+
+
+def test_ashare_index_daily_chooses_freshest_available_source():
+    provider = AkShareProvider.__new__(AkShareProvider)
+    provider.ak = _FakeStaleEmFreshCsindexAk()
+
+    result = provider.fetch_index_daily("000922", "2024-01-01", "2024-01-03")
+
+    assert result["trade_date"].dt.strftime("%Y-%m-%d").tolist() == ["2024-01-02"]
+    assert result.iloc[0]["data_source"] == "akshare_csindex"
+    assert result.iloc[0]["amount"] == 2000
 
 
 def test_hong_kong_index_daily_falls_back_to_sina_when_em_fails():
