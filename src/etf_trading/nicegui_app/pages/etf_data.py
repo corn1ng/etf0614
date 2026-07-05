@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from nicegui import ui
 
 from etf_trading.nicegui_app.components.alerts import empty_state
@@ -9,7 +11,11 @@ from etf_trading.nicegui_app.components.charts import render_ranged_lightweight_
 from etf_trading.nicegui_app.components.tables import table_columns
 from etf_trading.nicegui_app.state import etf_chart_payload, invalidate_snapshot_cache
 from etf_trading.nicegui_app.view_models import (
+    AtomicIndicatorFilters,
     PlatformSnapshot,
+    atomic_indicator_rows,
+    atomic_indicator_summary,
+    build_atomic_indicator_snapshot,
     category_options,
     code_from_option,
     current_ui_audit_findings,
@@ -24,6 +30,8 @@ from etf_trading.universe.classification import CATEGORIES
 def render(snapshot: PlatformSnapshot, section: str, parquet_store=None, store=None) -> None:
     if section == "ETF总览":
         _render_rows(etf_overview_rows(snapshot), empty_title="暂无ETF数据")
+    elif section == "原子指标":
+        _render_atomic_indicators(snapshot, parquet_store)
     elif section == "每日计算池":
         rows = snapshot.watchlist.fillna("").to_dict("records") if not snapshot.watchlist.empty else []
         _render_rows(rows, empty_title="每日计算池为空")
@@ -42,6 +50,83 @@ def _render_rows(rows: list[dict[str, object]], empty_title: str) -> None:
         ui.table(columns=table_columns(rows), rows=rows, pagination=12).classes("workbench-data-table w-full")
     else:
         empty_state(empty_title, "先到数据维护初始化主列表或补齐历史。")
+
+
+def _render_atomic_indicators(snapshot: PlatformSnapshot, parquet_store) -> None:
+    if parquet_store is None:
+        empty_state("暂无原子指标", "当前页面没有可用历史数据存储。")
+        return
+
+    try:
+        frame_holder = {"frame": build_atomic_indicator_snapshot(snapshot, parquet_store)}
+    except Exception as exc:  # noqa: BLE001 - diagnostics should surface snapshot failures
+        empty_state("原子指标生成失败", str(exc))
+        return
+
+    metric_area = ui.row().classes("w-full gap-2")
+    categories = _atomic_filter_options(frame_holder["frame"], "category", "全部分类")
+    history_statuses = _atomic_filter_options(frame_holder["frame"], "history_status", "全部历史状态")
+    feature_statuses = _atomic_filter_options(frame_holder["frame"], "feature_status", "全部特征状态")
+
+    with ui.row().classes("workbench-toolbar w-full"):
+        query = ui.input("代码 / 名称 / 分类").props("dense outlined clearable debounce=250").classes("w-72")
+        category = ui.select(categories, value=categories[0], label="分类").props("dense outlined").classes("w-40")
+        history_status = ui.select(history_statuses, value=history_statuses[0], label="历史状态").props("dense outlined").classes("w-40")
+        feature_status = ui.select(feature_statuses, value=feature_statuses[0], label="特征状态").props("dense outlined").classes("w-40")
+        min_amount = ui.number("最低20日成交额", value=None, format="%.0f").props("dense outlined clearable").classes("w-40")
+        breakout = ui.checkbox("60日突破", value=False)
+        weekly_ma10 = ui.checkbox("周线>10周", value=False)
+        ui.button("刷新快照", icon="refresh", on_click=lambda: reload_snapshot()).props("dense outline")
+        ui.link("去补齐任务", f"/page/maintenance/{quote('补齐任务', safe='')}").classes("workbench-section-tab")
+
+    result_area = ui.column().classes("w-full gap-2")
+
+    def render_metrics() -> None:
+        metric_area.clear()
+        with metric_area:
+            for metric in atomic_indicator_summary(frame_holder["frame"]):
+                _metric_tile(metric.label, metric.value, metric.detail, metric.tone)
+
+    def current_filters() -> AtomicIndicatorFilters:
+        amount_value = None if min_amount.value in {None, ""} else float(min_amount.value)
+        return AtomicIndicatorFilters(
+            query=str(query.value or ""),
+            category=str(category.value or "全部分类"),
+            history_status=str(history_status.value or "全部历史状态"),
+            feature_status=str(feature_status.value or "全部特征状态"),
+            min_avg_amount_20=amount_value,
+            only_breakout=bool(breakout.value),
+            only_weekly_ma10=bool(weekly_ma10.value),
+        )
+
+    def refresh_table() -> None:
+        rows = atomic_indicator_rows(frame_holder["frame"], current_filters())
+        result_area.clear()
+        with result_area:
+            if rows:
+                ui.table(columns=table_columns(rows), rows=rows, pagination=15).classes("workbench-data-table w-full")
+            else:
+                empty_state("没有匹配原子指标", "换一个筛选条件，或到数据维护补齐历史。")
+
+    def reload_snapshot() -> None:
+        try:
+            frame_holder["frame"] = build_atomic_indicator_snapshot(snapshot, parquet_store)
+        except Exception as exc:  # noqa: BLE001 - keep the page usable after a failed refresh
+            ui.notify(f"刷新原子指标失败：{exc}", type="negative")
+            return
+        render_metrics()
+        refresh_table()
+        ui.notify("原子指标快照已刷新", type="positive")
+
+    query.on_value_change(lambda event: refresh_table())
+    category.on_value_change(lambda event: refresh_table())
+    history_status.on_value_change(lambda event: refresh_table())
+    feature_status.on_value_change(lambda event: refresh_table())
+    min_amount.on_value_change(lambda event: refresh_table())
+    breakout.on_value_change(lambda event: refresh_table())
+    weekly_ma10.on_value_change(lambda event: refresh_table())
+    render_metrics()
+    refresh_table()
 
 
 def _render_search(snapshot: PlatformSnapshot, store) -> None:
@@ -154,6 +239,20 @@ def _save_watchlist(store, etf_code: str, enabled: bool, allow_buy: bool, catego
     store.set_watchlist(etf_code, enabled=enabled, allow_buy=allow_buy, category=category)
     invalidate_snapshot_cache()
     ui.notify(f"{etf_code} 已保存到每日计算池", type="positive")
+
+
+def _atomic_filter_options(frame, column: str, all_label: str) -> list[str]:
+    if frame.empty or column not in frame:
+        return [all_label]
+    values = sorted({str(value) for value in frame[column].dropna().tolist() if str(value).strip()})
+    return [all_label, *values]
+
+
+def _metric_tile(label: str, value: object, detail: str, tone: str) -> None:
+    with ui.column().classes("workbench-metric"):
+        ui.label(label).classes("workbench-metric-label")
+        ui.label(str(value)).classes(f"workbench-metric-value tone-{tone}")
+        ui.label(detail).classes("text-xs text-slate-400")
 
 
 def _render_audit(page_slug: str) -> None:

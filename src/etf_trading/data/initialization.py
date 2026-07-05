@@ -68,6 +68,22 @@ class InitializationService:
             count += 1
         return count
 
+    def create_history_jobs_for_all_master(self, start_date: date | str | None = None, end_date: date | str | None = None) -> int:
+        master = self.store.list_etf_master()
+        if master.empty or "etf_code" not in master.columns:
+            return 0
+        if "is_active" in master.columns:
+            master = master[master["is_active"].fillna(1).astype(int) == 1]
+        if "tradability_status" in master.columns:
+            master = master[master["tradability_status"].fillna("exchange_traded").astype(str).isin(["", "exchange_traded"])]
+
+        count = 0
+        codes = master["etf_code"].astype(str).str.zfill(6).drop_duplicates().sort_values()
+        for code in codes:
+            self.store.create_fetch_job("history", code, str(start_date) if start_date else None, str(end_date) if end_date else None)
+            count += 1
+        return count
+
     def fetch_and_store_history(self, etf_code: str, start_date: date | str, end_date: date | str, adjust: str = "qfq") -> pd.DataFrame:
         if self.provider is None:
             raise ValueError("provider is required to fetch history")

@@ -43,3 +43,24 @@ def test_initialization_service_selects_one_sample_per_required_category(tmp_pat
 
     assert samples["category"].tolist() == ["A股宽基", "A股行业", "港股宽基", "港股科技", "港股医药"]
     assert samples[samples["category"] == "港股科技"].iloc[0]["etf_code"] == "513130"
+
+
+def test_initialization_service_creates_history_jobs_for_all_master_etfs(tmp_path):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    store.upsert_etf_master(
+        pd.DataFrame(
+            [
+                {"etf_code": "510300", "name": "沪深300ETF", "exchange": "SSE", "category": "A股宽基", "is_active": 1},
+                {"etf_code": "512880", "name": "证券ETF", "exchange": "SSE", "category": "A股行业", "is_active": 1},
+            ]
+        )
+    )
+
+    count = InitializationService(store).create_history_jobs_for_all_master("2021-01-01", "2026-07-03")
+
+    assert count == 2
+    with store.connect() as conn:
+        jobs = pd.read_sql_query("SELECT job_type, asset_code, start_date, end_date FROM data_fetch_job ORDER BY asset_code", conn)
+    assert jobs["asset_code"].tolist() == ["510300", "512880"]
+    assert jobs["job_type"].tolist() == ["history", "history"]

@@ -184,6 +184,17 @@ def _render_batch_tasks(store, parquet_store, result_area) -> None:
                     lambda result: f"已创建 {result} 个历史任务",
                 ),
             ).props("dense outline")
+            all_master_button = ui.button(
+                "为全部ETF主池创建历史初始化任务",
+                icon="playlist_add_check",
+                on_click=lambda: _run_task(
+                    all_master_button,
+                    result_area,
+                    "生成全量ETF历史任务",
+                    lambda: _service(store, parquet_store).create_history_jobs_for_all_master(),
+                    lambda result: f"已创建 {result} 个全量 ETF 历史任务",
+                ),
+            ).props("dense outline")
 
 
 def _render_logs_and_settings(store) -> None:
