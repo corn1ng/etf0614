@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from urllib.parse import unquote
+
 from nicegui import ui
+
+from .layout import render_shell
 
 
 def create_app() -> None:
@@ -10,7 +14,15 @@ def create_app() -> None:
 
     @ui.page("/")
     def index() -> None:
-        ui.label("ETF 工作台")
+        render_shell()
+
+    @ui.page("/page/{page_slug}")
+    def page(page_slug: str) -> None:
+        render_shell(page_slug=page_slug)
+
+    @ui.page("/page/{page_slug}/{section}")
+    def page_section(page_slug: str, section: str) -> None:
+        render_shell(page_slug=page_slug, section=unquote(section))
 
 
 def run(host: str = "127.0.0.1", port: int = 8502, reload: bool = False) -> None:
