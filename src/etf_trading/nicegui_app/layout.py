@@ -56,13 +56,16 @@ def _render_page_header(page: NicePageSpec, active_section: str) -> None:
 
 
 def _render_page(page_slug: str, section: str) -> None:
-    from .pages import etf_data, maintenance, market
+    from .pages import action, etf_data, maintenance, market, research
     from .state import create_parquet_store, create_store, load_snapshot
 
     store = create_store()
     parquet_store = create_parquet_store()
     snapshot = load_snapshot(store, parquet_store)
 
+    if page_slug == "action":
+        action.render(snapshot, section)
+        return
     if page_slug == "market":
         market.render(snapshot, section, parquet_store=parquet_store)
         return
@@ -72,5 +75,8 @@ def _render_page(page_slug: str, section: str) -> None:
     if page_slug == "maintenance":
         maintenance.render(snapshot, section)
         return
+    if page_slug == "research":
+        research.render(snapshot, section)
+        return
 
-    ui.label(f"{page_slug} / {section} 页面迁移中").classes("text-sm text-slate-500")
+    action.render(snapshot, "行动摘要")
