@@ -11,6 +11,8 @@ from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.research.index_etf_universe import build_index_etf_universe
 from etf_trading.research.regime import TrendRegimeClassifier, add_trend_regime_features
+from etf_trading.strategy.features import add_technical_features
+from etf_trading.ui.chart_renderer import build_lightweight_chart_payload
 from etf_trading.ui.data_coverage import (
     build_data_coverage_summary,
     build_data_gap_detail,
@@ -91,3 +93,19 @@ def build_index_trend_summary(
         )
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def index_chart_payload(parquet_store: ParquetStore, index_code: str) -> list[dict]:
+    prices = parquet_store.read_index_prices(index_code)
+    if prices.empty:
+        return build_lightweight_chart_payload(prices)
+    featured = add_technical_features(prices.rename(columns={"index_code": "etf_code"}))
+    return build_lightweight_chart_payload(featured.tail(500), chart_type="candlestick", price_scale_mode="normal")
+
+
+def etf_chart_payload(parquet_store: ParquetStore, etf_code: str) -> list[dict]:
+    prices = parquet_store.read_prices(etf_code)
+    if prices.empty:
+        return build_lightweight_chart_payload(prices)
+    featured = add_technical_features(prices)
+    return build_lightweight_chart_payload(featured.tail(500), chart_type="candlestick", price_scale_mode="normal")

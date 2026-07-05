@@ -5,7 +5,9 @@ from __future__ import annotations
 from nicegui import ui
 
 from etf_trading.nicegui_app.components.alerts import empty_state
+from etf_trading.nicegui_app.components.charts import render_lightweight_chart
 from etf_trading.nicegui_app.components.tables import table_columns
+from etf_trading.nicegui_app.state import index_chart_payload
 from etf_trading.nicegui_app.view_models import PlatformSnapshot, current_ui_audit_findings, market_overview
 
 
@@ -15,7 +17,7 @@ def render(snapshot: PlatformSnapshot, section: str, parquet_store=None) -> None
     elif section == "指数买卖参考":
         _render_index_reference(snapshot)
     else:
-        _render_index_chart_placeholder(snapshot)
+        _render_index_chart(snapshot, parquet_store)
 
 
 def _render_overview(snapshot: PlatformSnapshot) -> None:
@@ -42,14 +44,23 @@ def _render_index_reference(snapshot: PlatformSnapshot) -> None:
     _render_audit("market")
 
 
-def _render_index_chart_placeholder(snapshot: PlatformSnapshot) -> None:
-    if snapshot.index_summary.empty:
+def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
+    if snapshot.index_summary.empty or parquet_store is None:
         empty_state("暂无指数K线", "先补齐指数历史。")
+        _render_audit("market")
         return
-    with ui.column().classes("workbench-chart-panel w-full items-center justify-center gap-2"):
-        ui.icon("show_chart").classes("text-4xl text-blue-600")
-        ui.label("指数K线图将在接入历史行情后显示").classes("text-sm font-semibold text-slate-700")
-        ui.label("筛选、区间和图表会在同一工具区内完成，避免K线被控件挤到首屏下方。").classes("text-xs text-slate-500")
+
+    selected = str(snapshot.index_summary.iloc[0]["index_code"])
+    payload = index_chart_payload(parquet_store, selected)
+    if not payload[0]["series"]:
+        empty_state("暂无指数K线", "先补齐指数历史。")
+        _render_audit("market")
+        return
+
+    with ui.row().classes("workbench-toolbar w-full justify-between"):
+        ui.label(f"指数：{selected}").classes("text-sm font-semibold text-slate-700")
+        ui.label("近500条记录").classes("text-xs text-slate-500")
+    render_lightweight_chart(payload, element_id=f"index-chart-{selected}")
     _render_audit("market")
 
 
