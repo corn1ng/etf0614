@@ -142,7 +142,7 @@ def index_chart_payload(parquet_store: ParquetStore, index_code: str) -> list[di
     if prices.empty:
         return build_lightweight_chart_payload(prices)
     featured = add_technical_features(prices.rename(columns={"index_code": "etf_code"}))
-    return build_lightweight_chart_payload(featured.tail(500), chart_type="candlestick", price_scale_mode="normal")
+    return build_lightweight_chart_payload(featured, chart_type="candlestick", price_scale_mode="normal")
 
 
 def etf_chart_payload(parquet_store: ParquetStore, etf_code: str) -> list[dict]:
@@ -150,4 +150,4 @@ def etf_chart_payload(parquet_store: ParquetStore, etf_code: str) -> list[dict]:
     if prices.empty:
         return build_lightweight_chart_payload(prices)
     featured = add_technical_features(prices)
-    return build_lightweight_chart_payload(featured.tail(500), chart_type="candlestick", price_scale_mode="normal")
+    return build_lightweight_chart_payload(featured, chart_type="candlestick", price_scale_mode="normal")

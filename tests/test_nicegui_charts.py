@@ -1,6 +1,11 @@
 import pandas as pd
 
-from etf_trading.nicegui_app.components.charts import build_chart_html, build_echart_options, build_static_chart_html
+from etf_trading.nicegui_app.components.charts import (
+    build_chart_html,
+    build_echart_options,
+    build_static_chart_html,
+    chart_record_label,
+)
 from etf_trading.nicegui_app.state import etf_chart_payload, index_chart_payload
 
 
@@ -81,6 +86,46 @@ def test_build_echart_options_preserves_candles_ma_volume_and_zoom():
     assert {zoom["type"] for zoom in options["dataZoom"]} == {"inside", "slider"}
 
 
+def test_build_echart_options_defaults_long_history_to_recent_window():
+    dates = [date.strftime("%Y-%m-%d") for date in pd.date_range("2024-01-01", periods=620, freq="B")]
+    payload = [
+        {
+            "chart": {"height": 520},
+            "series": [
+                {
+                    "type": "Candlestick",
+                    "data": [
+                        {"time": trade_date, "open": 10, "high": 11, "low": 9, "close": 10.5}
+                        for trade_date in dates
+                    ],
+                }
+            ],
+        }
+    ]
+
+    options = build_echart_options(payload)
+
+    assert options["dataZoom"][0]["startValue"] == dates[-500]
+    assert options["dataZoom"][0]["endValue"] == dates[-1]
+    assert options["dataZoom"][1]["startValue"] == dates[-500]
+    assert options["dataZoom"][1]["endValue"] == dates[-1]
+
+
+def test_chart_record_label_reports_full_count_and_default_window():
+    payload = [
+        {
+            "series": [
+                {
+                    "type": "Candlestick",
+                    "data": [{"time": str(index), "open": 1, "high": 1, "low": 1, "close": 1} for index in range(620)],
+                }
+            ]
+        }
+    ]
+
+    assert chart_record_label(payload) == "共620条记录 · 默认显示近500条"
+
+
 def test_build_echart_options_maps_trade_markers_to_candle_prices():
     payload = [
         {
@@ -119,15 +164,15 @@ class FakeParquetStore:
         return self.frame
 
 
-def _prices() -> pd.DataFrame:
+def _prices(periods: int = 260) -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "trade_date": pd.date_range("2026-01-01", periods=260, freq="B"),
-            "open": [10.0] * 260,
-            "high": [10.5] * 260,
-            "low": [9.8] * 260,
-            "close": [10.2] * 260,
-            "volume": [1000] * 260,
+            "trade_date": pd.date_range("2026-01-01", periods=periods, freq="B"),
+            "open": [10.0] * periods,
+            "high": [10.5] * periods,
+            "low": [9.8] * periods,
+            "close": [10.2] * periods,
+            "volume": [1000] * periods,
         }
     )
 
@@ -137,6 +182,20 @@ def test_index_chart_payload_uses_lightweight_chart_shape():
 
     assert payload[0]["series"]
     assert payload[0]["chart"]["height"] == 520
+
+
+def test_index_chart_payload_keeps_full_history_for_zooming():
+    payload = index_chart_payload(FakeParquetStore(_prices(periods=620)), "000300")
+
+    candle = next(series for series in payload[0]["series"] if series["type"] == "Candlestick")
+    assert len(candle["data"]) == 620
+
+
+def test_etf_chart_payload_keeps_full_history_for_zooming():
+    payload = etf_chart_payload(FakeParquetStore(_prices(periods=620)), "510300")
+
+    candle = next(series for series in payload[0]["series"] if series["type"] == "Candlestick")
+    assert len(candle["data"]) == 620
 
 
 def test_etf_chart_payload_returns_empty_chart_for_missing_history():

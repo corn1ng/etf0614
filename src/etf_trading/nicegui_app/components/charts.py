@@ -9,6 +9,9 @@ import math
 from nicegui import ui
 
 
+DEFAULT_VISIBLE_CANDLES = 500
+
+
 def build_chart_html(payload: list[dict], element_id: str = "workbench-chart") -> str:
     safe_id = escape(element_id, quote=True)
     return f'<div id="{safe_id}" class="workbench-chart-panel"></div>\n{_build_chart_script(payload, safe_id)}'
@@ -49,6 +52,15 @@ def render_lightweight_chart(payload: list[dict], element_id: str = "workbench-c
     options = build_echart_options(payload)
     height = _echart_height(payload)
     ui.echart(options).classes("workbench-echart-panel w-full").style(f"height: {height}px")
+
+
+def chart_record_label(payload: list[dict]) -> str:
+    count = _chart_record_count(payload)
+    if count <= 0:
+        return "暂无记录"
+    if count > DEFAULT_VISIBLE_CANDLES:
+        return f"共{count}条记录 · 默认显示近{DEFAULT_VISIBLE_CANDLES}条"
+    return f"共{count}条记录"
 
 
 def build_echart_options(payload: list[dict]) -> dict:
@@ -119,6 +131,7 @@ def build_echart_options(payload: list[dict]) -> dict:
             }
         )
 
+    zoom_window = _default_zoom_window(categories)
     return {
         "animation": False,
         "backgroundColor": "#ffffff",
@@ -176,8 +189,8 @@ def build_echart_options(payload: list[dict]) -> dict:
             },
         ],
         "dataZoom": [
-            {"type": "inside", "xAxisIndex": [0, 1], "start": 0, "end": 100},
-            {"type": "slider", "xAxisIndex": [0, 1], "bottom": 8, "height": 24, "start": 0, "end": 100},
+            {"type": "inside", "xAxisIndex": [0, 1], **zoom_window},
+            {"type": "slider", "xAxisIndex": [0, 1], "bottom": 8, "height": 24, **zoom_window},
         ],
         "series": series,
     }
@@ -206,6 +219,23 @@ def _echart_height(payload: list[dict]) -> int:
     for item in payload[:2]:
         total += int(item.get("chart", {}).get("height", 0) or 0)
     return max(520, min(760, total or 680))
+
+
+def _chart_record_count(payload: list[dict]) -> int:
+    main = payload[0] if payload else {"series": []}
+    candle = _first_series(main.get("series", []), "Candlestick")
+    if candle:
+        return len(candle.get("data", []))
+    line = _first_series(main.get("series", []), "Line")
+    if line:
+        return len(line.get("data", []))
+    return 0
+
+
+def _default_zoom_window(categories: list[str]) -> dict:
+    if len(categories) > DEFAULT_VISIBLE_CANDLES:
+        return {"startValue": categories[-DEFAULT_VISIBLE_CANDLES], "endValue": categories[-1]}
+    return {"start": 0, "end": 100}
 
 
 def _marker_points(candle: dict) -> dict:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from nicegui import ui
 
 from etf_trading.nicegui_app.components.alerts import empty_state
-from etf_trading.nicegui_app.components.charts import render_lightweight_chart
+from etf_trading.nicegui_app.components.charts import chart_record_label, render_lightweight_chart
 from etf_trading.nicegui_app.components.tables import table_columns
 from etf_trading.nicegui_app.state import etf_chart_payload, invalidate_snapshot_cache
 from etf_trading.nicegui_app.view_models import (
@@ -132,7 +132,7 @@ def _render_etf_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
 
             with ui.row().classes("workbench-toolbar w-full justify-between"):
                 ui.label(f"ETF：{selected}").classes("text-sm font-semibold text-slate-700")
-                ui.label("近500条记录").classes("text-xs text-slate-500")
+                ui.label(chart_record_label(payload)).classes("text-xs text-slate-500")
             render_lightweight_chart(payload, element_id=f"etf-chart-{selected}")
 
     with ui.row().classes("workbench-toolbar w-full justify-between"):
