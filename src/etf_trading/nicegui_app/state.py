@@ -29,6 +29,7 @@ def create_parquet_store(root: str | Path | None = None) -> ParquetStore:
 
 
 def load_snapshot(store: SQLiteStore, parquet_store: ParquetStore) -> PlatformSnapshot:
+    store.initialize_schema()
     raw_master = store.list_etf_master()
     watchlist = store.list_watchlist()
     index_summary = build_index_trend_summary(parquet_store)
