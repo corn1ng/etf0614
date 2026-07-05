@@ -208,6 +208,22 @@ body {
   overflow: hidden;
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.04);
 }
+.workbench-range-toggle {
+  border: 1px solid var(--wb-line);
+  border-radius: 7px;
+  background: #ffffff;
+  overflow: hidden;
+}
+.workbench-range-toggle .q-btn {
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+.workbench-range-toggle .q-btn[aria-pressed="true"],
+.workbench-range-toggle .q-btn.q-btn--active {
+  color: var(--wb-blue);
+  background: #eff6ff;
+}
 .workbench-alert {
   border: 1px solid var(--wb-line);
   border-radius: 8px;

@@ -5,6 +5,7 @@ from etf_trading.nicegui_app.components.charts import (
     build_echart_options,
     build_static_chart_html,
     chart_record_label,
+    chart_range_window,
 )
 from etf_trading.nicegui_app.state import etf_chart_payload, index_chart_payload
 
@@ -86,6 +87,46 @@ def test_build_echart_options_preserves_candles_ma_volume_and_zoom():
     assert {zoom["type"] for zoom in options["dataZoom"]} == {"inside", "slider"}
 
 
+def test_build_echart_options_uses_compact_aligned_tooltip_formatter():
+    payload = [
+        {
+            "chart": {"height": 520},
+            "series": [
+                {
+                    "type": "Candlestick",
+                    "data": [{"time": "2026-01-01", "open": 10, "high": 11, "low": 9, "close": 10.5}],
+                },
+                {
+                    "type": "Line",
+                    "options": {"title": "MA51", "color": "#eab308"},
+                    "data": [{"time": "2026-01-01", "value": 10.234567}],
+                },
+            ],
+        },
+        {
+            "chart": {"height": 160},
+            "series": [
+                {
+                    "type": "Histogram",
+                    "data": [{"time": "2026-01-01", "value": 3979605497, "color": "#16a34a"}],
+                }
+            ],
+        },
+    ]
+
+    tooltip = build_echart_options(payload)["tooltip"]
+
+    assert tooltip["trigger"] == "axis"
+    assert ":formatter" in tooltip
+    formatter = tooltip[":formatter"]
+    assert "grid-template-columns" in formatter
+    assert "tabular-nums" in formatter
+    assert "formatVolume" in formatter
+    assert "K线" in formatter
+    assert "均线" in formatter
+    assert "成交量" in formatter
+
+
 def test_build_echart_options_defaults_long_history_to_recent_window():
     dates = [date.strftime("%Y-%m-%d") for date in pd.date_range("2024-01-01", periods=620, freq="B")]
     payload = [
@@ -109,6 +150,35 @@ def test_build_echart_options_defaults_long_history_to_recent_window():
     assert options["dataZoom"][0]["endValue"] == dates[-1]
     assert options["dataZoom"][1]["startValue"] == dates[-500]
     assert options["dataZoom"][1]["endValue"] == dates[-1]
+
+
+def test_build_echart_options_uses_custom_visible_window():
+    dates = [date.strftime("%Y-%m-%d") for date in pd.date_range("2024-01-01", periods=620, freq="B")]
+    payload = [_candlestick_payload(dates)]
+
+    options = build_echart_options(payload, visible_start=dates[10], visible_end=dates[120])
+
+    assert options["dataZoom"][0]["startValue"] == dates[10]
+    assert options["dataZoom"][0]["endValue"] == dates[120]
+    assert options["dataZoom"][1]["startValue"] == dates[10]
+    assert options["dataZoom"][1]["endValue"] == dates[120]
+
+
+def test_chart_range_window_matches_old_presets_and_custom_dates():
+    dates = [date.strftime("%Y-%m-%d") for date in pd.date_range("2024-01-01", periods=620, freq="B")]
+    payload = [_candlestick_payload(dates)]
+
+    preset_start, preset_end = chart_range_window(payload, "近6月")
+    threshold = (pd.Timestamp(dates[-1]) - pd.Timedelta(days=180)).strftime("%Y-%m-%d")
+    expected_start = next(date for date in dates if date >= threshold)
+    assert preset_start == expected_start
+    assert preset_end == dates[-1]
+
+    custom_start, custom_end = chart_range_window(payload, "自定义", start_date=dates[20], end_date=dates[60])
+    assert custom_start == dates[20]
+    assert custom_end == dates[60]
+
+    assert chart_range_window(payload, "全部") == (None, None)
 
 
 def test_chart_record_label_reports_full_count_and_default_window():
@@ -175,6 +245,21 @@ def _prices(periods: int = 260) -> pd.DataFrame:
             "volume": [1000] * periods,
         }
     )
+
+
+def _candlestick_payload(dates: list[str]) -> dict:
+    return {
+        "chart": {"height": 520},
+        "series": [
+            {
+                "type": "Candlestick",
+                "data": [
+                    {"time": trade_date, "open": 10, "high": 11, "low": 9, "close": 10.5}
+                    for trade_date in dates
+                ],
+            }
+        ],
+    }
 
 
 def test_index_chart_payload_uses_lightweight_chart_shape():

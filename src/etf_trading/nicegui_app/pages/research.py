@@ -9,7 +9,7 @@ from nicegui import ui
 
 from etf_trading.backtest.engine import BacktestEngine
 from etf_trading.nicegui_app.components.alerts import empty_state
-from etf_trading.nicegui_app.components.charts import render_lightweight_chart
+from etf_trading.nicegui_app.components.charts import render_ranged_lightweight_chart
 from etf_trading.nicegui_app.components.tables import table_columns
 from etf_trading.nicegui_app.state import index_chart_payload
 from etf_trading.nicegui_app.view_models import (
@@ -252,7 +252,7 @@ def _run_manual_backtest(button, result_area, store, parquet_store, etf_code: st
                 _metric("最大回撤", f"{result.metrics.get('max_drawdown', 0) * 100:.2f}%", "Max Drawdown")
                 _metric("港股跨境暴露", f"{result.metrics.get('max_hk_cross_market_exposure', 0) * 100:.2f}%", "HK Exposure")
             payload = _chart_payload_with_trades(featured, result.trades, etf_code)
-            render_lightweight_chart(payload, element_id=f"manual-backtest-{etf_code}")
+            render_ranged_lightweight_chart(payload, element_id=f"manual-backtest-{etf_code}", title=f"ETF：{etf_code}")
             _render_rows(_trade_rows(result.trades), "该回测没有产生交易", "检查信号日期是否落在历史区间内。")
         ui.notify("单 ETF 回测完成", type="positive")
     finally:
@@ -407,7 +407,7 @@ def _draw_replay_chart(container, candidate_name: str, etf_code: str, category: 
             _metric("总收益", f"{result.metrics.get('total_return', 0) * 100:.1f}%", "Total Return")
             _metric("最大回撤", f"{result.metrics.get('max_drawdown', 0) * 100:.1f}%", "Max Drawdown")
         payload = _chart_payload_with_trades(featured, result.trades, etf_code)
-        render_lightweight_chart(payload, element_id=f"research-replay-{candidate_name}-{etf_code}")
+        render_ranged_lightweight_chart(payload, element_id=f"research-replay-{candidate_name}-{etf_code}", title=f"ETF：{etf_code}")
         trades = _trade_rows(result.trades)
         _render_rows(trades, "该策略没有产生交易", "当前 ETF 历史区间没有 B/S 点。")
 
@@ -428,7 +428,7 @@ def _render_index_filter_experiment(snapshot: PlatformSnapshot, parquet_store) -
             if parquet_store is not None:
                 payload = index_chart_payload(parquet_store, index_code)
                 if payload[0]["series"]:
-                    render_lightweight_chart(payload, element_id=f"research-index-filter-{index_code}")
+                    render_ranged_lightweight_chart(payload, element_id=f"research-index-filter-{index_code}", title=f"指数：{index_code}")
             rows = snapshot.index_summary.fillna("").to_dict("records") if not snapshot.index_summary.empty else []
             _render_rows(rows, "暂无指数过滤表", "请先补齐指数历史。")
 
