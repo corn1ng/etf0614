@@ -530,11 +530,15 @@ Inside `_render_atomic_indicators()`, after `current_filters()`, add:
             if label:
                 history_status.value = label
                 history_status.update()
+                feature_status.value = "全部特征状态"
+                feature_status.update()
         elif item.filter_type == "feature_status":
             label = _atomic_filter_label(feature_statuses, item.filter_value)
             if label:
                 feature_status.value = label
                 feature_status.update()
+                history_status.value = "全部历史状态"
+                history_status.update()
         refresh_table()
 
     def render_data_health() -> None:
