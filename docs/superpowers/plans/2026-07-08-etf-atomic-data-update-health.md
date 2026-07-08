@@ -26,7 +26,7 @@
 - `src/etf_trading/nicegui_app/view_models.py`
   - Owns atomic status labels, data-update health counts, and display row formatting.
 - `src/etf_trading/nicegui_app/components/tables.py`
-  - Owns generic table value localization, including `stale -> 行情滞后`.
+  - Owns table value localization, including field-specific `history_status: stale -> 行情滞后`.
 - `src/etf_trading/nicegui_app/pages/etf_data.py`
   - Renders the atomic health panel and wires status item clicks to existing filters.
 - `src/etf_trading/nicegui_app/theme.py`
@@ -49,6 +49,7 @@
 **Files:**
 - Modify: `src/etf_trading/nicegui_app/view_models.py`
 - Modify: `src/etf_trading/nicegui_app/components/tables.py`
+- Modify: `src/etf_trading/nicegui_app/pages/etf_data.py`
 - Test: `tests/test_nicegui_view_models.py`
 - Test: `tests/test_nicegui_table_display.py`
 
@@ -59,6 +60,7 @@
   - `atomic_data_update_health(frame: pd.DataFrame) -> list[AtomicDataHealthItem]`
   - `ATOMIC_HISTORY_STATUS_LABELS: dict[str, str]`
   - `ATOMIC_FEATURE_STATUS_LABELS: dict[str, str]`
+  - `_atomic_filter_label_for(column: str, value: str) -> str`
 
 - [ ] **Step 1: Write failing view-model tests**
 
@@ -155,6 +157,18 @@ def test_table_rows_translate_internal_status_codes_and_booleans_to_chinese():
     assert "正在刷新" not in rendered_text
 ```
 
+Add this focused regression test to keep generic `stale` out of the row-level history label:
+
+```python
+def test_table_rows_do_not_apply_history_lag_label_to_generic_stale_status():
+    display = table_rows([{"status": "stale", "history_status": "stale"}])
+
+    assert display[0]["history_status"] == "行情滞后"
+    assert display[0]["status"] == "待刷新"
+    assert display[0]["status"] != "行情滞后"
+    assert "正在刷新" not in " ".join(str(value) for value in display[0].values())
+```
+
 Replace the existing `test_atomic_status_filter_options_show_chinese_labels_but_keep_internal_values` body with this version:
 
 ```python
@@ -178,7 +192,7 @@ def test_atomic_status_filter_options_show_chinese_labels_but_keep_internal_valu
 Run:
 
 ```powershell
-.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_view_models.py::test_atomic_indicator_rows_display_stale_history_as_price_lag tests/test_nicegui_view_models.py::test_atomic_data_update_health_counts_repair_states tests/test_nicegui_view_models.py::test_atomic_data_update_health_returns_zero_counts_for_empty_frame tests/test_nicegui_table_display.py::test_table_rows_translate_internal_status_codes_and_booleans_to_chinese tests/test_nicegui_table_display.py::test_atomic_status_filter_options_show_chinese_labels_but_keep_internal_values -q
+.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_view_models.py::test_atomic_indicator_rows_display_stale_history_as_price_lag tests/test_nicegui_view_models.py::test_atomic_data_update_health_counts_repair_states tests/test_nicegui_view_models.py::test_atomic_data_update_health_returns_zero_counts_for_empty_frame tests/test_nicegui_table_display.py::test_table_rows_translate_internal_status_codes_and_booleans_to_chinese tests/test_nicegui_table_display.py::test_table_rows_do_not_apply_history_lag_label_to_generic_stale_status tests/test_nicegui_table_display.py::test_atomic_status_filter_options_show_chinese_labels_but_keep_internal_values -q
 ```
 
 Expected: FAIL because `atomic_data_update_health` is not defined and `stale` still renders as `正在刷新`.
@@ -250,10 +264,44 @@ In `_atomic_display_row`, replace the inline mappings for `历史状态` and `�
 "特征状态": _status_text(row.get("feature_status"), ATOMIC_FEATURE_STATUS_LABELS),
 ```
 
-In `src/etf_trading/nicegui_app/components/tables.py`, change the `VALUE_LABELS` entry:
+In `src/etf_trading/nicegui_app/components/tables.py`, do not use a global `VALUE_LABELS["stale"]` entry for `行情滞后`. Add a field-specific mapping near `VALUE_LABELS`:
 
 ```python
-"stale": "行情滞后",
+FIELD_VALUE_LABELS = {
+    "history_status": {
+        "stale": "行情滞后",
+    },
+    "status": {
+        "stale": "待刷新",
+    },
+}
+```
+
+Then update `_display_value()` so field-specific labels are checked before `VALUE_LABELS`:
+
+```python
+field_labels = FIELD_VALUE_LABELS.get(column, {})
+if text in field_labels:
+    return field_labels[text]
+if text in VALUE_LABELS:
+    return VALUE_LABELS[text]
+```
+
+In `src/etf_trading/nicegui_app/pages/etf_data.py`, make `_atomic_filter_options()` use the atomic-specific history and feature label maps instead of relying on a global `VALUE_LABELS["stale"]` entry:
+
+```python
+def _atomic_filter_label_for(column: str, value: str) -> str:
+    if column == "history_status":
+        return ATOMIC_HISTORY_STATUS_LABELS.get(value, VALUE_LABELS.get(value, value))
+    if column == "feature_status":
+        return ATOMIC_FEATURE_STATUS_LABELS.get(value, VALUE_LABELS.get(value, value))
+    return VALUE_LABELS.get(value, value)
+```
+
+Use that helper inside `_atomic_filter_options()`:
+
+```python
+label = _atomic_filter_label_for(column, value)
 ```
 
 - [ ] **Step 5: Run tests to verify pass**
