@@ -46,6 +46,7 @@ def test_index_history_batch_runner_persists_background_result(monkeypatch, tmp_
 
     store = SQLiteStore(tmp_path / "etf.sqlite")
     store.initialize_schema()
+    invalidations = []
     runner = maintenance_tasks.IndexHistoryBatchRunner(
         store,
         ParquetStore(tmp_path / "parquet"),
@@ -57,6 +58,11 @@ def test_index_history_batch_runner_persists_background_result(monkeypatch, tmp_
         return callback()
 
     monkeypatch.setattr(maintenance_tasks.run, "io_bound", fake_io_bound)
+    monkeypatch.setattr(
+        maintenance_tasks,
+        "invalidate_snapshot_cache",
+        lambda cache_store, cache_parquet_store: invalidations.append((cache_store, cache_parquet_store)),
+    )
     asyncio.run(runner._run(task.task_id, "2026-07-10"))
 
     persisted = store.get_maintenance_task_run(task.task_id)
@@ -69,6 +75,7 @@ def test_index_history_batch_runner_persists_background_result(monkeypatch, tmp_
         {"index_code": "000300", "status": "UPDATED"},
         {"index_code": "000905", "status": "STALE"},
     ]
+    assert invalidations == [(store, runner.parquet_store)]
 
 
 def test_index_history_batch_runner_marks_orphaned_running_task_interrupted(tmp_path):

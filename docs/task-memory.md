@@ -339,3 +339,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Count ETF repair issues by mutually exclusive primary history status; show feature gaps only as additional diagnostics.
   - Every internal data-status code added to a visible NiceGUI table needs a Chinese value mapping and a table-display test.
   - The browser smoke environment intentionally had an empty isolated data directory; assess real production freshness from the user’s normal local data workspace, not from this QA fixture.
+
+## 2026-07-12 - Persist index-history maintenance tasks
+
+- Summary: Made the full index-history catch-up task durable across page refreshes, persisted live progress and results, marked orphaned runs as interrupted after a server restart, and refreshed the platform snapshot after success. The task center now renders every task state and index result status in Chinese.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\etf0614-maintenance-full-final` passed with 276 tests. Chrome DevTools browser QA on `http://127.0.0.1:8513/page/maintenance/补齐任务` confirmed the persisted result remains after reload, has no raw `STALE` text, and logged no warnings or errors.
+- Watch out next time:
+  - A successful provider call is not enough: preserve `STALE` when local history still has not reached the expected trade date.
+  - Persisted task polling must not overwrite another active page-local maintenance task.
+  - Update task result tables and progress labels together whenever a new internal maintenance status becomes user-visible.

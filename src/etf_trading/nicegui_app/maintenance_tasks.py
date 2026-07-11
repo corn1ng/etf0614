@@ -11,6 +11,7 @@ from nicegui import background_tasks, run
 from etf_trading.data.initialization import IndexHistoryProgress, InitializationService
 from etf_trading.data.providers.akshare_provider import AkShareProvider
 from etf_trading.data.storage import MaintenanceTaskRun, ParquetStore, SQLiteStore
+from etf_trading.nicegui_app.state import invalidate_snapshot_cache
 
 
 INDEX_HISTORY_BATCH_TASK_TYPE = "index_history_batch"
@@ -81,6 +82,7 @@ class IndexHistoryBatchRunner:
                 progress_total=max(task.progress_total if task is not None else 0, len(result)),
                 result_json=result_json,
             )
+            invalidate_snapshot_cache(self.store, self.parquet_store)
         except Exception as exc:  # noqa: BLE001 - persist the provider/storage failure for the next page session
             self.store.update_maintenance_task_run(task_id, state="failed", error_message=str(exc))
         finally:

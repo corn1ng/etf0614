@@ -181,6 +181,12 @@ def test_table_rows_do_not_apply_history_lag_label_to_generic_stale_status():
     assert "正在刷新" not in " ".join(str(value) for value in display[0].values())
 
 
+def test_table_rows_translate_uppercase_stale_maintenance_status_to_chinese():
+    display = table_rows([{"index_code": "930633", "status": "STALE"}])
+
+    assert display == [{"index_code": "930633", "status": "行情仍滞后"}]
+
+
 def test_table_rows_translate_maintenance_dataset_and_job_codes_to_chinese():
     rows = [
         {

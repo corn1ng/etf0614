@@ -176,6 +176,7 @@ VALUE_LABELS = {
     "UPDATED": "已补齐",
     "INITIALIZED": "已初始化",
     "SKIPPED": "已是最新",
+    "STALE": "行情仍滞后",
     "FAILED": "失败",
     "EMPTY": "无数据",
     "PENDING": "待处理",

@@ -6,6 +6,8 @@ from datetime import datetime
 
 import pandas as pd
 
+from etf_trading.data.storage import MaintenanceTaskRun
+
 
 def test_task_center_renders_idle_and_running_states(monkeypatch):
     from etf_trading.nicegui_app.pages import maintenance
@@ -529,3 +531,253 @@ def test_maintenance_task_center_shows_cancelled_when_result_is_none(monkeypatch
     assert "notify:warning:补齐全部指数历史已取消或服务正在关闭" in events
     assert task_status.state == "cancelled"
     assert events[-1] == "enable"
+
+
+def test_task_status_from_persisted_running_run_shows_chinese_progress():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    run = MaintenanceTaskRun(
+        task_id=7,
+        task_type="index_history_batch",
+        state="running",
+        progress_done=11,
+        progress_total=49,
+        progress_detail="930633 STALE",
+        result_json=None,
+        error_message=None,
+        started_at="2026-07-12 10:00:00",
+        finished_at=None,
+        updated_at="2026-07-12 10:01:00",
+    )
+
+    status = maintenance._task_status_from_run(run)
+
+    assert status.title == "补齐全部指数历史"
+    assert status.state == "running"
+    assert status.progress_done == 11
+    assert status.progress_total == 49
+    assert status.progress_detail == "930633 行情仍滞后"
+    assert status.started_at == datetime(2026, 7, 12, 10, 0, 0)
+
+
+def test_index_history_batch_message_distinguishes_stale_from_success():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    message = maintenance._index_history_batch_message(
+        [
+            {"index_code": "000300", "status": "UPDATED"},
+            {"index_code": "000905", "status": "INITIALIZED"},
+            {"index_code": "930633", "status": "STALE"},
+            {"index_code": "H30533", "status": "FAILED"},
+            {"index_code": "HSI", "status": "SKIPPED"},
+        ]
+    )
+
+    assert message == "已检查 5 个指数：补齐 2，跳过 1，行情仍滞后 1，失败/无数据 1"
+
+
+def test_render_tasks_restores_persisted_index_batch_after_page_refresh(monkeypatch):
+    from etf_trading.nicegui_app.pages import maintenance
+
+    run = MaintenanceTaskRun(
+        task_id=7,
+        task_type="index_history_batch",
+        state="running",
+        progress_done=11,
+        progress_total=49,
+        progress_detail="930633 STALE",
+        result_json=None,
+        error_message=None,
+        started_at="2026-07-12 10:00:00",
+        finished_at=None,
+        updated_at="2026-07-12 10:01:00",
+    )
+    captured = []
+
+    class FakeRunner:
+        def __init__(self, store, parquet_store):
+            self.store = store
+
+        def reconcile_interrupted(self):
+            return None
+
+        def latest(self):
+            return run
+
+    class FakeElement:
+        def classes(self, value):
+            return self
+
+    class FakeUi:
+        def column(self):
+            return FakeElement()
+
+        def timer(self, interval, callback, immediate=False):
+            return FakeElement()
+
+        def label(self, text):
+            return FakeElement()
+
+    monkeypatch.setattr(maintenance, "ui", FakeUi())
+    monkeypatch.setattr(maintenance, "IndexHistoryBatchRunner", FakeRunner)
+    monkeypatch.setattr(maintenance, "_render_task_center", lambda container, status: captured.append(status))
+    monkeypatch.setattr(maintenance, "_render_master_tasks", lambda *args: None)
+    monkeypatch.setattr(maintenance, "_render_etf_history_tasks", lambda *args: None)
+    monkeypatch.setattr(maintenance, "_render_index_history_tasks", lambda *args: None)
+    monkeypatch.setattr(maintenance, "_render_batch_tasks", lambda *args: None)
+
+    maintenance._render_tasks(object(), object(), object())
+
+    assert captured[0].state == "running"
+    assert captured[0].progress_done == 11
+    assert captured[0].progress_detail == "930633 行情仍滞后"
+
+
+def test_start_persisted_index_history_batch_uses_runner_result(monkeypatch):
+    from etf_trading.nicegui_app.pages import maintenance
+
+    events = []
+    run = MaintenanceTaskRun(
+        task_id=8,
+        task_type="index_history_batch",
+        state="running",
+        progress_done=0,
+        progress_total=49,
+        progress_detail="",
+        result_json=None,
+        error_message=None,
+        started_at="2026-07-12 10:00:00",
+        finished_at=None,
+        updated_at="2026-07-12 10:00:00",
+    )
+
+    class FakeRunner:
+        def __init__(self):
+            self.calls = []
+
+        def start(self, through):
+            self.calls.append(through)
+            return run
+
+    class FakeContainer:
+        def clear(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeElement:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def classes(self, value):
+            return self
+
+        def props(self, value):
+            return self
+
+    class FakeUi:
+        def row(self):
+            return FakeElement()
+
+        def column(self):
+            return FakeElement()
+
+        def icon(self, name):
+            return FakeElement()
+
+        def badge(self, text):
+            return FakeElement()
+
+        def label(self, text):
+            return FakeElement()
+
+        def linear_progress(self, value=0):
+            return FakeElement()
+
+        def notify(self, message, type=None):
+            events.append((message, type))
+
+    runner = FakeRunner()
+    task_status = maintenance.MaintenanceTaskStatus()
+    monkeypatch.setattr(maintenance, "ui", FakeUi())
+
+    maintenance._start_persisted_index_history_batch(runner, "2026-07-10", FakeContainer(), task_status)
+
+    assert runner.calls == ["2026-07-10"]
+    assert task_status.title == "补齐全部指数历史"
+    assert task_status.state == "running"
+    assert events == [("补齐全部指数历史正在执行，请稍候...", "info")]
+
+
+def test_persisted_index_timer_does_not_replace_another_active_task(monkeypatch):
+    from etf_trading.nicegui_app.pages import maintenance
+
+    run = MaintenanceTaskRun(
+        task_id=9,
+        task_type="index_history_batch",
+        state="success",
+        progress_done=49,
+        progress_total=49,
+        progress_detail="H30533 STALE",
+        result_json="[]",
+        error_message=None,
+        started_at="2026-07-12 10:00:00",
+        finished_at="2026-07-12 10:05:00",
+        updated_at="2026-07-12 10:05:00",
+    )
+    callbacks = []
+    captured = []
+
+    class FakeRunner:
+        def __init__(self, store, parquet_store):
+            return None
+
+        def reconcile_interrupted(self):
+            return None
+
+        def latest(self):
+            return run
+
+    class FakeElement:
+        def classes(self, value):
+            return self
+
+    class FakeUi:
+        def column(self):
+            return FakeElement()
+
+        def timer(self, interval, callback, immediate=False):
+            callbacks.append(callback)
+            return FakeElement()
+
+        def label(self, text):
+            return FakeElement()
+
+    active_task = maintenance.MaintenanceTaskStatus(
+        state="running",
+        title="active-etf-task",
+        message="working",
+    )
+    monkeypatch.setattr(maintenance, "ui", FakeUi())
+    monkeypatch.setattr(maintenance, "IndexHistoryBatchRunner", FakeRunner)
+    monkeypatch.setattr(maintenance, "_render_task_center", lambda container, status: captured.append(status.title))
+    monkeypatch.setattr(maintenance, "_render_master_tasks", lambda *args: None)
+    def render_active_etf_task(*args):
+        args[4].__dict__.update(active_task.__dict__)
+        maintenance._render_task_center(args[3], args[4])
+
+    monkeypatch.setattr(maintenance, "_render_etf_history_tasks", render_active_etf_task)
+    monkeypatch.setattr(maintenance, "_render_index_history_tasks", lambda *args: None)
+    monkeypatch.setattr(maintenance, "_render_batch_tasks", lambda *args: None)
+
+    maintenance._render_tasks(object(), object(), object())
+    callbacks[0]()
+
+    assert captured[-1] == "active-etf-task"

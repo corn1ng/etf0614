@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -11,8 +12,10 @@ from nicegui import run, ui
 from etf_trading.data.indexes import index_options
 from etf_trading.data.initialization import EtfHistoryProgress, InitializationService
 from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.storage import MaintenanceTaskRun
 from etf_trading.nicegui_app.components.alerts import empty_state
-from etf_trading.nicegui_app.components.tables import render_table
+from etf_trading.nicegui_app.components.tables import VALUE_LABELS, render_table
+from etf_trading.nicegui_app.maintenance_tasks import IndexHistoryBatchRunner
 from etf_trading.nicegui_app.state import invalidate_snapshot_cache
 from etf_trading.nicegui_app.view_models import (
     PlatformSnapshot,
@@ -25,6 +28,7 @@ from etf_trading.nicegui_app.view_models import (
 
 SAMPLE_CATEGORIES = ["A股宽基", "A股行业", "港股宽基", "港股科技", "港股医药", "商品", "债券"]
 EtfHistoryProgressView = EtfHistoryProgress
+INDEX_HISTORY_BATCH_TASK_TITLE = "补齐全部指数历史"
 
 
 @dataclass
@@ -47,6 +51,7 @@ def _task_state_label(state: str) -> str:
         "running": "运行中",
         "success": "成功",
         "failed": "失败",
+        "interrupted": "已中断",
         "cancelled": "取消",
     }.get(state, "空闲")
 
@@ -57,12 +62,67 @@ def _task_state_tone(state: str) -> str:
         "running": "info",
         "success": "success",
         "failed": "danger",
+        "interrupted": "warning",
         "cancelled": "warning",
     }.get(state, "neutral")
 
 
 def _format_task_time(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value is not None else ""
+
+
+def _task_status_from_run(run: MaintenanceTaskRun) -> MaintenanceTaskStatus:
+    result = json.loads(run.result_json) if run.result_json else None
+    title = INDEX_HISTORY_BATCH_TASK_TITLE
+    if run.state == "success":
+        message = _index_history_batch_message(result or [])
+        error = ""
+    elif run.state == "running":
+        message = f"{title}正在执行，请稍候..."
+        error = ""
+    else:
+        message = run.error_message or "任务没有返回结果，请稍后重试。"
+        error = run.error_message or ""
+    return MaintenanceTaskStatus(
+        title=title,
+        state=run.state,
+        message=message,
+        started_at=_parse_task_time(run.started_at),
+        finished_at=_parse_task_time(run.finished_at),
+        result=result,
+        error=error,
+        progress_done=run.progress_done,
+        progress_total=run.progress_total,
+        progress_detail=_task_progress_detail_label(run.progress_detail),
+    )
+
+
+def _parse_task_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _task_progress_detail_label(detail: str) -> str:
+    code, separator, status = detail.rpartition(" ")
+    if not separator:
+        return detail
+    return f"{code} {VALUE_LABELS.get(status, status)}"
+
+
+def _index_history_batch_message(rows: list[dict[str, object]]) -> str:
+    statuses = pd.Series([str(row.get("status", "")) for row in rows], dtype=str)
+    completed = int(statuses.isin(["INITIALIZED", "UPDATED"]).sum())
+    skipped = int((statuses == "SKIPPED").sum())
+    stale = int((statuses == "STALE").sum())
+    failed_or_empty = int(statuses.isin(["FAILED", "EMPTY"]).sum())
+    return (
+        f"已检查 {len(rows)} 个指数：补齐 {completed}，跳过 {skipped}，"
+        f"行情仍滞后 {stale}，失败/无数据 {failed_or_empty}"
+    )
 
 
 def _render_task_center(container, status: MaintenanceTaskStatus) -> None:
@@ -100,7 +160,7 @@ def _render_task_center(container, status: MaintenanceTaskStatus) -> None:
             if status.state == "success" and status.result is not None:
                 with ui.column().classes("workbench-task-center-result w-full"):
                     _render_task_result(status.result)
-            elif status.state == "failed" and status.error:
+            elif status.state in {"failed", "interrupted"} and status.error:
                 ui.label(status.error).classes("text-xs text-red-700")
             elif status.state == "cancelled":
                 ui.label("任务没有返回结果，请稍后重试。").classes("text-xs text-amber-700")
@@ -155,12 +215,30 @@ def _render_gap_detail(snapshot: PlatformSnapshot) -> None:
 
 
 def _render_tasks(snapshot: PlatformSnapshot, store, parquet_store) -> None:
-    task_status = MaintenanceTaskStatus()
+    index_runner = IndexHistoryBatchRunner(store, parquet_store)
+    index_runner.reconcile_interrupted()
+    persisted_run = index_runner.latest()
+    task_status = _task_status_from_run(persisted_run) if persisted_run is not None else MaintenanceTaskStatus()
     task_center = ui.column().classes("w-full")
     _render_task_center(task_center, task_status)
+
+    def refresh_persisted_index_task() -> None:
+        if task_status.state != "idle" and task_status.title != INDEX_HISTORY_BATCH_TASK_TITLE:
+            return
+        run = index_runner.latest()
+        if run is None:
+            return
+        restored = _task_status_from_run(run)
+        task_status.__dict__.update(restored.__dict__)
+        _render_task_center(task_center, task_status)
+
+    timer_factory = getattr(ui, "timer", None)
+    if timer_factory is not None:
+        timer_factory(1.0, refresh_persisted_index_task, immediate=False)
+
     _render_master_tasks(store, parquet_store, task_center, task_status)
     _render_etf_history_tasks(snapshot, store, parquet_store, task_center, task_status)
-    _render_index_history_tasks(store, parquet_store, task_center, task_status)
+    _render_index_history_tasks(store, parquet_store, task_center, task_status, index_runner)
     _render_batch_tasks(store, parquet_store, task_center, task_status)
     ui.label("补齐任务只在点击后执行，避免打开页面自动触发耗时操作。").classes("text-xs text-slate-500")
 
@@ -243,7 +321,7 @@ def _render_etf_history_tasks(snapshot: PlatformSnapshot, store, parquet_store, 
         ui.label("全量补齐会跳过已新鲜的本地 ETF 历史；中断后再次点击会从缺失或滞后的 ETF 继续。").classes("text-xs text-slate-500")
 
 
-def _render_index_history_tasks(store, parquet_store, task_center, task_status: MaintenanceTaskStatus) -> None:
+def _render_index_history_tasks(store, parquet_store, task_center, task_status: MaintenanceTaskStatus, index_runner: IndexHistoryBatchRunner) -> None:
     options = index_options()
     end = date.today().isoformat()
     with ui.expansion("指数历史", icon="stacked_line_chart").classes("workbench-task-panel w-full"):
@@ -265,16 +343,27 @@ def _render_index_history_tasks(store, parquet_store, task_center, task_status: 
             fetch_all_button = ui.button(
                 "一键初始化/补齐全部指数",
                 icon="sync",
-                on_click=lambda: _run_task(
-                    fetch_all_button,
+                on_click=lambda: _start_persisted_index_history_batch(
+                    index_runner,
+                    str(end_input.value or end),
                     task_center,
                     task_status,
-                    "补齐全部指数历史",
-                    lambda: _service_with_provider(store, parquet_store).ensure_all_index_history(str(end_input.value or end)),
-                    lambda result: f"已检查 {len(result)} 个指数",
                 ),
             ).props("dense outline")
         ui.label("单个指数失败不会中断全部指数补齐。").classes("text-xs text-slate-500")
+
+
+def _start_persisted_index_history_batch(
+    runner: IndexHistoryBatchRunner,
+    through: str,
+    task_center,
+    task_status: MaintenanceTaskStatus,
+) -> None:
+    run = runner.start(through)
+    restored = _task_status_from_run(run)
+    task_status.__dict__.update(restored.__dict__)
+    _render_task_center(task_center, task_status)
+    ui.notify(task_status.message, type="info")
 
 
 def _render_batch_tasks(store, parquet_store, task_center, task_status: MaintenanceTaskStatus) -> None:
