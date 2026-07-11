@@ -3,6 +3,39 @@ from datetime import datetime
 import pandas as pd
 
 
+def test_index_trend_summary_exposes_chinese_data_status_and_trading_day_lag():
+    from etf_trading.data.indexes import IndexDefinition
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    class FakeParquetStore:
+        def read_index_prices(self, index_code: str) -> pd.DataFrame:
+            dates = pd.bdate_range(end="2026-07-03", periods=300)
+            close = pd.Series(range(300), dtype=float) + 100.0
+            return pd.DataFrame(
+                {
+                    "index_code": index_code,
+                    "trade_date": dates,
+                    "open": close,
+                    "high": close + 1.0,
+                    "low": close - 1.0,
+                    "close": close,
+                    "volume": 1_000,
+                    "amount": 1_000_000,
+                }
+            )
+
+    definition = IndexDefinition("000300", "沪深300", "A股", "A股宽基", "000300")
+    summary = build_index_trend_summary(
+        FakeParquetStore(),
+        definitions=(definition,),
+        today=pd.Timestamp("2026-07-10"),
+    )
+
+    assert summary.loc[0, "data_status"] == "行情滞后"
+    assert summary.loc[0, "expected_trade_date"] == "2026-07-10"
+    assert summary.loc[0, "trading_day_lag"] == 5
+
+
 def test_nicegui_app_factory_imports_without_running_server():
     from etf_trading.nicegui_app.main import create_app, run
 

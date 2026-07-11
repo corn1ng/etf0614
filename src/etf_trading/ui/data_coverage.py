@@ -7,6 +7,15 @@ from typing import Any
 
 import pandas as pd
 
+from etf_trading.data.quality import (
+    HistoryReadiness,
+    assess_price_history,
+    expected_latest_trade_date,
+    history_readiness_label,
+    read_failed_assessment,
+    trading_day_lag,
+)
+
 
 ETF_OVERVIEW_COLUMNS = [
     "ETF代码",
@@ -62,21 +71,14 @@ CONFIDENCE_NAMES = {
 }
 
 
-def expected_latest_trade_date(today: date | pd.Timestamp | None = None) -> pd.Timestamp:
-    """Return the latest expected local trading date using business-day approximation."""
-
-    current = pd.Timestamp(date.today() if today is None else today).normalize()
-    while current.weekday() >= 5:
-        current = current - pd.Timedelta(days=1)
-    return current
-
-
 def build_etf_data_overview(
     master: pd.DataFrame,
     watchlist: pd.DataFrame,
     parquet_store: Any,
     universe: pd.DataFrame,
     min_history_rows: int = 252,
+    today: date | pd.Timestamp | None = None,
+    holidays: tuple[date | pd.Timestamp | str, ...] = (),
 ) -> pd.DataFrame:
     """Build the business-facing ETF overview table."""
 
@@ -86,13 +88,14 @@ def build_etf_data_overview(
     normalized_master = _normalize_master(master)
     watchlist_map = _watchlist_map(watchlist)
     universe_map = _universe_map(universe)
+    expected = expected_latest_trade_date(today, holidays)
     rows: list[dict[str, object]] = []
 
     for item in normalized_master.to_dict("records"):
         code = str(item["etf_code"])
         watchlist_item = watchlist_map.get(code, {})
         universe_item = universe_map.get(code, {})
-        history = _read_history_profile(parquet_store, code, min_history_rows)
+        history = _read_history_profile(parquet_store, code, min_history_rows, expected, holidays)
         is_top_sample = bool(universe_item.get("is_top_sample", False))
         rows.append(
             {
@@ -126,10 +129,11 @@ def build_data_gap_detail(
     parquet_store: Any,
     today: date | pd.Timestamp | None = None,
     min_history_rows: int = 252,
+    holidays: tuple[date | pd.Timestamp | str, ...] = (),
 ) -> pd.DataFrame:
     """Build the global data-maintenance gap table."""
 
-    expected = expected_latest_trade_date(today)
+    expected = expected_latest_trade_date(today, holidays)
     expected_text = expected.strftime("%Y-%m-%d")
     rows: list[dict[str, object]] = []
 
@@ -150,7 +154,7 @@ def build_data_gap_detail(
     else:
         for item in _normalize_master(master).to_dict("records"):
             code = str(item["etf_code"])
-            history = _read_history_profile(parquet_store, code, min_history_rows)
+            history = _read_history_profile(parquet_store, code, min_history_rows, expected, holidays)
             status = _maintenance_history_status(history, expected)
             if status:
                 rows.append(
@@ -160,7 +164,7 @@ def build_data_gap_detail(
                         name=str(item["name"]),
                         latest_date=history["latest_date"],
                         expected_date=expected_text,
-                        missing_days=_missing_days_value(history["latest_date"], expected),
+                        missing_days=history["missing_days"],
                         rows=int(history["rows"]),
                         status=status,
                         suggestion=_repair_suggestion("ETF历史", status),
@@ -288,19 +292,29 @@ def _normalize_index_summary(index_summary: pd.DataFrame) -> pd.DataFrame:
     return frame[["index_code", "index_name", "latest_date", "history_rows"]]
 
 
-def _read_history_profile(parquet_store: Any, code: str, min_history_rows: int) -> dict[str, object]:
+def _read_history_profile(
+    parquet_store: Any,
+    code: str,
+    min_history_rows: int,
+    expected: pd.Timestamp,
+    holidays: tuple[date | pd.Timestamp | str, ...] = (),
+) -> dict[str, object]:
     try:
         prices = parquet_store.read_prices(code)
     except Exception:  # noqa: BLE001 - one broken file should not break the whole table
-        return {"status": "读取失败", "rows": 0, "latest_date": ""}
+        assessment = read_failed_assessment(expected)
+    else:
+        assessment = assess_price_history(prices, expected, min_history_rows, holidays)
 
-    if prices.empty:
-        return {"status": "缺失", "rows": 0, "latest_date": ""}
-
-    rows = int(len(prices))
-    latest_date = _latest_date_text(prices)
-    status = "已就绪" if rows >= min_history_rows else "历史不足"
-    return {"status": status, "rows": rows, "latest_date": latest_date}
+    return {
+        "readiness": assessment.readiness.value,
+        "status": history_readiness_label(assessment.readiness),
+        "rows": assessment.history_rows,
+        "latest_date": assessment.latest_trade_date,
+        "expected_date": assessment.expected_trade_date,
+        "missing_days": "" if assessment.trading_day_lag is None else assessment.trading_day_lag,
+        "reason_codes": "、".join(assessment.reason_codes),
+    }
 
 
 def _latest_date_text(frame: pd.DataFrame) -> str:
@@ -314,9 +328,7 @@ def _latest_date_text(frame: pd.DataFrame) -> str:
 
 def _etf_status_note(history: dict[str, object], item: dict[str, object], universe_item: dict[str, object]) -> str:
     status = str(history["status"])
-    if status == "缺失":
-        return "未拉历史"
-    if status in {"读取失败", "历史不足"}:
+    if status != "数据可用":
         return status
     if not str(item.get("tracking_index", "")).strip() and not universe_item:
         return "未匹配指数"
@@ -326,36 +338,27 @@ def _etf_status_note(history: dict[str, object], item: dict[str, object], univer
 
 
 def _maintenance_history_status(history: dict[str, object], expected: pd.Timestamp) -> str:
-    status = str(history["status"])
-    if status == "缺失":
-        return "未初始化"
-    if status == "读取失败":
-        return "读取失败"
-    if status == "历史不足":
-        return "历史不足"
-    if _missing_days_value(history["latest_date"], expected) > 0:
-        return "缺少"
-    return ""
+    del expected
+    return "" if history.get("readiness") == HistoryReadiness.READY.value else str(history["status"])
 
 
 def _maintenance_index_status(item: dict[str, object], expected: pd.Timestamp, min_history_rows: int) -> str:
+    data_status = str(item.get("data_status", "")).strip()
+    if data_status:
+        return "" if data_status == "数据可用" else data_status
     rows = int(item["history_rows"])
     if rows <= 0:
-        return "未初始化"
+        return "历史缺失"
     if rows < min_history_rows:
         return "历史不足"
     if _missing_days_value(item["latest_date"], expected) > 0:
-        return "缺少"
+        return "行情滞后"
     return ""
 
 
 def _missing_days_value(latest_date: object, expected: pd.Timestamp) -> int | str:
-    latest = _parse_date(latest_date)
-    if latest is None:
-        return ""
-    if latest >= expected:
-        return 0
-    return int(len(pd.bdate_range(start=latest + pd.Timedelta(days=1), end=expected)))
+    lag = trading_day_lag(latest_date, expected)
+    return "" if lag is None else lag
 
 
 def _parse_date(value: object) -> pd.Timestamp | None:
@@ -398,8 +401,8 @@ def _gap_row(
 def _summary_row(data_type: str, total: int, gaps: pd.DataFrame) -> dict[str, object]:
     data_gaps = gaps[gaps["数据类型"] == data_type] if not gaps.empty and "数据类型" in gaps.columns else pd.DataFrame()
     statuses = data_gaps["状态"].fillna("").astype(str) if not data_gaps.empty and "状态" in data_gaps.columns else pd.Series(dtype=str)
-    missing = int((statuses == "未初始化").sum())
-    stale = int((statuses == "缺少").sum())
+    missing = int((statuses == "历史缺失").sum())
+    stale = int((statuses == "行情滞后").sum())
     short = int((statuses == "历史不足").sum())
     failed = int((statuses == "读取失败").sum())
     issue_count = missing + stale + short + failed

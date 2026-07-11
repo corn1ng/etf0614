@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 import hashlib
 import json
 import os
@@ -16,6 +16,12 @@ import time
 import pandas as pd
 
 from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
+from etf_trading.data.quality import (
+    assess_price_history,
+    expected_latest_trade_date,
+    history_readiness_label,
+    read_failed_assessment,
+)
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.research.atomic_indicators import ATOMIC_INDICATOR_COLUMNS, build_etf_atomic_indicator_snapshot
 from etf_trading.research.index_health_snapshot import (
@@ -622,8 +628,12 @@ def _index_health_cache_safe_frame(
 def build_index_trend_summary(
     parquet_store: ParquetStore,
     definitions: tuple[IndexDefinition, ...] = DEFAULT_INDEXES,
+    *,
+    today: date | pd.Timestamp | None = None,
+    holidays: tuple[date | pd.Timestamp | str, ...] = (),
 ) -> pd.DataFrame:
     classifier = TrendRegimeClassifier()
+    expected = expected_latest_trade_date(today, holidays)
     rows: list[dict[str, object]] = []
     for definition in definitions:
         row = {
@@ -637,8 +647,34 @@ def build_index_trend_summary(
             "allows_new_position": False,
             "latest_date": "",
             "history_rows": 0,
+            "data_status": "历史缺失",
+            "expected_trade_date": expected.strftime("%Y-%m-%d"),
+            "trading_day_lag": pd.NA,
         }
-        prices = parquet_store.read_index_prices(definition.index_code)
+        try:
+            prices = parquet_store.read_index_prices(definition.index_code)
+        except Exception:  # noqa: BLE001 - one unreadable index must not break the full market snapshot
+            assessment = read_failed_assessment(expected)
+            row.update(
+                {
+                    "data_status": history_readiness_label(assessment.readiness),
+                    "expected_trade_date": assessment.expected_trade_date,
+                    "trading_day_lag": pd.NA,
+                }
+            )
+            rows.append(row)
+            continue
+
+        assessment = assess_price_history(prices, expected, min_history_rows=252, holidays=holidays)
+        row.update(
+            {
+                "latest_date": assessment.latest_trade_date,
+                "history_rows": assessment.history_rows,
+                "data_status": history_readiness_label(assessment.readiness),
+                "expected_trade_date": assessment.expected_trade_date,
+                "trading_day_lag": assessment.trading_day_lag if assessment.trading_day_lag is not None else pd.NA,
+            }
+        )
         if prices.empty:
             rows.append(row)
             continue
@@ -656,8 +692,6 @@ def build_index_trend_summary(
                 "medium_trend": regime.medium_trend,
                 "small_trend": regime.small_trend,
                 "allows_new_position": bool(regime.allows_new_position),
-                "latest_date": pd.Timestamp(last["trade_date"]).strftime("%Y-%m-%d"),
-                "history_rows": int(len(featured)),
             }
         )
         rows.append(row)
