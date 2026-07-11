@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 *.egg-info/
 .superpowers/
+.worktrees/
 
 /data/
 /database/*.sqlite

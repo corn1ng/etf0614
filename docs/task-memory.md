@@ -15,6 +15,13 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - ...
 ```
 
+## 2026-07-11 - Prepare isolated data-trust-layer worktree
+
+- Summary: Added the project-local `.worktrees/` ignore rule so the forthcoming data-trust-layer refactor can run in an isolated Git worktree without tracking its files.
+- Verification: `git check-ignore -v .worktrees/data-trust-layer` identifies the new ignore rule.
+- Watch out next time:
+  - Keep feature worktrees under the ignored `.worktrees/` directory so active local changes remain isolated.
+
 ## 2026-07-05 - Add task memory convention
 
 - Summary: Added a project-level memory file and updated `AGENTS.md` so future Codex tasks read and update it.
