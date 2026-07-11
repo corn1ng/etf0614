@@ -50,6 +50,42 @@ class _FailingMasterRefreshProvider(_FakeEtfBatchProvider):
         raise RuntimeError("master unavailable")
 
 
+class _EmptyIndexProvider(_FakeEtfBatchProvider):
+    def fetch_index_daily(self, code, start_date, end_date) -> pd.DataFrame:
+        return pd.DataFrame(columns=["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount"])
+
+
+class _IndexProvider(_FakeEtfBatchProvider):
+    def fetch_index_daily(self, code, start_date, end_date) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "index_code": [code],
+                "trade_date": pd.to_datetime(["2026-07-10"]),
+                "open": [1.0],
+                "high": [1.1],
+                "low": [0.9],
+                "close": [1.05],
+                "volume": [1000],
+                "amount": [10000],
+            }
+        )
+
+
+def _index_prices_through(code: str, end_date: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "index_code": [code],
+            "trade_date": pd.to_datetime([end_date]),
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.05],
+            "volume": [1000],
+            "amount": [10000],
+        }
+    )
+
+
 def _fresh_etf_history(code: str) -> pd.DataFrame:
     frame = pd.DataFrame(
         {
@@ -166,6 +202,49 @@ def test_initialization_service_creates_history_jobs_for_all_master_etfs(tmp_pat
         jobs = pd.read_sql_query("SELECT job_type, asset_code, start_date, end_date FROM data_fetch_job ORDER BY asset_code", conn)
     assert jobs["asset_code"].tolist() == ["510300", "512880"]
     assert jobs["job_type"].tolist() == ["history", "history"]
+
+
+def test_ensure_index_history_marks_existing_history_stale_when_provider_returns_no_new_dates(tmp_path):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    parquet = ParquetStore(tmp_path / "parquet")
+    store.initialize_schema()
+    parquet.write_index_prices("000300", _index_prices_through("000300", "2026-07-01"))
+    service = InitializationService(store, provider=_EmptyIndexProvider(), parquet_store=parquet)
+
+    result = service.ensure_index_history("000300", "2026-07-10")
+
+    assert result.status == "STALE"
+    with store.connect() as conn:
+        state = pd.read_sql_query(
+            "SELECT status, error_message FROM data_update_state WHERE dataset='index_daily_price' AND asset_code='000300'",
+            conn,
+        ).iloc[0]
+    assert state["status"] == "STALE"
+    assert "2026-07-01" in state["error_message"]
+    assert "2026-07-10" in state["error_message"]
+
+
+def test_ensure_all_index_history_reports_each_index_progress(tmp_path):
+    progress = []
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    service = InitializationService(
+        store,
+        provider=_IndexProvider(),
+        parquet_store=ParquetStore(tmp_path / "parquet"),
+    )
+
+    result = service.ensure_all_index_history(
+        "2026-07-10",
+        index_codes=["000300", "000905"],
+        on_progress=progress.append,
+    )
+
+    assert result["index_code"].tolist() == ["000300", "000905"]
+    assert [(item.done, item.total, item.index_code) for item in progress] == [
+        (1, 2, "000300"),
+        (2, 2, "000905"),
+    ]
 
 
 def test_ensure_all_etf_history_skips_fresh_fetches_missing_and_reports_progress(tmp_path):

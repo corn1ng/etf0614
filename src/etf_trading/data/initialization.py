@@ -11,6 +11,7 @@ import pandas as pd
 
 from etf_trading.data.indexes import DEFAULT_INDEXES, INDEX_HISTORY_AUTO_START
 from etf_trading.data.provider import DataProvider
+from etf_trading.data.quality import expected_latest_trade_date
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.strategy.features import add_technical_features
 
@@ -47,6 +48,14 @@ class IndexHistoryResult:
     start_date: date | None = None
     end_date: date | None = None
     error_message: str | None = None
+
+
+@dataclass(frozen=True)
+class IndexHistoryProgress:
+    done: int
+    total: int
+    index_code: str
+    status: str
 
 
 @dataclass(frozen=True)
@@ -225,6 +234,7 @@ class InitializationService:
             raise ValueError("provider is required to fetch index history")
 
         through_date = pd.Timestamp(through).date()
+        expected_date = expected_latest_trade_date(through_date).date()
         existing = self.parquet_store.read_index_prices(index_code)
 
         if existing.empty:
@@ -233,7 +243,7 @@ class InitializationService:
         else:
             existing = _normalize_existing_index_frame(existing, index_code)
             last_date = pd.Timestamp(existing["trade_date"].max()).date()
-            if last_date >= through_date:
+            if last_date >= expected_date:
                 self.store.upsert_update_state("index_daily_price", index_code, last_date.isoformat(), status="SUCCESS")
                 return IndexHistoryResult(
                     index_code=index_code,
@@ -248,6 +258,8 @@ class InitializationService:
 
         fetched = self.provider.fetch_index_daily(index_code, fetch_start, through_date)
         fetched_rows = len(fetched)
+        if fetched.empty and not existing.empty:
+            return self._stale_index_result(index_code, existing, expected_date, fetched_rows)
         if existing.empty:
             combined = fetched
         else:
@@ -262,6 +274,8 @@ class InitializationService:
 
         first_date = pd.Timestamp(featured["trade_date"].min()).date()
         last_date = pd.Timestamp(featured["trade_date"].max()).date()
+        if last_date < expected_date:
+            return self._stale_index_result(index_code, featured, expected_date, fetched_rows)
         self.store.upsert_update_state("index_daily_price", index_code, last_date.isoformat(), status="SUCCESS")
         return IndexHistoryResult(
             index_code=index_code,
@@ -272,23 +286,58 @@ class InitializationService:
             end_date=last_date,
         )
 
-    def ensure_all_index_history(self, through: date | str, index_codes: list[str] | None = None) -> pd.DataFrame:
+    def _stale_index_result(
+        self,
+        index_code: str,
+        frame: pd.DataFrame,
+        expected_date: date,
+        fetched_rows: int,
+    ) -> IndexHistoryResult:
+        first_date = pd.Timestamp(frame["trade_date"].min()).date()
+        last_date = pd.Timestamp(frame["trade_date"].max()).date()
+        message = f"本地最新交易日 {last_date.isoformat()}，未达到目标交易日 {expected_date.isoformat()}"
+        self.store.upsert_update_state(
+            "index_daily_price",
+            index_code,
+            last_date.isoformat(),
+            status="STALE",
+            error_message=message,
+        )
+        return IndexHistoryResult(
+            index_code=index_code,
+            status="STALE",
+            fetched_rows=fetched_rows,
+            total_rows=len(frame),
+            start_date=first_date,
+            end_date=last_date,
+            error_message=message,
+        )
+
+    def ensure_all_index_history(
+        self,
+        through: date | str,
+        index_codes: list[str] | None = None,
+        *,
+        on_progress: Callable[[IndexHistoryProgress], None] | None = None,
+    ) -> pd.DataFrame:
         codes = index_codes or [item.index_code for item in DEFAULT_INDEXES]
         results: list[IndexHistoryResult] = []
-        for index_code in codes:
+        total = len(codes)
+        for done, index_code in enumerate(codes, start=1):
             try:
-                results.append(self.ensure_index_history(index_code, through))
+                result = self.ensure_index_history(index_code, through)
             except Exception as exc:  # noqa: BLE001 - one failed index must not block the whole batch
                 self.store.upsert_update_state("index_daily_price", index_code, None, status="FAILED", error_message=str(exc))
-                results.append(
-                    IndexHistoryResult(
-                        index_code=index_code,
-                        status="FAILED",
-                        fetched_rows=0,
-                        total_rows=0,
-                        error_message=str(exc),
-                    )
+                result = IndexHistoryResult(
+                    index_code=index_code,
+                    status="FAILED",
+                    fetched_rows=0,
+                    total_rows=0,
+                    error_message=str(exc),
                 )
+            results.append(result)
+            if on_progress is not None:
+                on_progress(IndexHistoryProgress(done=done, total=total, index_code=index_code, status=result.status))
         return pd.DataFrame([result.__dict__ for result in results])
 
 
