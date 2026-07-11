@@ -100,6 +100,31 @@ def test_sqlite_store_persists_etf_master_and_watchlist(tmp_path):
     assert watchlist.iloc[0]["allow_buy"] == 1
 
 
+def test_maintenance_task_run_persists_progress_result_and_interruption(tmp_path):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+
+    created = store.create_maintenance_task_run("index_history_batch", progress_total=49)
+    store.update_maintenance_task_run(
+        created.task_id,
+        progress_done=12,
+        progress_detail="930633 STALE",
+        state="running",
+    )
+    running = store.get_running_maintenance_task_run("index_history_batch")
+
+    assert running is not None
+    assert running.progress_done == 12
+    assert running.progress_detail == "930633 STALE"
+
+    store.mark_maintenance_task_interrupted(created.task_id, "服务器已重启")
+    interrupted = store.get_maintenance_task_run(created.task_id)
+
+    assert interrupted is not None
+    assert interrupted.state == "interrupted"
+    assert interrupted.error_message == "服务器已重启"
+
+
 def test_initialization_service_selects_one_sample_per_required_category(tmp_path):
     store = SQLiteStore(tmp_path / "etf.sqlite")
     store.initialize_schema()

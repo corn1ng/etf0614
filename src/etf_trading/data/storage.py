@@ -3,9 +3,25 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+
+
+@dataclass(frozen=True)
+class MaintenanceTaskRun:
+    task_id: int
+    task_type: str
+    state: str
+    progress_done: int
+    progress_total: int
+    progress_detail: str
+    result_json: str | None
+    error_message: str | None
+    started_at: str
+    finished_at: str | None
+    updated_at: str
 
 
 class SQLiteStore:
@@ -67,6 +83,23 @@ class SQLiteStore:
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS maintenance_task_run (
+                    task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_type TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'running',
+                    progress_done INTEGER NOT NULL DEFAULT 0,
+                    progress_total INTEGER NOT NULL DEFAULT 0,
+                    progress_detail TEXT NOT NULL DEFAULT '',
+                    result_json TEXT,
+                    error_message TEXT,
+                    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_maintenance_task_run_type_time
+                    ON maintenance_task_run(task_type, task_id DESC);
 
                 CREATE TABLE IF NOT EXISTS strategy_signal (
                     etf_code TEXT NOT NULL,
@@ -188,6 +221,98 @@ class SQLiteStore:
                 """,
                 (job_type, asset_code, start_date, end_date),
             )
+
+    def create_maintenance_task_run(self, task_type: str, *, progress_total: int = 0) -> MaintenanceTaskRun:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO maintenance_task_run (task_type, progress_total)
+                VALUES (?, ?)
+                """,
+                (task_type, progress_total),
+            )
+            task_id = int(cursor.lastrowid)
+        task = self.get_maintenance_task_run(task_id)
+        if task is None:  # pragma: no cover - SQLite insert/read contract
+            raise RuntimeError(f"maintenance task {task_id} was not persisted")
+        return task
+
+    def get_maintenance_task_run(self, task_id: int) -> MaintenanceTaskRun | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM maintenance_task_run WHERE task_id = ?", (task_id,)).fetchone()
+        return _maintenance_task_run_from_row(row)
+
+    def get_latest_maintenance_task_run(self, task_type: str) -> MaintenanceTaskRun | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM maintenance_task_run WHERE task_type = ? ORDER BY task_id DESC LIMIT 1",
+                (task_type,),
+            ).fetchone()
+        return _maintenance_task_run_from_row(row)
+
+    def get_running_maintenance_task_run(self, task_type: str) -> MaintenanceTaskRun | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM maintenance_task_run WHERE task_type = ? AND state = 'running' ORDER BY task_id DESC LIMIT 1",
+                (task_type,),
+            ).fetchone()
+        return _maintenance_task_run_from_row(row)
+
+    def update_maintenance_task_run(
+        self,
+        task_id: int,
+        *,
+        state: str | None = None,
+        progress_done: int | None = None,
+        progress_total: int | None = None,
+        progress_detail: str | None = None,
+        result_json: str | None = None,
+        error_message: str | None = None,
+    ) -> MaintenanceTaskRun:
+        updates: list[str] = []
+        values: list[object] = []
+        for column, value in (
+            ("state", state),
+            ("progress_done", progress_done),
+            ("progress_total", progress_total),
+            ("progress_detail", progress_detail),
+            ("result_json", result_json),
+            ("error_message", error_message),
+        ):
+            if value is not None:
+                updates.append(f"{column} = ?")
+                values.append(value)
+        if state in {"success", "failed", "interrupted"}:
+            updates.append("finished_at = CURRENT_TIMESTAMP")
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        values.append(task_id)
+        with self.connect() as conn:
+            conn.execute(f"UPDATE maintenance_task_run SET {', '.join(updates)} WHERE task_id = ?", values)
+        task = self.get_maintenance_task_run(task_id)
+        if task is None:
+            raise KeyError(f"unknown maintenance task {task_id}")
+        return task
+
+    def mark_maintenance_task_interrupted(self, task_id: int, message: str) -> MaintenanceTaskRun:
+        return self.update_maintenance_task_run(task_id, state="interrupted", error_message=message)
+
+
+def _maintenance_task_run_from_row(row: sqlite3.Row | None) -> MaintenanceTaskRun | None:
+    if row is None:
+        return None
+    return MaintenanceTaskRun(
+        task_id=int(row["task_id"]),
+        task_type=str(row["task_type"]),
+        state=str(row["state"]),
+        progress_done=int(row["progress_done"]),
+        progress_total=int(row["progress_total"]),
+        progress_detail=str(row["progress_detail"] or ""),
+        result_json=row["result_json"],
+        error_message=row["error_message"],
+        started_at=str(row["started_at"]),
+        finished_at=row["finished_at"],
+        updated_at=str(row["updated_at"]),
+    )
 
 
 class ParquetStore:
