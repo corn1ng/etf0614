@@ -86,14 +86,16 @@ def render_ranged_lightweight_chart(
     }
 
     with ui.column().classes("w-full gap-2"):
-        with ui.row().classes("workbench-toolbar w-full justify-between"):
-            ui.label(title).classes("text-sm font-semibold text-slate-700")
+        with ui.row().classes("workbench-chart-header w-full"):
+            with ui.column().classes("workbench-chart-title-group"):
+                ui.label(title).classes("workbench-chart-title")
+                record_area = ui.row().classes("workbench-chart-meta-row")
             ui.toggle(
                 list(CHART_RANGE_PRESETS),
                 value=state["label"],
                 on_change=lambda event: select_range(str(event.value)),
             ).props("dense unelevated no-caps").classes("workbench-range-toggle")
-        custom_area = ui.row().classes("workbench-toolbar w-full justify-end")
+        custom_area = ui.row().classes("workbench-chart-custom-controls w-full")
         chart_area = ui.column().classes("w-full gap-2")
 
     def select_range(label: str) -> None:
@@ -135,7 +137,8 @@ def render_ranged_lightweight_chart(
             )
             if _is_invalid_custom_range(str(state["label"]), str(state["start"] or ""), str(state["end"] or "")):
                 ui.label("开始日期晚于结束日期，已临时按完整区间显示。").classes("workbench-warning-line w-full")
-            with ui.row().classes("workbench-toolbar w-full justify-end"):
+            record_area.clear()
+            with record_area:
                 ui.label(
                     chart_record_label(
                         payload,
@@ -143,7 +146,7 @@ def render_ranged_lightweight_chart(
                         visible_start=visible_start,
                         visible_end=visible_end,
                     )
-                ).classes("text-xs text-slate-500")
+                ).classes("workbench-chart-meta")
             render_lightweight_chart(
                 payload,
                 element_id=element_id,
@@ -216,16 +219,18 @@ def build_echart_options(
         if item.get("type") != "Line":
             continue
         options = item.get("options", {})
+        color = options.get("color", "#2563eb")
         series.append(
             {
                 "name": str(options.get("title") or "均线"),
                 "type": "line",
-                "data": [point.get("value") for point in item.get("data", [])],
+                "data": _line_series_points(item),
                 "xAxisIndex": 0,
                 "yAxisIndex": 0,
                 "showSymbol": False,
                 "smooth": True,
-                "lineStyle": {"width": options.get("lineWidth", 1), "color": options.get("color", "#2563eb")},
+                "lineStyle": {"width": options.get("lineWidth", 1), "color": color},
+                "itemStyle": {"color": color},
             }
         )
 
@@ -364,7 +369,7 @@ def build_static_chart_html(payload: list[dict], element_id: str = "workbench-ch
     if candle:
         svg = _candlestick_svg(candle.get("data", []), height=height)
     elif line:
-        svg = _line_svg(line.get("data", []), height=height)
+        svg = _line_svg(line.get("data", []), height=height, color=line.get("options", {}).get("color", "#2563eb"))
     else:
         svg = _empty_svg(height=height)
     return f'<div id="{safe_id}" class="workbench-chart-panel">{svg}</div>'
@@ -485,7 +490,10 @@ function (params) {
   };
 
   const valueOf = (item) => {
-    if (Array.isArray(item.value)) return item.value[0];
+    if (Array.isArray(item.value)) {
+      if (item.seriesType === "line" && item.value.length >= 2) return item.value[1];
+      return item.value[0];
+    }
     if (item.value && typeof item.value === "object" && "value" in item.value) return item.value.value;
     return item.value;
   };
@@ -561,6 +569,23 @@ def _marker_points(candle: dict) -> dict:
     return {"symbolSize": 42, "data": data} if data else {"data": []}
 
 
+def _line_series_points(item: dict) -> list:
+    data = []
+    for point in item.get("data", []):
+        if not isinstance(point, dict):
+            data.append(point)
+            continue
+        value = point.get("value")
+        if value is None:
+            continue
+        trade_time = point.get("time")
+        if trade_time:
+            data.append([str(trade_time), value])
+        else:
+            data.append(value)
+    return data
+
+
 def _first_series(series: list[dict], kind: str) -> dict | None:
     for item in series:
         if item.get("type") == kind:
@@ -610,7 +635,7 @@ def _candlestick_svg(data: list[dict], height: int) -> str:
     return f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" role="img" aria-label="K线图">{grid}{"".join(shapes)}</svg>'
 
 
-def _line_svg(data: list[dict], height: int) -> str:
+def _line_svg(data: list[dict], height: int, color: str = "#2563eb") -> str:
     points = _sample(data)
     if not points:
         return _empty_svg(height)
@@ -632,7 +657,7 @@ def _line_svg(data: list[dict], height: int) -> str:
     step = (width - pad_x * 2) / max(1, len(points) - 1)
     path = " ".join(f"{'M' if idx == 0 else 'L'} {pad_x + step * idx:.2f} {y(point['value']):.2f}" for idx, point in enumerate(points))
     grid = _grid(width, height, pad_y, chart_h)
-    return f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" role="img" aria-label="走势图">{grid}<path d="{path}" fill="none" stroke="#2563eb" stroke-width="2" /></svg>'
+    return f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" role="img" aria-label="走势图">{grid}<path d="{path}" fill="none" stroke="{escape(str(color), quote=True)}" stroke-width="2" /></svg>'
 
 
 def _empty_svg(height: int) -> str:

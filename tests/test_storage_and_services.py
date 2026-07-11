@@ -1,7 +1,84 @@
 import pandas as pd
 
 from etf_trading.data.initialization import InitializationService
-from etf_trading.data.storage import SQLiteStore
+from etf_trading.data.provider import DataProvider
+from etf_trading.data.storage import ParquetStore, SQLiteStore
+
+
+class _FakeEtfBatchProvider(DataProvider):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object, object]] = []
+
+    def fetch_etf_list(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {"etf_code": "510300", "name": "Fresh ETF", "exchange": "SSE", "category": "core", "is_active": 1},
+                {"etf_code": "512880", "name": "Missing ETF", "exchange": "SSE", "category": "sector", "is_active": 1},
+                {"etf_code": "159915", "name": "Failing ETF", "exchange": "SZSE", "category": "growth", "is_active": 1},
+            ]
+        )
+
+    def fetch_etf_daily(self, code, start_date, end_date, adjust="qfq") -> pd.DataFrame:
+        self.calls.append((code, start_date, end_date))
+        if code == "159915":
+            raise RuntimeError("provider down")
+        return pd.DataFrame(
+            {
+                "etf_code": [code, code],
+                "trade_date": pd.to_datetime(["2026-07-09", "2026-07-10"]),
+                "open": [1.0, 1.1],
+                "high": [1.2, 1.3],
+                "low": [0.9, 1.0],
+                "close": [1.1, 1.2],
+                "volume": [1000, 1100],
+                "amount": [10000, 12000],
+            }
+        )
+
+    def fetch_etf_nav(self, code, start_date, end_date) -> pd.DataFrame:
+        raise NotImplementedError
+
+    def fetch_index_daily(self, code, start_date, end_date) -> pd.DataFrame:
+        raise NotImplementedError
+
+    def fetch_trade_calendar(self, market, start_date, end_date) -> pd.DataFrame:
+        raise NotImplementedError
+
+
+class _FailingMasterRefreshProvider(_FakeEtfBatchProvider):
+    def fetch_etf_list(self) -> pd.DataFrame:
+        raise RuntimeError("master unavailable")
+
+
+def _fresh_etf_history(code: str) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {
+            "etf_code": [code],
+            "trade_date": pd.to_datetime(["2026-07-10"]),
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.05],
+            "volume": [1000],
+            "amount": [10000],
+        }
+    )
+    for column in [
+        "ma20",
+        "ma60",
+        "return_20",
+        "return_60",
+        "avg_amount_5",
+        "avg_amount_20",
+        "amount_ratio_5_20",
+        "atr20",
+        "distance_ma20_atr",
+        "distance_ma20_pct",
+        "rolling_high_close_60",
+    ]:
+        frame[column] = 1.0
+    frame["is_60d_close_breakout"] = False
+    return frame
 
 
 def test_sqlite_store_persists_etf_master_and_watchlist(tmp_path):
@@ -64,3 +141,68 @@ def test_initialization_service_creates_history_jobs_for_all_master_etfs(tmp_pat
         jobs = pd.read_sql_query("SELECT job_type, asset_code, start_date, end_date FROM data_fetch_job ORDER BY asset_code", conn)
     assert jobs["asset_code"].tolist() == ["510300", "512880"]
     assert jobs["job_type"].tolist() == ["history", "history"]
+
+
+def test_ensure_all_etf_history_skips_fresh_fetches_missing_and_reports_progress(tmp_path):
+    provider = _FakeEtfBatchProvider()
+    sqlite_store = SQLiteStore(tmp_path / "etf.sqlite")
+    parquet_store = ParquetStore(tmp_path / "parquet")
+    sqlite_store.initialize_schema()
+    sqlite_store.upsert_etf_master(provider.fetch_etf_list())
+    parquet_store.write_prices("510300", _fresh_etf_history("510300"))
+    service = InitializationService(sqlite_store, provider=provider, parquet_store=parquet_store)
+    progress_events = []
+
+    result = service.ensure_all_etf_history(
+        start_date="2021-07-12",
+        through="2026-07-11",
+        sleep_seconds=0,
+        on_progress=progress_events.append,
+    )
+
+    by_code = result.set_index("etf_code")
+    assert by_code.loc["510300", "status"] == "SKIPPED"
+    assert by_code.loc["510300", "fetched_rows"] == 0
+    assert by_code.loc["512880", "status"] == "INITIALIZED"
+    assert by_code.loc["512880", "fetched_rows"] == 2
+    assert by_code.loc["159915", "status"] == "FAILED"
+    assert "provider down" in by_code.loc["159915", "error_message"]
+    assert provider.calls == [("159915", "2021-07-12", "2026-07-11"), ("512880", "2021-07-12", "2026-07-11")]
+
+    assert [event.done for event in progress_events] == [1, 2, 3]
+    assert [event.total for event in progress_events] == [3, 3, 3]
+    assert {event.status for event in progress_events} == {"SKIPPED", "INITIALIZED", "FAILED"}
+
+    stored = parquet_store.read_prices("512880")
+    assert stored["trade_date"].dt.strftime("%Y-%m-%d").max() == "2026-07-10"
+    with sqlite_store.connect() as conn:
+        states = pd.read_sql_query("SELECT asset_code, status FROM data_update_state ORDER BY asset_code", conn)
+    assert dict(zip(states["asset_code"], states["status"])) == {
+        "159915": "FAILED",
+        "510300": "SUCCESS",
+        "512880": "SUCCESS",
+    }
+
+
+def test_ensure_all_etf_history_uses_local_master_when_refresh_fails(tmp_path):
+    provider = _FailingMasterRefreshProvider()
+    sqlite_store = SQLiteStore(tmp_path / "etf.sqlite")
+    parquet_store = ParquetStore(tmp_path / "parquet")
+    sqlite_store.initialize_schema()
+    sqlite_store.upsert_etf_master(
+        pd.DataFrame(
+            [{"etf_code": "512880", "name": "Local ETF", "exchange": "SSE", "category": "sector", "is_active": 1}]
+        )
+    )
+    service = InitializationService(sqlite_store, provider=provider, parquet_store=parquet_store)
+
+    result = service.ensure_all_etf_history(
+        start_date="2021-07-12",
+        through="2026-07-11",
+        refresh_master=True,
+        sleep_seconds=0,
+    )
+
+    assert result["etf_code"].tolist() == ["512880"]
+    assert result["status"].tolist() == ["INITIALIZED"]
+    assert provider.calls == [("512880", "2021-07-12", "2026-07-11")]

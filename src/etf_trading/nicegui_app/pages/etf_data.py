@@ -4,20 +4,27 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+import pandas as pd
 from nicegui import ui
 
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.charts import render_ranged_lightweight_chart
-from etf_trading.nicegui_app.components.tables import table_columns
-from etf_trading.nicegui_app.state import etf_chart_payload, invalidate_snapshot_cache
+from etf_trading.nicegui_app.components.tables import VALUE_LABELS, render_table
+from etf_trading.nicegui_app.state import etf_chart_payload, invalidate_snapshot_cache, load_atomic_snapshot_cached
 from etf_trading.nicegui_app.view_models import (
+    ATOMIC_VIEW_MODES,
     AtomicIndicatorFilters,
+    AtomicDataHealthItem,
     PlatformSnapshot,
+    atomic_indicator_detail_groups,
+    atomic_indicator_detail_options,
     atomic_indicator_rows,
     atomic_indicator_summary,
-    build_atomic_indicator_snapshot,
+    atomic_data_update_health,
     category_options,
     code_from_option,
+    ATOMIC_FEATURE_STATUS_LABELS,
+    ATOMIC_HISTORY_STATUS_LABELS,
     current_ui_audit_findings,
     etf_category_for_code,
     etf_choice_options,
@@ -47,7 +54,7 @@ def render(snapshot: PlatformSnapshot, section: str, parquet_store=None, store=N
 
 def _render_rows(rows: list[dict[str, object]], empty_title: str) -> None:
     if rows:
-        ui.table(columns=table_columns(rows), rows=rows, pagination=12).classes("workbench-data-table w-full")
+        render_table(rows, pagination=12, ui_module=ui).classes("workbench-data-table w-full")
     else:
         empty_state(empty_title, "先到数据维护初始化主列表或补齐历史。")
 
@@ -58,28 +65,48 @@ def _render_atomic_indicators(snapshot: PlatformSnapshot, parquet_store) -> None
         return
 
     try:
-        frame_holder = {"frame": build_atomic_indicator_snapshot(snapshot, parquet_store)}
+        cache_result = load_atomic_snapshot_cached(snapshot.master, parquet_store)
+        frame_holder = {"frame": cache_result.frame, "result": cache_result}
     except Exception as exc:  # noqa: BLE001 - diagnostics should surface snapshot failures
         empty_state("原子指标生成失败", str(exc))
         return
 
-    metric_area = ui.row().classes("w-full gap-2")
+    status_area = ui.row().classes("w-full")
+    metric_area = ui.row().classes("atomic-metric-strip w-full")
+    health_area = ui.column().classes("w-full")
     categories = _atomic_filter_options(frame_holder["frame"], "category", "全部分类")
     history_statuses = _atomic_filter_options(frame_holder["frame"], "history_status", "全部历史状态")
     feature_statuses = _atomic_filter_options(frame_holder["frame"], "feature_status", "全部特征状态")
+    selected_holder = {"code": ""}
 
-    with ui.row().classes("workbench-toolbar w-full"):
-        query = ui.input("代码 / 名称 / 分类").props("dense outlined clearable debounce=250").classes("w-72")
-        category = ui.select(categories, value=categories[0], label="分类").props("dense outlined").classes("w-40")
-        history_status = ui.select(history_statuses, value=history_statuses[0], label="历史状态").props("dense outlined").classes("w-40")
-        feature_status = ui.select(feature_statuses, value=feature_statuses[0], label="特征状态").props("dense outlined").classes("w-40")
-        min_amount = ui.number("最低20日成交额", value=None, format="%.0f").props("dense outlined clearable").classes("w-40")
-        breakout = ui.checkbox("60日突破", value=False)
-        weekly_ma10 = ui.checkbox("周线>10周", value=False)
-        ui.button("刷新快照", icon="refresh", on_click=lambda: reload_snapshot()).props("dense outline")
-        ui.link("去补齐任务", f"/page/maintenance/{quote('补齐任务', safe='')}").classes("workbench-section-tab")
+    with ui.column().classes("atomic-workbench w-full gap-2"):
+        with ui.row().classes("atomic-workbench-head w-full"):
+            with ui.column().classes("atomic-mode-block gap-1"):
+                ui.label("列表视图").classes("atomic-control-label")
+                view_mode = (
+                    ui.toggle(list(ATOMIC_VIEW_MODES), value=ATOMIC_VIEW_MODES[0])
+                    .props("dense unelevated toggle-color=primary")
+                    .classes("workbench-range-toggle")
+                )
+            with ui.row().classes("atomic-actions"):
+                detail_select = ui.select([], value=None, label="查看详情").props("dense outlined").classes("atomic-detail-select")
+                ui.button("刷新快照", icon="refresh", on_click=lambda: reload_snapshot()).props("dense outline")
+                ui.link("去补齐任务", f"/page/maintenance/{quote(chr(34917) + chr(40784) + chr(20219) + chr(21153), safe='')}").classes("workbench-section-tab")
 
-    result_area = ui.column().classes("w-full gap-2")
+        with ui.row().classes("atomic-filter-bar w-full"):
+            query = ui.input("代码 / 名称 / 分类").props("dense outlined clearable debounce=250").classes("atomic-query-input")
+            category = ui.select(list(categories), value=next(iter(categories)), label="分类").props("dense outlined").classes("atomic-filter-select")
+            history_status = ui.select(list(history_statuses), value=next(iter(history_statuses)), label="历史状态").props("dense outlined").classes("atomic-filter-select")
+            feature_status = ui.select(list(feature_statuses), value=next(iter(feature_statuses)), label="特征状态").props("dense outlined").classes("atomic-filter-select")
+            min_amount = ui.number("最低20日成交额", value=None, format="%.0f").props("dense outlined clearable").classes("atomic-filter-number")
+            breakout = ui.checkbox("60日突破", value=False).classes("atomic-filter-check")
+            weekly_ma10 = ui.checkbox("周线>10周", value=False).classes("atomic-filter-check")
+
+        grid_factory = getattr(ui, "element", None)
+        workbench_grid = grid_factory("div") if callable(grid_factory) else ui.row()
+        with workbench_grid.classes("atomic-workbench-grid w-full"):
+            result_area = ui.column().classes("atomic-table-pane gap-2")
+            detail_area = ui.column().classes("atomic-inspector gap-2")
 
     def render_metrics() -> None:
         metric_area.clear()
@@ -87,36 +114,184 @@ def _render_atomic_indicators(snapshot: PlatformSnapshot, parquet_store) -> None
             for metric in atomic_indicator_summary(frame_holder["frame"]):
                 _metric_tile(metric.label, metric.value, metric.detail, metric.tone)
 
+    def render_cache_status() -> None:
+        status_area.clear()
+        result = frame_holder["result"]
+        if result.status == "ready":
+            return
+        with status_area:
+            if result.status == "stale":
+                ui.label("原子指标快照正在后台刷新，当前先展示上一次缓存。").classes("text-xs text-amber-700")
+            elif result.status == "building":
+                ui.label("原子指标快照正在后台生成，稍后点刷新快照即可查看。").classes("text-xs text-blue-700")
+            elif result.status == "failed":
+                ui.label(f"原子指标后台生成失败：{result.message}").classes("text-xs text-red-700")
+
     def current_filters() -> AtomicIndicatorFilters:
         amount_value = None if min_amount.value in {None, ""} else float(min_amount.value)
         return AtomicIndicatorFilters(
             query=str(query.value or ""),
-            category=str(category.value or "全部分类"),
-            history_status=str(history_status.value or "全部历史状态"),
-            feature_status=str(feature_status.value or "全部特征状态"),
+            category=_atomic_filter_value(categories, str(category.value or "全部分类")),
+            history_status=_atomic_filter_value(history_statuses, str(history_status.value or "全部历史状态")),
+            feature_status=_atomic_filter_value(feature_statuses, str(feature_status.value or "全部特征状态")),
             min_avg_amount_20=amount_value,
             only_breakout=bool(breakout.value),
             only_weekly_ma10=bool(weekly_ma10.value),
         )
 
+    def refresh_filter_options() -> None:
+        def sync_filter(select_control, option_map: dict[str, str], column: str, all_label: str) -> None:
+            updated_options = _atomic_filter_options(frame_holder["frame"], column, all_label)
+            current_label = str(select_control.value or all_label)
+            option_map.clear()
+            option_map.update(updated_options)
+            select_control.options = list(updated_options)
+            select_control.value = current_label if current_label in updated_options else next(iter(updated_options))
+            select_control.update()
+
+        sync_filter(category, categories, "category", "全部分类")
+        sync_filter(history_status, history_statuses, "history_status", "全部历史状态")
+        sync_filter(feature_status, feature_statuses, "feature_status", "全部特征状态")
+
+    def apply_health_filter(item: AtomicDataHealthItem) -> None:
+        if item.count <= 0:
+            return
+        if item.filter_type == "history_status":
+            label = _atomic_filter_label(history_statuses, item.filter_value)
+            if label:
+                history_status.value = label
+                history_status.update()
+                feature_status.value = "全部特征状态"
+                feature_status.update()
+        elif item.filter_type == "feature_status":
+            label = _atomic_filter_label(feature_statuses, item.filter_value)
+            if label:
+                feature_status.value = label
+                feature_status.update()
+                history_status.value = "全部历史状态"
+                history_status.update()
+        refresh_table()
+
+    def render_data_health() -> None:
+        health_area.clear()
+        items = atomic_data_update_health(frame_holder["frame"])
+        issue_total = sum(item.count for item in items)
+        with health_area:
+            with ui.column().classes("atomic-data-health w-full"):
+                with ui.row().classes("atomic-data-health-header w-full"):
+                    ui.icon("monitoring").classes("tone-info")
+                    ui.label("数据更新体检").classes("text-sm font-semibold text-slate-700")
+                    ui.badge("数据就绪" if issue_total == 0 else f"{issue_total} 项需关注").classes(
+                        "atomic-data-health-status is-ready" if issue_total == 0 else "atomic-data-health-status is-warning"
+                    )
+                    if issue_total:
+                        ui.link(
+                            "去补齐任务",
+                            f"/page/maintenance/{quote(chr(34917) + chr(40784) + chr(20219) + chr(21153), safe='')}",
+                        ).classes("workbench-section-tab")
+                ui.label("行情滞后表示本地行情最新交易日落后；补齐后刷新快照即可更新指标。").classes("atomic-data-health-note")
+                with ui.row().classes("atomic-data-health-items"):
+                    for item in items:
+                        if item.count > 0:
+                            ui.button(
+                                f"{item.label} {item.count}",
+                                icon=_atomic_health_icon(item),
+                                on_click=lambda item=item: apply_health_filter(item),
+                            ).props("dense flat").classes(f"atomic-data-health-item tone-{item.tone}")
+                        else:
+                            with ui.row().classes("atomic-data-health-item is-empty"):
+                                ui.icon(_atomic_health_icon(item))
+                                ui.label(f"{item.label} 0")
+                        ui.label(item.detail).classes("atomic-data-health-detail")
+
+    def select_detail(etf_code: str) -> None:
+        if not etf_code:
+            return
+        selected_holder["code"] = etf_code
+        for option in detail_select.options:
+            if code_from_option(option) == etf_code:
+                detail_select.value = option
+                detail_select.update()
+                break
+        render_details()
+
+    def render_details() -> None:
+        detail_area.clear()
+        etf_code = selected_holder["code"]
+        with detail_area:
+            if not etf_code:
+                empty_state("暂无原子指标详情", "请选择一只 ETF 查看完整原子指标。")
+                return
+            groups = atomic_indicator_detail_groups(frame_holder["frame"], etf_code)
+            if not groups:
+                empty_state("暂无原子指标详情", "当前快照中没有这只 ETF。")
+                return
+            ui.label("ETF检查器").classes("atomic-inspector-kicker")
+            ui.label(f"原子指标详情：{etf_code}").classes("atomic-inspector-title")
+            detail_grid_factory = getattr(ui, "element", None)
+            detail_grid = detail_grid_factory("div") if callable(detail_grid_factory) else ui.column()
+            with detail_grid.classes("atomic-detail-grid"):
+                for group in groups:
+                    with ui.column().classes("atomic-detail-group gap-1"):
+                        ui.label(group.title).classes("atomic-detail-group-title")
+                        for row in group.rows:
+                            metric = str(row.get("指标", ""))
+                            value = str(row.get("数值", ""))
+                            with ui.row().classes("atomic-detail-row"):
+                                ui.label(metric).classes("atomic-detail-label")
+                                ui.label(value).classes(f"atomic-detail-value {_atomic_detail_value_tone(metric, value)}")
+
     def refresh_table() -> None:
-        rows = atomic_indicator_rows(frame_holder["frame"], current_filters())
+        filters = current_filters()
+        rows = atomic_indicator_rows(
+            frame_holder["frame"],
+            filters,
+            view_mode=str(view_mode.value or ATOMIC_VIEW_MODES[0]),
+        )
+        options = atomic_indicator_detail_options(frame_holder["frame"], filters)
+        current_code = selected_holder["code"]
+        option_by_code = {code_from_option(option): option for option in options}
+        if not current_code or current_code not in option_by_code:
+            current_code = code_from_option(options[0]) if options else current_code
+            selected_holder["code"] = current_code
+        detail_select.options = options
+        detail_select.value = option_by_code.get(current_code)
+        detail_select.update()
+
         result_area.clear()
         with result_area:
             if rows:
-                ui.table(columns=table_columns(rows), rows=rows, pagination=15).classes("workbench-data-table w-full")
+                render_table(
+                    rows,
+                    row_key="ETF代码",
+                    pagination=15,
+                    compact=True,
+                    ui_module=ui,
+                ).classes("workbench-data-table w-full").on("rowClick", lambda event: select_detail(_event_row_code(event)))
             else:
                 empty_state("没有匹配原子指标", "换一个筛选条件，或到数据维护补齐历史。")
+        render_details()
 
     def reload_snapshot() -> None:
         try:
-            frame_holder["frame"] = build_atomic_indicator_snapshot(snapshot, parquet_store)
+            should_force_refresh = frame_holder["result"].status == "ready"
+            cache_result = load_atomic_snapshot_cached(snapshot.master, parquet_store, force_refresh=should_force_refresh)
+            frame_holder["frame"] = cache_result.frame
+            frame_holder["result"] = cache_result
         except Exception as exc:  # noqa: BLE001 - keep the page usable after a failed refresh
             ui.notify(f"刷新原子指标失败：{exc}", type="negative")
             return
+        refresh_filter_options()
+        render_cache_status()
         render_metrics()
+        render_data_health()
         refresh_table()
-        ui.notify("原子指标快照已刷新", type="positive")
+        if cache_result.status in {"building", "stale"}:
+            ui.notify("原子指标快照已转入后台刷新，页面会继续保持可用", type="info")
+        elif cache_result.status == "failed":
+            ui.notify("原子指标快照生成失败，请查看页面提示", type="negative")
+        else:
+            ui.notify("原子指标快照已刷新", type="positive")
 
     query.on_value_change(lambda event: refresh_table())
     category.on_value_change(lambda event: refresh_table())
@@ -125,7 +300,11 @@ def _render_atomic_indicators(snapshot: PlatformSnapshot, parquet_store) -> None
     min_amount.on_value_change(lambda event: refresh_table())
     breakout.on_value_change(lambda event: refresh_table())
     weekly_ma10.on_value_change(lambda event: refresh_table())
+    view_mode.on_value_change(lambda event: refresh_table())
+    detail_select.on_value_change(lambda event: select_detail(code_from_option(str(detail_select.value or ""))))
+    render_cache_status()
     render_metrics()
+    render_data_health()
     refresh_table()
 
 
@@ -185,7 +364,7 @@ def _render_search(snapshot: PlatformSnapshot, store) -> None:
         result_area.clear()
         with result_area:
             if filtered:
-                ui.table(columns=table_columns(filtered), rows=filtered, pagination=10).classes("workbench-data-table w-full")
+                render_table(filtered, pagination=10, ui_module=ui).classes("workbench-data-table w-full")
             else:
                 empty_state("没有匹配 ETF", "换一个代码、名称或分类再试。")
 
@@ -217,14 +396,14 @@ def _render_etf_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
 
             render_ranged_lightweight_chart(payload, element_id=f"etf-chart-{selected}", title=f"ETF：{selected}")
 
-    with ui.row().classes("workbench-toolbar w-full justify-between"):
+    with ui.row().classes("workbench-chart-selector w-full"):
         ui.select(
             options,
             value=options[0],
             label="选择ETF",
             on_change=lambda event: draw_chart(event.value),
         ).props("dense outlined").classes("w-96")
-        ui.label("这里只看 ETF 交易载体行情，指数状态在市场地图查看。").classes("text-xs text-slate-500")
+        ui.label("这里只看 ETF 交易载体行情，指数状态在市场地图查看。").classes("workbench-chart-note")
     chart_area = ui.column().classes("w-full gap-2")
     draw_chart(options[0])
 
@@ -241,11 +420,72 @@ def _save_watchlist(store, etf_code: str, enabled: bool, allow_buy: bool, catego
     ui.notify(f"{etf_code} 已保存到每日计算池", type="positive")
 
 
-def _atomic_filter_options(frame, column: str, all_label: str) -> list[str]:
-    if frame.empty or column not in frame:
-        return [all_label]
-    values = sorted({str(value) for value in frame[column].dropna().tolist() if str(value).strip()})
-    return [all_label, *values]
+def _atomic_filter_options(frame, column: str, all_label: str) -> dict[str, str]:
+    if getattr(frame, "empty", False) or column not in frame:
+        return {all_label: all_label}
+
+    series = frame[column] if hasattr(frame, "__getitem__") else []
+    values = sorted({str(value) for value in pd.Series(series).dropna().tolist() if str(value).strip()})
+    options = {all_label: all_label}
+    for value in values:
+        label = _atomic_filter_label_for(column, value)
+        options[label] = value
+    return options
+
+
+def _atomic_filter_label_for(column: str, value: str) -> str:
+    if column == "history_status":
+        return ATOMIC_HISTORY_STATUS_LABELS.get(value, VALUE_LABELS.get(value, value))
+    if column == "feature_status":
+        return ATOMIC_FEATURE_STATUS_LABELS.get(value, VALUE_LABELS.get(value, value))
+    return VALUE_LABELS.get(value, value)
+
+
+def _atomic_filter_value(options: dict[str, str], label: str) -> str:
+    return options.get(label, label)
+
+
+def _atomic_filter_label(options: dict[str, str], value: str) -> str:
+    for label, option_value in options.items():
+        if option_value == value:
+            return label
+    return ""
+
+
+def _atomic_health_icon(item: AtomicDataHealthItem) -> str:
+    return {
+        "stale": "update",
+        "short_history": "hourglass_empty",
+        "missing_history": "folder_off",
+        "read_failed": "error_outline",
+        "missing_features": "analytics",
+    }.get(item.key, "info")
+
+
+def _event_row_code(event) -> str:
+    args = getattr(event, "args", None)
+    row = None
+    if isinstance(args, dict):
+        row = args.get("row") if isinstance(args.get("row"), dict) else args
+    elif isinstance(args, (list, tuple)) and len(args) >= 2 and isinstance(args[1], dict):
+        row = args[1]
+    if not isinstance(row, dict):
+        return ""
+    return str(row.get("ETF代码") or row.get("etf_code") or "").strip()
+
+
+def _atomic_detail_value_tone(metric: str, value: str) -> str:
+    if value in {"完整", "是"}:
+        return "tone-success"
+    if value == "否":
+        return "tone-neutral"
+    if "缺失" in value or value in {"历史不足", "特征计算失败"}:
+        return "tone-warning"
+    if metric in {"20日收益", "60日收益", "距20日线"} and value.startswith("-"):
+        return "tone-danger"
+    if metric in {"20日收益", "60日收益", "60日突破", "周线>10周", "周线>30周"}:
+        return "tone-info"
+    return "tone-neutral"
 
 
 def _metric_tile(label: str, value: object, detail: str, tone: str) -> None:

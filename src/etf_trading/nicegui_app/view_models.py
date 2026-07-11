@@ -7,6 +7,8 @@ from datetime import datetime
 
 import pandas as pd
 
+from etf_trading.research.atomic_indicators import build_etf_atomic_indicator_snapshot
+
 
 @dataclass(frozen=True)
 class MetricTile:
@@ -32,6 +34,110 @@ class PlatformSnapshot:
     gaps: pd.DataFrame
     coverage: pd.DataFrame
     generated_at: datetime
+
+
+@dataclass(frozen=True)
+class AtomicIndicatorFilters:
+    query: str = ""
+    category: str = "全部分类"
+    history_status: str = "全部历史状态"
+    feature_status: str = "全部特征状态"
+    min_avg_amount_20: float | None = None
+    only_breakout: bool = False
+    only_weekly_ma10: bool = False
+
+
+@dataclass(frozen=True)
+class IndexHealthFilters:
+    query: str = ""
+    category: str = "全部分类"
+    trend_status: str = "全部趋势体检"
+    valuation_status: str = "全部估值体检"
+
+
+ATOMIC_VIEW_MODES = ("机会特征", "体检特征")
+
+INDEX_HEALTH_SUMMARY_COLUMNS = (
+    "index_code",
+    "index_name",
+    "category",
+    "latest_date",
+    "history_rows",
+    "large_trend",
+    "medium_trend",
+    "small_trend",
+    "allows_new_position",
+    "trend_health_status",
+    "valuation_overview_label",
+    "valuation_health_status",
+    "valuation_coverage_years",
+)
+
+ATOMIC_OPPORTUNITY_COLUMNS = (
+    "ETF代码",
+    "ETF名称",
+    "分类",
+    "20日收益",
+    "60日收益",
+    "20日全池排名",
+    "60日全池排名",
+    "20日同类排名",
+    "60日同类排名",
+    "60日突破",
+    "周线>10周",
+    "20日成交额",
+)
+
+ATOMIC_HEALTH_COLUMNS = (
+    "ETF代码",
+    "ETF名称",
+    "分类",
+    "最新交易日",
+    "历史状态",
+    "特征状态",
+    "历史行数",
+    "缺失字段",
+    "收盘>20日线",
+    "20日线>60日线",
+    "收盘>60日线",
+    "周线>30周",
+    "距20日线",
+    "距20日线ATR",
+    "5/20成交额",
+)
+
+
+@dataclass(frozen=True)
+class AtomicIndicatorDetailGroup:
+    title: str
+    rows: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
+class AtomicDataHealthItem:
+    key: str
+    label: str
+    count: int
+    detail: str
+    filter_type: str
+    filter_value: str
+    tone: str = "neutral"
+
+
+ATOMIC_HISTORY_STATUS_LABELS = {
+    "complete": "完整",
+    "stale": "行情滞后",
+    "missing_history": "历史缺失",
+    "short_history": "历史不足",
+    "read_failed": "读取失败",
+    "invalid_trade_date": "交易日无效",
+}
+
+ATOMIC_FEATURE_STATUS_LABELS = {
+    "complete": "完整",
+    "missing_features": "特征缺失",
+    "feature_calculation_failed": "特征计算失败",
+}
 
 
 def current_ui_audit_findings() -> tuple[AuditFinding, ...]:
@@ -77,6 +183,152 @@ def maintenance_rows(snapshot: PlatformSnapshot) -> list[dict[str, object]]:
     return _records(snapshot.gaps)
 
 
+def build_atomic_indicator_snapshot(snapshot: PlatformSnapshot, parquet_store, today: pd.Timestamp | None = None) -> pd.DataFrame:
+    return build_etf_atomic_indicator_snapshot(snapshot.master, parquet_store, today=today)
+
+
+def atomic_indicator_summary(frame: pd.DataFrame) -> list[MetricTile]:
+    if frame.empty:
+        return [
+            MetricTile("ETF主池", "0", "warning", "场内"),
+            MetricTile("历史完整", "0", "warning", "已完整"),
+            MetricTile("特征完整", "0", "warning", "已完整"),
+            MetricTile("相对强度可算", "0", "warning", "20/60日"),
+            MetricTile("60日突破", "0", "neutral", "收盘新高"),
+            MetricTile("周线强势", "0", "neutral", "站上10周线"),
+        ]
+
+    history_complete = int((frame.get("history_status", pd.Series(dtype=str)) == "complete").sum())
+    feature_complete = int((frame.get("feature_status", pd.Series(dtype=str)) == "complete").sum())
+    relative_ready = int((pd.to_numeric(frame.get("return_20"), errors="coerce").notna() & pd.to_numeric(frame.get("return_60"), errors="coerce").notna()).sum())
+    breakout_count = int(frame.get("is_60d_close_breakout", pd.Series(dtype=object)).map(_truthy).sum())
+    weekly_count = int(frame.get("weekly_close_above_ma10", pd.Series(dtype=object)).map(_truthy).sum())
+    return [
+        MetricTile("ETF主池", str(len(frame)), "neutral", "场内"),
+        MetricTile("历史完整", str(history_complete), "success" if history_complete == len(frame) else "warning", "已完整"),
+        MetricTile("特征完整", str(feature_complete), "success" if feature_complete == len(frame) else "warning", "已完整"),
+        MetricTile("相对强度可算", str(relative_ready), "info", "20/60日"),
+        MetricTile("60日突破", str(breakout_count), "info", "收盘新高"),
+        MetricTile("周线强势", str(weekly_count), "info", "站上10周线"),
+    ]
+
+
+def atomic_data_update_health(frame: pd.DataFrame) -> list[AtomicDataHealthItem]:
+    history = _string_series(frame, "history_status")
+    feature = _string_series(frame, "feature_status")
+
+    return [
+        AtomicDataHealthItem("stale", "行情滞后", int((history == "stale").sum()), "本地行情不是最新", "history_status", "stale", "warning"),
+        AtomicDataHealthItem("short_history", "历史不足", int((history == "short_history").sum()), "样本行数不足", "history_status", "short_history", "warning"),
+        AtomicDataHealthItem("missing_history", "历史缺失", int((history == "missing_history").sum()), "没有本地历史", "history_status", "missing_history", "danger"),
+        AtomicDataHealthItem("read_failed", "读取失败", int((history == "read_failed").sum()), "文件或格式异常", "history_status", "read_failed", "danger"),
+        AtomicDataHealthItem("missing_features", "特征缺失", int((feature == "missing_features").sum()), "指标字段暂不可算", "feature_status", "missing_features", "warning"),
+    ]
+
+
+def atomic_indicator_rows(
+    frame: pd.DataFrame,
+    filters: AtomicIndicatorFilters | None = None,
+    limit: int = 300,
+    view_mode: str = "机会特征",
+) -> list[dict[str, object]]:
+    data = filter_atomic_indicator_frame(frame, filters)
+    if data.empty:
+        return []
+
+    columns = ATOMIC_HEALTH_COLUMNS if view_mode == "体检特征" else ATOMIC_OPPORTUNITY_COLUMNS
+    rows = []
+    for row in data.head(limit).to_dict("records"):
+        display = _atomic_display_row(row)
+        rows.append({column: display.get(column, "") for column in columns})
+    return rows
+
+
+def filter_atomic_indicator_frame(
+    frame: pd.DataFrame,
+    filters: AtomicIndicatorFilters | None = None,
+) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+
+    filters = filters or AtomicIndicatorFilters()
+    data = frame.copy()
+    query = filters.query.strip().lower()
+    if query:
+        searchable = (
+            data.get("etf_code", "").astype(str)
+            + " "
+            + data.get("name", "").astype(str)
+            + " "
+            + data.get("category", "").astype(str)
+        ).str.lower()
+        data = data[searchable.str.contains(query, na=False)]
+
+    if filters.category not in {"", "全部", "全部分类"} and "category" in data:
+        data = data[data["category"].fillna("").astype(str) == filters.category]
+    if filters.history_status not in {"", "全部", "全部历史状态"} and "history_status" in data:
+        data = data[data["history_status"].fillna("").astype(str) == filters.history_status]
+    if filters.feature_status not in {"", "全部", "全部特征状态"} and "feature_status" in data:
+        data = data[data["feature_status"].fillna("").astype(str) == filters.feature_status]
+    if filters.min_avg_amount_20 is not None and "avg_amount_20" in data:
+        data = data[pd.to_numeric(data["avg_amount_20"], errors="coerce").fillna(0) >= float(filters.min_avg_amount_20)]
+    if filters.only_breakout and "is_60d_close_breakout" in data:
+        data = data[data["is_60d_close_breakout"].map(_truthy)]
+    if filters.only_weekly_ma10 and "weekly_close_above_ma10" in data:
+        data = data[data["weekly_close_above_ma10"].map(_truthy)]
+
+    if "return_20_rank_all" in data:
+        data = data.assign(_rank=pd.to_numeric(data["return_20_rank_all"], errors="coerce"))
+        data = data.sort_values(["_rank", "etf_code"], na_position="last").drop(columns=["_rank"])
+    return data
+
+
+def atomic_indicator_detail_options(
+    frame: pd.DataFrame,
+    filters: AtomicIndicatorFilters | None = None,
+    limit: int = 300,
+) -> list[str]:
+    data = filter_atomic_indicator_frame(frame, filters)
+    options: list[str] = []
+    for row in data.head(limit).fillna("").to_dict("records"):
+        code = str(row.get("etf_code", "")).strip()
+        if not code:
+            continue
+        name = str(row.get("name", "")).strip()
+        category = str(row.get("category", "")).strip()
+        label = f"{code} {name}".strip()
+        if category:
+            label = f"{label} · {category}"
+        options.append(label)
+    return options
+
+
+def atomic_indicator_detail_groups(frame: pd.DataFrame, etf_code: str) -> list[AtomicIndicatorDetailGroup]:
+    if frame.empty or not etf_code or "etf_code" not in frame:
+        return []
+
+    matches = frame[frame["etf_code"].fillna("").astype(str) == str(etf_code)]
+    if matches.empty:
+        return []
+
+    display = _atomic_display_row(matches.iloc[0].to_dict())
+    groups = (
+        ("身份信息", ("ETF代码", "ETF名称", "分类", "交易所", "最新交易日")),
+        ("数据体检", ("历史状态", "特征状态", "历史行数", "缺失字段")),
+        ("相对强度", ("20日收益", "60日收益", "20日全池排名", "60日全池排名", "20日同类排名", "60日同类排名")),
+        ("趋势结构", ("收盘>20日线", "20日线>60日线", "收盘>60日线", "周线>10周", "周线>30周", "60日突破", "60日线20日斜率")),
+        ("量能位置", ("5日成交额", "20日成交额", "5/20成交额")),
+        ("偏离程度", ("距20日线", "距20日线ATR")),
+    )
+    return [
+        AtomicIndicatorDetailGroup(
+            title=title,
+            rows=[{"指标": label, "数值": display.get(label, "")} for label in labels],
+        )
+        for title, labels in groups
+    ]
+
+
 def code_from_option(option: str | None) -> str:
     if not option:
         return ""
@@ -104,6 +356,122 @@ def index_choice_options(index_summary: pd.DataFrame) -> list[str]:
             label = f"{label} · {' · '.join(suffix)}"
         options.append(label)
     return options
+
+
+def index_health_summary(frame: pd.DataFrame) -> list[MetricTile]:
+    if frame.empty:
+        return [
+            MetricTile("指数池", "0", "warning", "体检对象"),
+            MetricTile("趋势通过", "0", "warning", "趋势门槛"),
+            MetricTile("估值完整", "0", "warning", "PE/PB/ERP"),
+            MetricTile("估值缺失", "0", "neutral", "需补缓存"),
+        ]
+
+    allowed = _allowed_series(frame)
+    valuation_status = _string_series(frame, "valuation_health_status")
+    complete = int((valuation_status == "complete").sum())
+    missing = int(valuation_status.isin(["missing_valuation", "missing", "read_failed"]).sum())
+    return [
+        MetricTile("指数池", str(len(frame)), "neutral", "体检对象"),
+        MetricTile("趋势通过", str(int(allowed.sum())), "success" if allowed.any() else "warning", "趋势门槛"),
+        MetricTile("估值完整", str(complete), "success" if complete == len(frame) else "warning", "PE/PB/ERP"),
+        MetricTile("估值缺失", str(missing), "warning" if missing else "success", "需补缓存"),
+    ]
+
+
+def index_health_filter_options(frame: pd.DataFrame, column: str, all_label: str) -> list[str]:
+    if frame.empty or column not in frame:
+        return [all_label]
+    values: list[str] = []
+    seen: set[str] = set()
+    for value in frame[column].dropna().astype(str).tolist():
+        text = value.strip()
+        if not text or text in seen:
+            continue
+        values.append(text)
+        seen.add(text)
+    return [all_label, *values]
+
+
+def index_health_rows(
+    frame: pd.DataFrame,
+    filters: IndexHealthFilters | None = None,
+    limit: int = 300,
+) -> list[dict[str, object]]:
+    data = filter_index_health_frame(frame, filters)
+    if data.empty:
+        return []
+
+    rows: list[dict[str, object]] = []
+    for row in data.head(limit).fillna("").to_dict("records"):
+        rows.append({column: row.get(column, "") for column in INDEX_HEALTH_SUMMARY_COLUMNS})
+    return rows
+
+
+def filter_index_health_frame(frame: pd.DataFrame, filters: IndexHealthFilters | None = None) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+
+    filters = filters or IndexHealthFilters()
+    data = frame.copy()
+    query = filters.query.strip().lower()
+    if query:
+        searchable = (
+            data.get("index_code", "").astype(str)
+            + " "
+            + data.get("index_name", "").astype(str)
+            + " "
+            + data.get("category", "").astype(str)
+        ).str.lower()
+        data = data[searchable.str.contains(query, na=False)]
+
+    if filters.category not in {"", "全部", "全部分类"} and "category" in data:
+        data = data[data["category"].fillna("").astype(str) == filters.category]
+    if filters.trend_status not in {"", "全部", "全部趋势体检"} and "trend_health_status" in data:
+        data = data[data["trend_health_status"].fillna("").astype(str) == filters.trend_status]
+    if filters.valuation_status not in {"", "全部", "全部估值体检"} and "valuation_health_status" in data:
+        data = data[data["valuation_health_status"].fillna("").astype(str) == filters.valuation_status]
+
+    sort_columns = [column for column in ("category", "index_code") if column in data]
+    return data.sort_values(sort_columns) if sort_columns else data
+
+
+def index_health_detail_options(
+    frame: pd.DataFrame,
+    filters: IndexHealthFilters | None = None,
+    limit: int = 300,
+) -> list[str]:
+    data = filter_index_health_frame(frame, filters)
+    return index_choice_options(data.head(limit))
+
+
+def index_health_detail_rows(details: pd.DataFrame, index_code: str, detail_kind: str) -> list[dict[str, object]]:
+    if details.empty or not index_code or "index_code" not in details:
+        return []
+
+    kind_series = details["detail_kind"].fillna("").astype(str) if "detail_kind" in details else pd.Series("", index=details.index)
+    data = details[
+        (details["index_code"].fillna("").astype(str) == str(index_code))
+        & (kind_series == str(detail_kind))
+    ].copy()
+    if data.empty:
+        return []
+
+    rows: list[dict[str, object]] = []
+    for row in data.fillna("").to_dict("records"):
+        rows.append(
+            {
+                "metric_label": _text(row.get("metric_label")),
+                "current_value": _format_index_detail_value(row.get("current_value")),
+                "status": _text(row.get("status")),
+                "historical_percentile": _format_percentile(row.get("historical_percentile")),
+                "reason": _text(row.get("reason")),
+                "sample_count": _value_or_blank(row.get("sample_count")),
+                "latest_date": _text(row.get("latest_date")),
+                "data_source": _text(row.get("data_source")),
+            }
+        )
+    return rows
 
 
 def etf_choice_options(rows: list[dict[str, object]]) -> list[str]:
@@ -192,3 +560,124 @@ def _row_value(row: dict[str, object], *keys: str) -> str:
         if value is not None and value != "":
             return str(value).strip()
     return ""
+
+
+def _string_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if frame.empty or column not in frame:
+        return pd.Series(dtype=str)
+    return frame[column].fillna("").astype(str).str.strip()
+
+
+def _atomic_display_row(row: dict[str, object]) -> dict[str, object]:
+    return {
+        "ETF代码": _text(row.get("etf_code")),
+        "ETF名称": _text(row.get("name")),
+        "分类": _text(row.get("category")),
+        "交易所": _text(row.get("exchange")),
+        "最新交易日": _text(row.get("latest_trade_date")),
+        "历史状态": _status_text(row.get("history_status"), ATOMIC_HISTORY_STATUS_LABELS),
+        "特征状态": _status_text(row.get("feature_status"), ATOMIC_FEATURE_STATUS_LABELS),
+        "历史行数": _value_or_blank(row.get("history_rows")),
+        "20日收益": _format_pct(row.get("return_20")),
+        "60日收益": _format_pct(row.get("return_60")),
+        "20日全池排名": _format_rank(row.get("return_20_rank_all")),
+        "60日全池排名": _format_rank(row.get("return_60_rank_all")),
+        "20日同类排名": _format_rank(row.get("return_20_rank_category")),
+        "60日同类排名": _format_rank(row.get("return_60_rank_category")),
+        "收盘>20日线": _format_bool(row.get("close_above_ma20")),
+        "20日线>60日线": _format_bool(row.get("ma20_above_ma60")),
+        "收盘>60日线": _format_bool(row.get("close_above_ma60")),
+        "周线>10周": _format_bool(row.get("weekly_close_above_ma10")),
+        "周线>30周": _format_bool(row.get("weekly_close_above_ma30")),
+        "60日线20日斜率": _format_number(row.get("ma60_slope_20")),
+        "5日成交额": _format_amount(row.get("avg_amount_5")),
+        "20日成交额": _format_amount(row.get("avg_amount_20")),
+        "5/20成交额": _format_number(row.get("amount_ratio_5_20")),
+        "距20日线": _format_pct(row.get("distance_ma20_pct")),
+        "距20日线ATR": _format_number(row.get("distance_ma20_atr")),
+        "60日突破": _format_bool(row.get("is_60d_close_breakout")),
+        "缺失字段": _text(row.get("missing_feature_names")),
+    }
+
+
+def _format_pct(value: object) -> str:
+    if _missing(value):
+        return "缺失"
+    return f"{float(value):.1%}"
+
+
+def _value_or_blank(value: object) -> object:
+    if _missing(value):
+        return ""
+    return value
+
+
+def _status_text(value: object, mapping: dict[str, str]) -> str:
+    if _missing(value):
+        return "缺失"
+    text = str(value).strip()
+    return mapping.get(text, text)
+
+
+def _format_amount(value: object) -> str:
+    if _missing(value):
+        return "缺失"
+    number = float(value)
+    if abs(number) >= 100_000_000:
+        return f"{number / 100_000_000:.1f}亿"
+    if abs(number) >= 10_000:
+        return f"{number / 10_000:.1f}万"
+    return f"{number:.0f}"
+
+
+def _format_rank(value: object) -> str:
+    if _missing(value):
+        return "缺失"
+    return str(int(float(value)))
+
+
+def _format_number(value: object) -> str:
+    if _missing(value):
+        return "缺失"
+    return f"{float(value):.2f}"
+
+
+def _format_index_detail_value(value: object) -> str:
+    if _missing(value) or value == "":
+        return ""
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return str(value).strip()
+
+
+def _format_percentile(value: object) -> str:
+    if _missing(value) or value == "":
+        return ""
+    return f"{float(value):.1f}%"
+
+
+def _format_bool(value: object) -> str:
+    if _missing(value):
+        return "缺失"
+    return "是" if _truthy(value) else "否"
+
+
+def _text(value: object) -> str:
+    if _missing(value):
+        return ""
+    return str(value).strip()
+
+
+def _truthy(value: object) -> bool:
+    if _missing(value):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "是"}
+    return bool(value)
+
+
+def _missing(value: object) -> bool:
+    return bool(pd.isna(value))

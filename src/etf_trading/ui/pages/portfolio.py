@@ -13,14 +13,19 @@ def render(
     parquet_store: ParquetStore,
     view: str,
     render_data_overview,
+    render_etf_chart,
     render_index_etf_pool,
     render_search_and_add,
     watchlist_status_frame,
 ) -> None:
     watchlist = store.list_watchlist()
 
-    if view == "数据总览":
+    if view == "ETF总览":
         render_data_overview(store, parquet_store)
+        return
+
+    if view == "ETF行情":
+        render_etf_chart(store, parquet_store)
         return
 
     if view == "指数样本池":

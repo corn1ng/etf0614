@@ -9,6 +9,9 @@ from nicegui import ui
 from .layout import render_shell
 
 
+NICEGUI_RECONNECT_TIMEOUT_SECONDS = 60.0
+
+
 def create_app() -> None:
     """Register NiceGUI routes without starting a web server."""
 
@@ -27,4 +30,10 @@ def create_app() -> None:
 
 def run(host: str = "127.0.0.1", port: int = 8502, reload: bool = False) -> None:
     create_app()
-    ui.run(host=host, port=port, reload=reload, title="ETF 工作台")
+    ui.run(
+        host=host,
+        port=port,
+        reload=reload,
+        title="ETF 工作台",
+        reconnect_timeout=NICEGUI_RECONNECT_TIMEOUT_SECONDS,
+    )

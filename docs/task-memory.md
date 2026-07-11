@@ -39,3 +39,268 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
 - Watch out next time:
   - Keep ETF K line views under `ETF数据`; `市场地图` should stay focused on index and market participation decisions.
   - Treat `指数样本池` as ETF mapping/sample attribution, not as an index analysis page.
+
+## 2026-07-05 - Compact index quick buttons
+
+- Summary: Made the index-watch quick buttons denser by expanding the common index shortcuts to 8 items and rendering them in an 8-column compact Streamlit grid.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q` passed with 146 tests.
+- Watch out next time:
+  - Keep quick-index shortcuts focused on first-screen benchmarks; broader discovery still belongs in the category/search picker.
+  - In this PowerShell tool environment, background Streamlit startup can be unreliable; foreground `streamlit run` still confirms the app command starts.
+
+## 2026-07-05 - Implement market and ETF page boundary
+
+- Summary: Moved ETF chart drilldown into `ETF数据`, made `市场地图` focus on market/index overview, index buy/sell reference, and index K lines.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q` passed with 154 tests.
+- Watch out next time:
+  - Route market pages by decision workflow, not by ETF-versus-index asset type.
+  - Keep `platform_status["index_summary"]` as the shared source for market overview and index reference pages.
+
+## 2026-07-05 - Custom common index shortcuts
+
+- Summary: Added local preference support for replacing common index shortcut slots and a compact expander UI for saving or resetting those shortcuts.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q` passed with 151 tests.
+- Watch out next time:
+  - Store UI-only shortcut preferences in `data/ui_preferences.json`; do not add database state for per-user Streamlit convenience controls.
+  - Keep custom common-index lists validated, unique, and filled back to the 8-slot default shape so the quick grid remains stable.
+
+## 2026-07-05 - Design ETF atomic indicator foundation
+
+- Summary: Added the approved design for using full exchange-traded ETF coverage and an atomic-indicator dashboard as platform foundation before implementing relative-strength strategy logic.
+- Verification: Documentation-only change; `rg -n "TBD|TODO|FIXME|待定|待补|不确定" docs\superpowers\specs\2026-07-05-etf-atomic-indicator-foundation-design.md` returned no matches.
+- Watch out next time:
+  - Treat `fund_etf_spot_em` as the exchange-traded ETF source of truth; do not merge `fund_name_em` directly into the tradable pool.
+  - Show atomic indicators and data completeness first; keep weighted scores and buy/sell actions out of the foundation layer.
+
+## 2026-07-05 - Design NiceGUI UI migration
+
+- Summary: Added the approved design for migrating the primary UI layer from Streamlit to NiceGUI while preserving backend storage, data, and strategy logic.
+- Verification: Documentation-only change; `rg -n "TBD|TODO|待定|待补|不确定|FIXME" docs\superpowers\specs\2026-07-05-nicegui-ui-migration-design.md` returned no matches.
+- Watch out next time:
+  - Keep NiceGUI work inside a new UI layer and extract only UI-neutral view models from Streamlit code when needed.
+  - Keep Streamlit as a fallback until the NiceGUI high-frequency pages pass browser screenshot verification.
+
+## 2026-07-05 - Add NiceGUI visual quality bar
+
+- Summary: Updated the NiceGUI migration design to require auditing current UI problems and delivering a more polished, modern, professional quantitative-workbench interface.
+- Verification: Documentation-only change; `rg -n "TBD|TODO|待定|待补|不确定|FIXME" docs\superpowers\specs\2026-07-05-nicegui-ui-migration-design.md` returned no matches.
+- Watch out next time:
+  - Do not merely port Streamlit layouts to NiceGUI; each migrated page should fix the old page's density, hierarchy, and workflow problems.
+  - Keep visual polish tied to data readability and operating speed, not decorative dashboard effects.
+
+## 2026-07-05 - Plan NiceGUI UI migration implementation
+
+- Summary: Added a task-by-task implementation plan for the NiceGUI migration, including UI audit, professional theme, high-frequency pages, chart wiring, tests, and browser verification.
+- Verification: Documentation-only change; `rg -n "TBD|TODO|implement later|fill in|appropriate|handle edge cases|Similar to|待定|待补|不确定|FIXME" docs\superpowers\plans\2026-07-05-nicegui-ui-migration.md` returned no matches.
+- Watch out next time:
+  - Wire ETF and index K-line payloads before visual verification; placeholders are only temporary during intermediate tasks.
+  - Keep implementation commits scoped because this worktree already has unrelated Streamlit UI/test changes.
+
+## 2026-07-05 - Implement NiceGUI UI migration v1
+
+- Summary: Added a NiceGUI-based ETF workbench with a compact professional shell, UI audit notes, high-frequency pages, table-focused ETF/maintenance views, and visible SVG K-line rendering for ETF/index history.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q` passed with 172 tests; browser verified `http://127.0.0.1:8502` desktop pages and 390px ETF table overflow.
+- Watch out next time:
+  - Keep future NiceGUI polish in `src/etf_trading/nicegui_app/theme.py` and page modules, not backend storage or strategy code.
+  - The v1 K-line renderer is static SVG for robust local rendering; upgrade to interactive lightweight-charts only after local script loading is reliable.
+
+## 2026-07-05 - Align atomic indicator spec with NiceGUI
+
+- Summary: Updated the ETF atomic indicator foundation design so the dashboard lands in the NiceGUI `ETF数据` workflow with UI-neutral view models instead of the old Streamlit-style page plan.
+- Verification: Documentation-only change; `rg -n "TBD|TODO|FIXME|待定|待补|不确定" docs\superpowers\specs\2026-07-05-etf-atomic-indicator-foundation-design.md` returned no matches.
+- Watch out next time:
+  - Put new user-facing ETF diagnostics into `nicegui_app` pages and reusable `view_models.py`; avoid burying calculations in page render functions.
+  - Keep `ETF数据 -> 原子指标` diagnostic-only and send repair actions to `数据维护 -> 补齐任务`.
+
+## 2026-07-05 - Design index valuation healthcheck
+
+- Summary: Added the approved design for a multi-source index valuation cache and atomic valuation healthcheck page under `市场地图`.
+- Verification: Documentation-only change; `rg -n "TBD|TODO|FIXME|待定|待补|不确定|implement later|fill in|appropriate|Similar to" docs\superpowers\specs\2026-07-05-index-valuation-healthcheck-design.md` returned no matches.
+- Watch out next time:
+  - Do not compute weighted, median, or composite valuation scores; show atomic valuation indicators and their own percentiles.
+  - Keep iFind, AKShare, Tushare, and CSV behind provider interfaces so the healthcheck calculation and UI do not depend on one source.
+
+## 2026-07-05 - Compact NiceGUI chart tooltip
+
+- Summary: Replaced the default ECharts axis tooltip with a compact grouped formatter for K-line, moving-average, and volume values with right-aligned tabular numbers.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests\test_nicegui_charts.py -q` passed with 13 tests; bundled Node evaluated the formatter and confirmed `9,991.03`, `11,032.22`, and `39.80亿` sample output.
+- Watch out next time:
+  - Use NiceGUI `:formatter` keys for ECharts JavaScript callbacks; plain `formatter` strings will not execute.
+  - Keep tooltip values grouped and fixed to two price decimals so MA precision does not overwhelm the chart.
+
+## 2026-07-05 - Left-align NiceGUI section tabs
+
+- Summary: Moved NiceGUI page-level section tabs from the title row's right side to a left-aligned row under the page caption across all pages.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_app_import.py tests/test_nicegui_theme.py tests/test_nicegui_navigation.py -v` passed with 9 tests; browser checked `http://127.0.0.1:8503/page/market` and `http://127.0.0.1:8503/page/research`.
+- Watch out next time:
+  - Keep high-frequency page switches near the left content start; avoid sending section-level controls to the far right on wide screens.
+  - Use shared NiceGUI shell changes for global navigation polish so every page gets the same interaction improvement.
+
+## 2026-07-05 - Implement ETF atomic indicator foundation
+
+- Summary: Added exchange-traded ETF master boundaries, atomic daily/weekly feature columns, UI-neutral ETF atomic snapshots, NiceGUI `ETF数据 -> 原子指标`, and all-master history job creation.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_akshare_provider_fallback.py tests/test_features.py tests/test_atomic_indicators.py tests/test_nicegui_navigation.py tests/test_nicegui_view_models.py tests/test_storage_and_services.py -q --basetemp pytest-tmp-atomic-focused` passed with 29 tests; `.venv-win\Scripts\python.exe -m pytest tests/test_data_coverage.py tests/test_nicegui_app_import.py tests/test_nicegui_charts.py tests/test_nicegui_state_cache.py -q --basetemp pytest-tmp-atomic-broad` passed with 23 tests.
+- Watch out next time:
+  - Keep `fund_name_em` out of the tradable ETF master pool; use it only as auxiliary discovery data.
+  - Keep atomic indicator tables diagnostic-only; scores and trading actions belong to later strategy layers.
+  - Long-running all-ETF history work should remain a maintenance task, not an automatic page-load side effect.
+
+## 2026-07-05 - Plan index valuation healthcheck implementation
+
+- Summary: Added the task-by-task implementation plan for source-switchable index valuation cache, atomic valuation healthcheck calculations, and NiceGUI `市场地图 -> 指数估值体检`.
+- Verification: Documentation-only change; `rg -n "TBD|TODO|implement later|fill in|appropriate|handle edge cases|Similar to|待定|待补|不确定|FIXME" docs\superpowers\plans\2026-07-05-index-valuation-healthcheck.md` returned no matches.
+- Watch out next time:
+  - Keep implementation tasks atomic and diagnostic-only; no weighted, median, or composite valuation outputs.
+  - Treat forbidden score/action terms in tests as absence assertions, not as production UI labels.
+
+## 2026-07-05 - Initialize all-ETF history cache
+
+- Summary: Refreshed the exchange-traded ETF master pool to 1,528 rows and fetched local Parquet price histories for every active master ETF. Added an operational all-master history fetch script with resumable fresh-cache skipping and fixed AkShare Sina fallback exchange inference for `52/53` SSE ETF codes.
+- Verification: Data quality scan found `history_files=1528`, `missing_files=0`, `missing_required_cols_files=0`, `fresh_files=1526`, with stale source histories only for `560000` (latest `2026-04-30`) and `560650` (latest `2026-07-01`). Atomic snapshot built 1,528 rows: `feature_status=complete` for 1,310 and `missing_features` for 218 short-history ETFs. `.venv-win\Scripts\python.exe -m pytest -q --basetemp pytest-tmp-full-after-fetch` passed with 197 tests.
+- Watch out next time:
+  - AkShare/Eastmoney can transiently fail through the local proxy; rerun `scripts/fetch_all_etf_history.py --years 5 --sleep 0.15 --no-refresh-master` to skip fresh files and fill gaps.
+  - `560000` and `560650` are present in the spot master but their history source is stale; keep them visible as data-quality exceptions rather than treating them as missing files.
+  - Many new ETFs have fewer than 60 rows, so 60-day breakout/return and weekly trend atoms should stay `missing_features` until enough history accumulates.
+
+## 2026-07-05 - Make NiceGUI atomic indicators responsive
+
+- Summary: Moved the full-pool atomic indicator calculation off the NiceGUI page-render path by adding disk/in-memory snapshot caching plus background refresh, then restarted `8504` with a fresh 1,528-row cache.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q --basetemp pytest-tmp-atomic-full3` passed with 201 tests; after restarting `8504`, `curl` verified `ETF数据 -> 原子指标` returns `200` in `0.088s` cold and `0.160s` warm; browser verified the click path reaches the page with 15 visible rows and no `Connection lost`.
+- Watch out next time:
+  - Do not synchronously recompute all ETF atomic indicators during page render; use `load_atomic_snapshot_cached` and keep heavy refresh work out of the NiceGUI server process.
+  - Keep the base NiceGUI platform snapshot warm for operator sessions; a 60-second TTL makes full-pool pages feel cold too often.
+  - The generated cache lives under ignored `data/parquet/cache/`; after bulk history refreshes, warm this cache before judging UI speed.
+  - NiceGUI route `curl` can be fast while browser navigation waits on long-lived connections, so verify visible DOM state rather than relying only on navigation timing.
+
+## 2026-07-05 - Align NiceGUI chart controls globally
+
+- Summary: Unified NiceGUI K-line selector rows and the shared ranged chart header so ETF/index selection, chart titles, record counts, and range toggles stay visually grouped across market, ETF, and research pages.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_charts.py tests/test_nicegui_app_import.py tests/test_nicegui_theme.py -q` passed with 23 tests; `.venv-win\Scripts\python.exe -m pytest -q --basetemp pytest-tmp-global-chart-toolbar` passed with 207 tests; browser checked `8506` market index K-line, ETF行情, research 指数过滤实验, and 390px market layout with no horizontal overflow or control overlap.
+- Watch out next time:
+  - Keep business toolbars left-aligned unless a shell-level layout genuinely needs split alignment.
+  - Put K-line title, record count, and range controls in the shared chart component so research pages inherit fixes automatically.
+
+## 2026-07-05 - Fix NiceGUI moving-average line alignment
+
+- Summary: Preserved `time` values when converting sparse moving-average payloads to ECharts line series, so MA51/MA120/MA250/MA850 stay date-aligned with candles and extend to the latest available trade date.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_charts.py -q` passed with 15 tests; `.venv-win\Scripts\python.exe -m pytest -q --basetemp pytest-tmp-ma-line-alignment` passed with 208 tests; checked real 000300 payload where each MA line's final point is `2026-07-03`, matching the last candle date.
+- Watch out next time:
+  - ECharts category-axis line data must retain `[time, value]` pairs when leading moving-average rows are missing.
+  - When changing ECharts data shapes, update tooltip extraction so hover values do not accidentally show the x-axis date.
+
+## 2026-07-05 - Make NiceGUI topbar operational
+
+- Summary: Replaced the right-side `NiceGUI` framework marker with the platform snapshot refresh time and reused the same snapshot for page rendering.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_app_import.py tests/test_nicegui_navigation.py tests/test_nicegui_theme.py -q` passed with 11 tests.
+- Watch out next time:
+  - Keep the global topbar for operator state such as data freshness, cache health, or refresh actions, not implementation details.
+  - Load the platform snapshot once in the shell when both chrome and page content need it.
+
+## 2026-07-05 - Compact index reference table
+
+- Summary: Added a compact NiceGUI table mode and used it on `市场地图 -> 指数买卖参考`, plus a short trend-filter note so the page reads as a regime reference rather than a full-width spreadsheet.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q --basetemp pytest-tmp-index-table` passed with 209 tests; Playwright/Chrome verified the `8507` market page and the compact index table measured 938px wide in a 1600px viewport.
+- Watch out next time:
+  - Keep market-index pages framed as trend filters; do not imply direct buy/sell instructions in the table itself.
+  - When a NiceGUI table feels too airy, try a compact width preset plus CSS shrink-wrap before redesigning the whole page.
+  - Use browser measurement, not just screenshots, to confirm a compact table actually stopped stretching to the full content width.
+
+## 2026-07-05 - Localize NiceGUI table display
+
+- Summary: Added shared NiceGUI table header/value localization so internal fields and status codes do not leak into market, ETF, maintenance, action, or research tables.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q --basetemp pytest-tmp-full-i18n` passed with 205 tests; browser verified `市场地图 -> 指数买卖参考` and `ETF数据 -> 原子指标` show Chinese headers/status values.
+- Watch out next time:
+  - Route every NiceGUI table through `table_columns` and `table_rows`; raw DataFrame records should not be passed directly to `ui.table`.
+  - Add new backend status codes to `VALUE_LABELS` before exposing them in filters or tables.
+
+## 2026-07-05 - Raise NiceGUI connection timeout for slow first render
+
+- Summary: Increased NiceGUI `reconnect_timeout` to 60 seconds in the app entry point so the 16-second first snapshot load does not trip the default 3-second connection-loss popup.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_app_import.py tests/test_nicegui_table_display.py -q` passed with 11 tests.
+- Watch out next time:
+  - `render_shell()` still does a heavy synchronous snapshot load on a cold start; if the dataset grows again, revisit that render path instead of only stretching the timeout.
+  - Keep browser verification on a cold app start in the loop whenever connection loss reappears.
+
+## 2026-07-07 - Plan ETF atomic detail toggle
+
+- Summary: Added the implementation plan for `ETF数据 -> 原子指标` view switching between `机会特征` and `体检特征`, plus selected-ETF grouped atomic details.
+- Verification: `rg -n "TBD|TODO|FIXME|待定|待补|不确定|implement later|fill in|appropriate|Similar to|handle edge cases" docs\superpowers\plans\2026-07-07-etf-atomic-detail-toggle.md` returned no matches.
+- Watch out next time:
+  - Keep ETF atomic list columns purpose-specific; full per-ETF diagnostics belong in the detail area.
+  - Preserve the existing atomic snapshot calculation layer when adding display modes.
+
+## 2026-07-08 - ETF atomic detail toggle
+
+- Summary: Added `机会特征` and `体检特征` views for `ETF数据 -> 原子指标`, plus selected-ETF grouped atomic indicator details.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_view_models.py tests/test_nicegui_table_display.py tests/test_nicegui_app_import.py tests/test_nicegui_theme.py -q --basetemp pytest-tmp-etf-atomic-toggle-focused-final` passed with 36 tests; `.venv-win\Scripts\python.exe -m pytest tests/test_atomic_indicators.py tests/test_nicegui_navigation.py tests/test_nicegui_state_cache.py tests/test_nicegui_charts.py -q --basetemp pytest-tmp-etf-atomic-toggle-regression-final` passed with 27 tests; browser checked default `机会特征`, grouped detail area, and `体检特征` columns on `ETF数据 -> 原子指标`.
+- Watch out next time:
+  - Keep the atomic snapshot calculation unchanged when adding UI views; view models should slice and format only.
+  - Preserve shared table helpers so localized pagination and empty-state labels do not regress.
+  - Keep list views narrow and purpose-specific; use the detail area for complete per-ETF diagnostics.
+
+## 2026-07-07 - Localize NiceGUI maintenance tables
+
+- Summary: Added shared NiceGUI table rendering with Chinese pagination text, expanded column labels for price history and maintenance logs, and translated common maintenance dataset/job/status codes.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q --basetemp pytest-tmp-localized-table-full` passed with 215 tests; browser verified `数据维护 -> 日志与设置` on `http://127.0.0.1:8512` shows Chinese headers, Chinese dataset values, and no `Records per page`.
+- Watch out next time:
+  - Route NiceGUI tables through `render_table` so Quasar pagination labels stay localized.
+  - Add both `COLUMN_LABELS` and `VALUE_LABELS` entries when exposing new backend fields or internal codes.
+
+## 2026-07-08 - Design maintenance task center
+
+- Summary: Added the approved design for a page-level task center on `数据维护 -> 补齐任务` so users can see the latest maintenance task status, timing, summary, and result.
+- Verification: `rg -n "TBD|TODO|FIXME|待定|待补|不确定|implement later|fill in|appropriate|Similar to|handle edge cases" docs\superpowers\specs\2026-07-08-maintenance-task-center-design.md` returned no matches.
+- Watch out next time:
+  - Keep the first implementation page-local; do not turn it into a durable queue until real background-task requirements appear.
+  - Preserve `_run_task` feedback before `run.io_bound` so slow provider calls never leave the UI looking idle.
+
+## 2026-07-08 - Implement maintenance task center
+
+- Summary: Added a page-level task center to `数据维护 -> 补齐任务` so maintenance actions show running, success, failure, or cancelled state with the latest result.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_maintenance_tasks.py tests/test_nicegui_theme.py tests/test_nicegui_app_import.py -q --basetemp pytest-tmp-maintenance-task-center-focused` passed with 17 tests; `.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_navigation.py tests/test_nicegui_table_display.py tests/test_nicegui_state_cache.py -q --basetemp pytest-tmp-maintenance-task-center-regression` passed with 18 tests; `.venv-win\Scripts\python.exe -m pytest -q --basetemp pytest-tmp-maintenance-task-center-full` passed with 228 tests.
+- Watch out next time:
+  - Keep maintenance task feedback visible before entering `run.io_bound`.
+  - Do not add per-asset progress to the task center until the service exposes real progress callbacks.
+
+## 2026-07-08 - Design ETF atomic data update health
+
+- Summary: Added the approved design for replacing misleading row-level `正在刷新` status with a data-update health summary on `ETF数据 -> 原子指标`.
+- Verification: `rg -n "TBD|TODO|FIXME|待定|待补|不确定|implement later|fill in|appropriate|Similar to|handle edge cases" docs\superpowers\specs\2026-07-08-etf-atomic-data-update-health-design.md` returned no matches; `git diff --check -- docs/superpowers/specs/2026-07-08-etf-atomic-data-update-health-design.md` passed.
+- Watch out next time:
+  - Keep row-level history freshness labels distinct from atomic snapshot cache refresh labels.
+  - Route repair actions to `数据维护 -> 补齐任务`; the atomic page should diagnose and filter, not execute long-running maintenance.
+
+## 2026-07-08 - Plan ETF atomic data update health
+
+- Summary: Added the implementation plan for atomic data-update health, including status relabeling, summary counts, filter wiring, styling, and browser QA.
+- Verification: `rg -n "TBD|TODO|FIXME|待定|待补|不确定|implement later|fill in|appropriate|Similar to|handle edge cases" docs\superpowers\plans\2026-07-08-etf-atomic-data-update-health.md` returned no matches; `git diff --check -- docs/superpowers/plans/2026-07-08-etf-atomic-data-update-health.md` passed.
+- Watch out next time:
+  - Test the `stale` wording in both table localization and atomic-specific display rows.
+  - Keep the health summary click behavior as filter selection, not as direct data fetching.
+
+## 2026-07-08 - ETF atomic data update health
+
+- Summary: Replaced misleading row-level `正在刷新` history status with `行情滞后`, added a data-update health summary to `ETF数据 -> 原子指标`, and linked health items to existing filters and maintenance flow, including post-refresh option rebuilding.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_nicegui_view_models.py tests/test_nicegui_table_display.py tests/test_nicegui_app_import.py tests/test_nicegui_theme.py -q --basetemp pytest-tmp-etf-atomic-health-focused` passed with 45 tests; `.venv-win\Scripts\python.exe -m pytest tests/test_atomic_indicators.py tests/test_nicegui_navigation.py tests/test_nicegui_state_cache.py tests/test_nicegui_maintenance_tasks.py -q --basetemp pytest-tmp-etf-atomic-health-regression` passed with 16 tests; browser verified `http://127.0.0.1:8516/page/etf-data/原子指标` desktop health summary, quick-filter resets, and 390px content with no horizontal overflow.
+- Watch out next time:
+  - Keep row-level history freshness labels separate from snapshot cache refresh status.
+  - Keep repair execution in `数据维护 -> 补齐任务`; the atomic page should diagnose and filter.
+  - The mobile left sidebar remains cramped at 390px; this is outside the atomic health panel and should be handled as a shell responsiveness task.
+
+## 2026-07-11 - Add resumable all-ETF history catch-up
+
+- Summary: Added a resumable `数据维护 -> 补齐任务 -> ETF历史` one-click all-ETF catch-up action with task-center progress, fresh-file skipping, per-ETF failure isolation, and local-master fallback when master refresh fails.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_storage_and_services.py tests/test_nicegui_maintenance_tasks.py tests/test_nicegui_app_import.py tests/test_nicegui_table_display.py -q --basetemp pytest-tmp-etf-history-batch` passed with 32 tests; HTTP check of `http://127.0.0.1:8502/page/maintenance/补齐任务` returned 200 and contained the new all-ETF button text.
+- Watch out next time:
+  - Keep all-ETF catch-up resumable by checking existing Parquet freshness before provider calls.
+  - Do not let one failed ETF abort the whole batch; record `FAILED` in `data_update_state` and continue.
+  - Browser-plugin validation of localhost may be blocked by enterprise policy; use local HTTP plus pytest when direct browser access is unavailable.
+
+## 2026-07-11 - Add index health atomic dashboard
+
+- Summary: Added `市场地图 -> 指数体检` as the index atomic dashboard, backed by local index valuation Parquet, a page-ready index health snapshot cache, and separate trend/valuation atomic detail tables.
+- Verification: `.venv-win\Scripts\python.exe -m pytest tests/test_index_valuations.py tests/test_index_health_snapshot.py tests/test_nicegui_navigation.py tests/test_nicegui_view_models.py tests/test_nicegui_state_cache.py tests/test_nicegui_app_import.py -q --basetemp pytest-tmp-index-health-focused` passed with 47 tests; nearby NiceGUI/storage regression passed with 73 tests.
+- Watch out next time:
+  - Keep `指数买卖参考` as the trend gate view only; put diagnostics in `指数体检`.
+  - Keep the page render cache-only; heavy snapshot work belongs in `research/*` and `nicegui_app/state.py`.
+  - Show missing or insufficient valuation rows explicitly instead of filling fake valuation values.

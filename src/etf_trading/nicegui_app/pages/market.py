@@ -6,13 +6,23 @@ from nicegui import ui
 
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.charts import render_ranged_lightweight_chart
-from etf_trading.nicegui_app.components.tables import table_columns
-from etf_trading.nicegui_app.state import index_chart_payload
+from etf_trading.nicegui_app.components.tables import render_table
+from etf_trading.nicegui_app.state import (
+    index_chart_payload,
+    invalidate_index_health_snapshot_cache,
+    load_index_health_snapshot_cached,
+)
 from etf_trading.nicegui_app.view_models import (
+    IndexHealthFilters,
     PlatformSnapshot,
     code_from_option,
     current_ui_audit_findings,
     index_choice_options,
+    index_health_detail_options,
+    index_health_detail_rows,
+    index_health_filter_options,
+    index_health_rows,
+    index_health_summary,
     market_overview,
 )
 
@@ -20,6 +30,8 @@ from etf_trading.nicegui_app.view_models import (
 def render(snapshot: PlatformSnapshot, section: str, parquet_store=None) -> None:
     if section == "市场总览":
         _render_overview(snapshot)
+    elif section == "指数体检":
+        _render_index_health(snapshot, parquet_store)
     elif section == "指数买卖参考":
         _render_index_reference(snapshot)
     else:
@@ -35,7 +47,7 @@ def _render_overview(snapshot: PlatformSnapshot) -> None:
 
     rows = overview["categories"]
     if rows:
-        ui.table(columns=table_columns(rows), rows=rows, row_key="category").classes("workbench-data-table w-full")
+        render_table(rows, row_key="category", ui_module=ui).classes("workbench-data-table w-full")
     else:
         empty_state("暂无指数状态", "到数据维护补齐指数历史后再查看市场总览。")
     _render_audit("market")
@@ -44,9 +56,173 @@ def _render_overview(snapshot: PlatformSnapshot) -> None:
 def _render_index_reference(snapshot: PlatformSnapshot) -> None:
     rows = snapshot.index_summary.fillna("").to_dict("records") if not snapshot.index_summary.empty else []
     if rows:
-        ui.table(columns=table_columns(rows), rows=rows, row_key="index_code").classes("workbench-data-table w-full")
+        ui.label("这里只看趋势过滤：大趋势 / 中趋势 / 小趋势对齐时，才允许新开仓。").classes("workbench-chart-note")
+        render_table(rows, row_key="index_code", compact=True, ui_module=ui).classes("workbench-data-table workbench-data-table--compact")
     else:
         empty_state("暂无指数买卖参考", "先补齐指数历史。")
+    _render_audit("market")
+
+
+def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
+    if parquet_store is None:
+        empty_state("暂无指数体检", "当前页面没有可用历史数据存储。")
+        _render_audit("market")
+        return
+
+    try:
+        cache_result = load_index_health_snapshot_cached(parquet_store)
+        holder = {"summary": cache_result.summary, "details": cache_result.details, "result": cache_result}
+    except Exception as exc:  # noqa: BLE001 - diagnostics should surface snapshot failures
+        empty_state("指数体检快照生成失败", str(exc))
+        _render_audit("market")
+        return
+
+    status_area = ui.row().classes("w-full")
+    metric_area = ui.row().classes("w-full gap-2")
+    table_area = ui.column().classes("w-full")
+    detail_area = ui.column().classes("w-full gap-2")
+    filter_maps = {
+        "categories": index_health_filter_options(holder["summary"], "category", "全部分类"),
+        "trend": index_health_filter_options(holder["summary"], "trend_health_status", "全部趋势体检"),
+        "valuation": index_health_filter_options(holder["summary"], "valuation_health_status", "全部估值体检"),
+    }
+
+    with ui.row().classes("workbench-toolbar w-full"):
+        query = ui.input("代码 / 名称 / 分类").props("dense outlined clearable debounce=250").classes("w-72")
+        category = ui.select(filter_maps["categories"], value=filter_maps["categories"][0], label="分类").props("dense outlined").classes("w-40")
+        trend_status = ui.select(filter_maps["trend"], value=filter_maps["trend"][0], label="趋势体检").props("dense outlined").classes("w-40")
+        valuation_status = ui.select(filter_maps["valuation"], value=filter_maps["valuation"][0], label="估值体检").props("dense outlined").classes("w-40")
+        detail_select = ui.select([], value=None, label="查看指数").props("dense outlined").classes("w-72")
+        ui.button("刷新快照", icon="refresh", on_click=lambda: reload_snapshot()).props("dense outline")
+
+    selected_holder = {"code": ""}
+
+    def render_cache_status() -> None:
+        status_area.clear()
+        result = holder["result"]
+        if result.status == "ready":
+            return
+        with status_area:
+            if result.status == "stale":
+                ui.label(f"指数体检快照刷新失败，当前展示上一版缓存：{result.message}").classes("text-xs text-amber-700")
+            elif result.status == "building":
+                ui.label("指数体检快照正在生成，稍后刷新即可查看。").classes("text-xs text-blue-700")
+            elif result.status == "failed":
+                ui.label(f"指数体检快照生成失败：{result.message}").classes("text-xs text-red-700")
+
+    def render_metrics() -> None:
+        metric_area.clear()
+        with metric_area:
+            for metric in index_health_summary(holder["summary"]):
+                _metric(metric.label, metric.value, metric.detail)
+
+    def current_filters() -> IndexHealthFilters:
+        return IndexHealthFilters(
+            query=str(query.value or ""),
+            category=str(category.value or "全部分类"),
+            trend_status=str(trend_status.value or "全部趋势体检"),
+            valuation_status=str(valuation_status.value or "全部估值体检"),
+        )
+
+    def refresh_filter_options() -> None:
+        def sync(select_control, key: str, column: str, all_label: str) -> None:
+            options = index_health_filter_options(holder["summary"], column, all_label)
+            filter_maps[key] = options
+            current = str(select_control.value or all_label)
+            select_control.options = options
+            select_control.value = current if current in options else options[0]
+            select_control.update()
+
+        sync(category, "categories", "category", "全部分类")
+        sync(trend_status, "trend", "trend_health_status", "全部趋势体检")
+        sync(valuation_status, "valuation", "valuation_health_status", "全部估值体检")
+
+    def select_detail(index_code: str) -> None:
+        if not index_code:
+            return
+        selected_holder["code"] = index_code
+        for option in detail_select.options:
+            if code_from_option(option) == index_code:
+                detail_select.value = option
+                detail_select.update()
+                break
+        render_details()
+
+    def refresh_table() -> None:
+        filters = current_filters()
+        rows = index_health_rows(holder["summary"], filters)
+        options = index_health_detail_options(holder["summary"], filters)
+        option_by_code = {code_from_option(option): option for option in options}
+        current_code = selected_holder["code"]
+        if not current_code or current_code not in option_by_code:
+            current_code = code_from_option(options[0]) if options else ""
+            selected_holder["code"] = current_code
+        detail_select.options = options
+        detail_select.value = option_by_code.get(current_code)
+        detail_select.update()
+
+        table_area.clear()
+        with table_area:
+            if rows:
+                render_table(rows, row_key="index_code", pagination=15, compact=True, ui_module=ui).classes("workbench-data-table w-full").on(
+                    "rowClick",
+                    lambda event: select_detail(_event_row_code(event, "index_code")),
+                )
+            else:
+                empty_state("没有匹配指数体检", "换一个筛选条件，或先到数据维护补齐指数历史与估值缓存。")
+        render_details()
+
+    def render_details() -> None:
+        detail_area.clear()
+        index_code = selected_holder["code"]
+        with detail_area:
+            if not index_code:
+                empty_state("暂无指数体检详情", "请选择一个指数查看原子指标。")
+                return
+            trend_rows = index_health_detail_rows(holder["details"], index_code, "trend")
+            valuation_rows = index_health_detail_rows(holder["details"], index_code, "valuation")
+            ui.label(f"趋势原子指标：{index_code}").classes("text-sm font-semibold text-slate-700")
+            if trend_rows:
+                render_table(trend_rows, pagination=12, compact=True, ui_module=ui).classes("workbench-data-table w-full")
+            else:
+                empty_state("暂无趋势原子指标", "当前快照中没有这个指数的趋势明细。")
+            ui.label(f"估值原子指标：{index_code}").classes("text-sm font-semibold text-slate-700")
+            if valuation_rows:
+                render_table(valuation_rows, pagination=12, compact=True, ui_module=ui).classes("workbench-data-table w-full")
+            else:
+                empty_state("暂无估值原子指标", "当前快照中没有这个指数的估值明细。")
+
+    def reload_snapshot() -> None:
+        try:
+            should_force_refresh = holder["result"].status == "ready"
+            if should_force_refresh:
+                invalidate_index_health_snapshot_cache(parquet_store)
+            cache_result = load_index_health_snapshot_cached(parquet_store, force_refresh=should_force_refresh)
+            holder["summary"] = cache_result.summary
+            holder["details"] = cache_result.details
+            holder["result"] = cache_result
+        except Exception as exc:  # noqa: BLE001 - keep current page usable after refresh failures
+            ui.notify(f"刷新指数体检失败：{exc}", type="negative")
+            return
+        refresh_filter_options()
+        render_cache_status()
+        render_metrics()
+        refresh_table()
+        if cache_result.status == "failed":
+            ui.notify("指数体检快照生成失败，请查看页面提示", type="negative")
+        elif cache_result.status == "stale":
+            ui.notify("指数体检快照刷新失败，已保留上一版缓存", type="warning")
+        else:
+            ui.notify("指数体检快照已刷新", type="positive")
+
+    query.on_value_change(lambda event: refresh_table())
+    category.on_value_change(lambda event: refresh_table())
+    trend_status.on_value_change(lambda event: refresh_table())
+    valuation_status.on_value_change(lambda event: refresh_table())
+    detail_select.on_value_change(lambda event: select_detail(code_from_option(str(detail_select.value or ""))))
+    render_cache_status()
+    render_metrics()
+    refresh_table()
     _render_audit("market")
 
 
@@ -72,14 +248,14 @@ def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
 
             render_ranged_lightweight_chart(payload, element_id=f"index-chart-{selected}", title=f"指数：{selected}")
 
-    with ui.row().classes("workbench-toolbar w-full justify-between"):
+    with ui.row().classes("workbench-chart-selector w-full"):
         ui.select(
             options,
             value=options[0],
             label="选择指数",
             on_change=lambda event: draw_chart(event.value),
         ).props("dense outlined").classes("w-96")
-        ui.label("指数只做市场状态判断，ETF 交易载体在 ETF 数据页处理。").classes("text-xs text-slate-500")
+        ui.label("指数只做市场状态判断，ETF 交易载体在 ETF 数据页处理。").classes("workbench-chart-note")
     chart_area = ui.column().classes("w-full gap-2")
     draw_chart(options[0])
     _render_audit("market")
@@ -92,8 +268,23 @@ def _metric(label: str, value: object, detail: str) -> None:
         ui.label(detail).classes("text-xs text-slate-400")
 
 
+def _event_row_code(event, key: str) -> str:
+    args = getattr(event, "args", None)
+    if isinstance(args, dict):
+        row = args.get("row", args)
+    elif isinstance(args, list) and len(args) >= 2 and isinstance(args[1], dict):
+        row = args[1]
+    else:
+        row = {}
+    value = row.get(key, "") if isinstance(row, dict) else ""
+    return str(value).strip()
+
+
 def _render_audit(page_slug: str) -> None:
     findings = [item for item in current_ui_audit_findings() if item.page_slug == page_slug]
-    with ui.expansion("本页 UI 修正点", icon="rule").classes("w-full text-sm"):
+    expansion = getattr(ui, "expansion", None)
+    if not callable(expansion):
+        return
+    with expansion("本页 UI 修正点", icon="rule").classes("w-full text-sm"):
         for item in findings:
             ui.label(f"{item.problem} -> {item.fix}").classes("text-xs text-slate-500")

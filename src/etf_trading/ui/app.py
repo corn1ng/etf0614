@@ -56,7 +56,9 @@ RESEARCH_REPORT_DIR = Path("reports/research_dashboard")
 UI_PREFERENCES_PATH = Path("data/ui_preferences.json")
 SAMPLE_CATEGORIES = ["A股宽基", "A股行业", "港股宽基", "港股科技", "港股医药", "商品", "债券"]
 WORKFLOW_TABS = ["今日行动", "市场地图", "ETF数据", "策略实验室", "数据维护"]
-INDEX_WATCH_COMMON_CODES = ("000300", "000905", "000852", "000510", "399006", "000688")
+INDEX_WATCH_COMMON_CODES = ("000300", "000905", "000852", "932000", "000510", "000016", "399006", "000688")
+INDEX_WATCH_COMMON_KEY = "common_index_codes"
+INDEX_WATCH_QUICK_COLUMN_LIMIT = 8
 INDEX_WATCH_RECENT_KEY = "recent_index_codes"
 INDEX_WATCH_RECENT_LIMIT = 6
 INDEX_WATCH_SELECTED_KEY = "index_watch_selected_code"
@@ -807,6 +809,63 @@ def _write_ui_preferences(preferences: dict[str, object], path: Path = UI_PREFER
     preferences_path.write_text(json.dumps(preferences, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _normalize_common_index_codes(raw_codes: object) -> list[str]:
+    configured_codes = raw_codes if isinstance(raw_codes, list) else []
+    valid_codes: list[str] = []
+    seen: set[str] = set()
+
+    for raw_code in configured_codes:
+        if not isinstance(raw_code, str) or raw_code in seen:
+            continue
+        definition = _index_definition_for_code(raw_code)
+        if definition is None:
+            continue
+        valid_codes.append(definition.index_code)
+        seen.add(definition.index_code)
+        if len(valid_codes) >= INDEX_WATCH_QUICK_COLUMN_LIMIT:
+            return valid_codes
+
+    for default_code in INDEX_WATCH_COMMON_CODES:
+        if default_code in seen:
+            continue
+        valid_codes.append(default_code)
+        seen.add(default_code)
+        if len(valid_codes) >= INDEX_WATCH_QUICK_COLUMN_LIMIT:
+            break
+    return valid_codes
+
+
+def _load_common_index_codes(path: Path = UI_PREFERENCES_PATH) -> list[str]:
+    return _normalize_common_index_codes(_load_ui_preferences(path).get(INDEX_WATCH_COMMON_KEY, []))
+
+
+def _save_common_index_codes(index_codes: list[str], path: Path = UI_PREFERENCES_PATH) -> list[str]:
+    common_codes = _normalize_common_index_codes(index_codes)
+    preferences = _load_ui_preferences(path)
+    preferences[INDEX_WATCH_COMMON_KEY] = common_codes
+    _write_ui_preferences(preferences, path)
+    return common_codes
+
+
+def _replace_common_index_code(slot_index: int, replacement_code: str, path: Path = UI_PREFERENCES_PATH) -> list[str]:
+    common_codes = _load_common_index_codes(path)
+    definition = _index_definition_for_code(replacement_code)
+    if definition is None or slot_index < 0 or slot_index >= len(common_codes):
+        return common_codes
+    if definition.index_code in common_codes and common_codes[slot_index] != definition.index_code:
+        return common_codes
+
+    common_codes[slot_index] = definition.index_code
+    return _save_common_index_codes(common_codes, path)
+
+
+def _reset_common_index_codes(path: Path = UI_PREFERENCES_PATH) -> list[str]:
+    preferences = _load_ui_preferences(path)
+    preferences.pop(INDEX_WATCH_COMMON_KEY, None)
+    _write_ui_preferences(preferences, path)
+    return list(INDEX_WATCH_COMMON_CODES)
+
+
 def _load_recent_index_codes(path: Path = UI_PREFERENCES_PATH) -> list[str]:
     recent = _load_ui_preferences(path).get(INDEX_WATCH_RECENT_KEY, [])
     if not isinstance(recent, list):
@@ -872,12 +931,59 @@ def _render_index_quick_buttons(title: str, definitions: list[IndexDefinition], 
         return None
 
     st.markdown(f"###### {title}")
-    columns = st.columns(min(len(definitions), 6))
+    columns = st.columns(min(len(definitions), INDEX_WATCH_QUICK_COLUMN_LIMIT), gap="small")
     for idx, definition in enumerate(definitions):
         column = columns[idx % len(columns)]
         if column.button(definition.name, key=f"{key_prefix}_{definition.index_code}", use_container_width=True):
             return definition.index_code
     return None
+
+
+def _render_common_index_customizer(common_index_codes: list[str]) -> None:
+    common_definitions = _index_definitions_for_codes(common_index_codes)
+    if not common_definitions:
+        return
+
+    with st.expander("调整常用指数", expanded=False):
+        controls = st.columns([1.15, 2.35, 0.75, 0.95], gap="small")
+        slot_labels = [
+            f"{idx + 1}. {_index_definition_label(definition)}"
+            for idx, definition in enumerate(common_definitions)
+        ]
+        slot_label = controls[0].selectbox("替换位置", slot_labels, key="index_watch_common_slot")
+        slot_index = slot_labels.index(slot_label) if slot_label in slot_labels else 0
+        current_code = common_definitions[slot_index].index_code
+        active_codes = {definition.index_code for definition in common_definitions}
+        replacement_definitions = [
+            definition
+            for definition in DEFAULT_INDEXES
+            if definition.index_code == current_code or definition.index_code not in active_codes
+        ]
+        replacement_labels = [_index_definition_label(definition) for definition in replacement_definitions]
+        replacement_index = next(
+            (
+                idx
+                for idx, definition in enumerate(replacement_definitions)
+                if definition.index_code == current_code
+            ),
+            0,
+        )
+        replacement_label = controls[1].selectbox(
+            "换成",
+            replacement_labels,
+            index=replacement_index,
+            key="index_watch_common_replacement",
+        )
+        replacement_code = replacement_label.split()[0]
+
+        if controls[2].button("保存", key="index_watch_common_save", use_container_width=True):
+            _replace_common_index_code(slot_index, replacement_code)
+            st.success("已更新常用指数")
+            st.rerun()
+        if controls[3].button("恢复默认", key="index_watch_common_reset", use_container_width=True):
+            _reset_common_index_codes()
+            st.success("已恢复默认常用指数")
+            st.rerun()
 
 
 def _select_index_for_watch() -> str:
@@ -892,11 +998,13 @@ def _select_index_for_watch() -> str:
     if _index_definition_for_code(current_code) is None:
         current_code = default_code
 
+    common_index_codes = _load_common_index_codes()
     clicked_code = _render_index_quick_buttons(
         "常用指数",
-        _index_definitions_for_codes(INDEX_WATCH_COMMON_CODES),
+        _index_definitions_for_codes(common_index_codes),
         "index_watch_common",
     )
+    _render_common_index_customizer(common_index_codes)
     recent_definitions = _index_definitions_for_codes(_load_recent_index_codes())
     recent_clicked_code = _render_index_quick_buttons("最近选择", recent_definitions, "index_watch_recent")
     if clicked_code or recent_clicked_code:
@@ -2098,8 +2206,8 @@ def main() -> None:
             parquet_store=parquet_store,
             view=section,
             index_summary=status["index_summary"],
+            render_market_overview=_render_market_overview,
             render_index_filter_explorer=_render_index_filter_explorer,
-            render_etf_chart=_tab_chart,
             render_index_watch=_tab_index_watch,
         )
     elif page.slug == "portfolio":
@@ -2108,6 +2216,7 @@ def main() -> None:
             parquet_store=parquet_store,
             view=section,
             render_data_overview=_render_etf_data_overview,
+            render_etf_chart=_tab_chart,
             render_index_etf_pool=_render_portfolio_index_etf_pool,
             render_search_and_add=_render_etf_search_and_add,
             watchlist_status_frame=_watchlist_status_frame,
@@ -2288,6 +2397,48 @@ def _render_data_health(status: dict[str, object]) -> None:
     cols[2].metric("每日计算池", f"{len(watchlist)}")
     cols[3].metric("缺历史 ETF", f"{len(missing_etf_history)}")
     render_next_steps(status)
+
+
+def _render_market_overview(index_summary: pd.DataFrame) -> None:
+    if index_summary.empty:
+        st.info("暂无指数趋势数据。请到“数据维护 -> 补齐任务”补齐指数历史。")
+        return
+
+    available = index_summary.copy()
+    if "allows_new_position" not in available.columns:
+        available["allows_new_position"] = False
+    if "category" not in available.columns:
+        available["category"] = ""
+
+    allowed_mask = available["allows_new_position"].fillna(False).astype(bool)
+    category_text = available["category"].fillna("").astype(str)
+    category_count = int(category_text[category_text != ""].nunique())
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("指数总数", f"{len(available)}")
+    metric_cols[1].metric("可找买点", f"{int(allowed_mask.sum())}")
+    metric_cols[2].metric("暂不参与", f"{int((~allowed_mask).sum())}")
+    metric_cols[3].metric("覆盖分类", f"{category_count}")
+
+    category_summary = (
+        available.assign(_category=category_text.mask(category_text == "", "未分类"), _allowed=allowed_mask)
+        .groupby("_category", sort=False)
+        .agg(指数数量=("_category", "size"), 可参与数量=("_allowed", "sum"))
+        .reset_index()
+        .rename(columns={"_category": "分类"})
+    )
+    category_summary["可参与数量"] = category_summary["可参与数量"].astype(int)
+
+    st.markdown("### 分类参与状态")
+    st.dataframe(
+        category_summary,
+        width="stretch",
+        hide_index=True,
+        height=_compact_dataframe_height(category_summary, max_height=260),
+    )
+
+    st.markdown("### 指数状态")
+    _render_research_table(_index_trend_display_frame(index_summary), height=420)
 
 
 def _build_ui_index_etf_universe(

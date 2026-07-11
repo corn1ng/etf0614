@@ -26,14 +26,14 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec(
         slug="market",
         label="市场地图",
-        caption="观察 ETF 行情和指数趋势，不输出未验证交易建议。",
-        sections=("ETF行情", "指数K线"),
+        caption="观察指数和市场参与状态，不承载 ETF 行情下钻。",
+        sections=("市场总览", "指数买卖参考", "指数K线"),
     ),
     PageSpec(
         slug="portfolio",
         label="ETF数据",
-        caption="统一查看 ETF 主列表、计算池和指数样本池。",
-        sections=("数据总览", "搜索加入", "每日计算池", "指数样本池"),
+        caption="统一查看 ETF 主列表、行情、计算池和样本归属。",
+        sections=("ETF总览", "ETF行情", "搜索加入", "每日计算池", "指数样本池"),
     ),
     PageSpec(
         slug="research",

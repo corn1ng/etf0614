@@ -8,20 +8,26 @@ from nicegui import ui
 
 from .navigation import NICEGUI_PAGES, NicePageSpec, get_page_by_slug, resolve_section
 from .theme import apply_theme
+from .view_models import PlatformSnapshot
 
 
 def render_shell(page_slug: str | None = None, section: str | None = None) -> None:
+    from .state import create_parquet_store, create_store, load_snapshot_cached
+
     apply_theme()
     page = get_page_by_slug(page_slug)
     active_section = resolve_section(page, section)
+    store = create_store()
+    parquet_store = create_parquet_store()
+    snapshot = load_snapshot_cached(store, parquet_store)
 
     with ui.row().classes("workbench-shell w-full no-wrap"):
         _render_sidebar(page.slug)
         with ui.column().classes("workbench-main flex-1 no-wrap"):
-            _render_topbar()
+            _render_topbar(snapshot)
             with ui.column().classes("workbench-page w-full"):
                 _render_page_header(page, active_section)
-                _render_page(page.slug, active_section)
+                _render_page(page.slug, active_section, snapshot, store=store, parquet_store=parquet_store)
 
 
 def _render_sidebar(active_slug: str) -> None:
@@ -34,20 +40,21 @@ def _render_sidebar(active_slug: str) -> None:
             ui.link(page.label, f"/page/{page.slug}").classes(classes)
 
 
-def _render_topbar() -> None:
+def _render_topbar(snapshot: PlatformSnapshot) -> None:
+    refresh_time = snapshot.generated_at.strftime("%Y-%m-%d %H:%M")
     with ui.row().classes("workbench-topbar w-full items-center justify-between px-4"):
         ui.label("本地量化工作台").classes("text-sm font-semibold text-slate-700")
         with ui.row().classes("items-center gap-2"):
             ui.icon("radio_button_checked").classes("text-xs text-emerald-500")
-            ui.label("NiceGUI").classes("text-xs text-slate-500")
+            ui.label(f"数据更新 {refresh_time}").classes("text-xs text-slate-500")
 
 
 def _render_page_header(page: NicePageSpec, active_section: str) -> None:
-    with ui.row().classes("w-full items-end justify-between gap-3"):
+    with ui.column().classes("workbench-page-header w-full gap-2"):
         with ui.column().classes("gap-0"):
             ui.label(page.label).classes("workbench-page-title")
             ui.label(page.caption).classes("workbench-page-caption")
-        with ui.row().classes("workbench-toolbar"):
+        with ui.row().classes("workbench-section-tabs w-full justify-start"):
             for item in page.sections:
                 classes = "workbench-section-tab"
                 if item == active_section:
@@ -55,13 +62,8 @@ def _render_page_header(page: NicePageSpec, active_section: str) -> None:
                 ui.link(item, f"/page/{page.slug}/{quote(item, safe='')}").classes(classes)
 
 
-def _render_page(page_slug: str, section: str) -> None:
+def _render_page(page_slug: str, section: str, snapshot: PlatformSnapshot, *, store, parquet_store) -> None:
     from .pages import action, etf_data, maintenance, market, research
-    from .state import create_parquet_store, create_store, load_snapshot_cached
-
-    store = create_store()
-    parquet_store = create_parquet_store()
-    snapshot = load_snapshot_cached(store, parquet_store)
 
     if page_slug == "action":
         action.render(snapshot, section, store=store, parquet_store=parquet_store)

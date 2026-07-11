@@ -34,8 +34,8 @@ def test_each_page_exposes_expected_secondary_sections():
     sections_by_label = {page.label: section_options(page) for page in PAGE_SPECS}
 
     assert sections_by_label["今日行动"] == ["行动摘要", "每日建议", "计算池明细"]
-    assert sections_by_label["市场地图"] == ["ETF行情", "指数K线"]
-    assert sections_by_label["ETF数据"] == ["数据总览", "搜索加入", "每日计算池", "指数样本池"]
+    assert sections_by_label["市场地图"] == ["市场总览", "指数买卖参考", "指数K线"]
+    assert sections_by_label["ETF数据"] == ["ETF总览", "ETF行情", "搜索加入", "每日计算池", "指数样本池"]
     assert sections_by_label["策略实验室"] == [
         "策略库",
         "新建策略",
@@ -74,7 +74,7 @@ def test_render_page_header_outputs_compact_markup(monkeypatch):
     page = PageSpec(
         slug="market",
         label="市场地图",
-        caption="观察指数、ETF行情和趋势结构。",
+        caption="观察指数和市场参与状态。",
         sections=("指数买卖参考",),
     )
 
@@ -85,7 +85,7 @@ def test_render_page_header_outputs_compact_markup(monkeypatch):
     assert 'class="workbench-page-header__title"' in rendered["body"]
     assert 'class="workbench-page-header__caption"' in rendered["body"]
     assert "市场地图" in rendered["body"]
-    assert "观察指数、ETF行情和趋势结构。" in rendered["body"]
+    assert "观察指数和市场参与状态。" in rendered["body"]
 
 
 def test_research_secondary_navigation_is_not_overridden_by_sticky_auxiliary_tool(monkeypatch):
@@ -254,16 +254,63 @@ def test_page_modules_do_not_render_duplicate_page_titles(monkeypatch):
     assert calls["caption"] == 0
 
 
+def test_market_page_routes_index_decision_views():
+    calls = {"overview": 0, "explorer": 0, "index_watch": 0}
+    index_summary = pd.DataFrame({"index_code": ["000300"], "allows_new_position": [True]})
+
+    app.market.render(
+        store=object(),
+        parquet_store=object(),
+        view="市场总览",
+        index_summary=index_summary,
+        render_market_overview=lambda frame: calls.__setitem__("overview", calls["overview"] + 1),
+        render_index_filter_explorer=lambda frame, parquet_store: calls.__setitem__("explorer", calls["explorer"] + 1),
+        render_index_watch=lambda parquet_store: calls.__setitem__("index_watch", calls["index_watch"] + 1),
+    )
+    app.market.render(
+        store=object(),
+        parquet_store=object(),
+        view="指数买卖参考",
+        index_summary=index_summary,
+        render_market_overview=lambda frame: calls.__setitem__("overview", calls["overview"] + 1),
+        render_index_filter_explorer=lambda frame, parquet_store: calls.__setitem__("explorer", calls["explorer"] + 1),
+        render_index_watch=lambda parquet_store: calls.__setitem__("index_watch", calls["index_watch"] + 1),
+    )
+    app.market.render(
+        store=object(),
+        parquet_store=object(),
+        view="指数K线",
+        index_summary=index_summary,
+        render_market_overview=lambda frame: calls.__setitem__("overview", calls["overview"] + 1),
+        render_index_filter_explorer=lambda frame, parquet_store: calls.__setitem__("explorer", calls["explorer"] + 1),
+        render_index_watch=lambda parquet_store: calls.__setitem__("index_watch", calls["index_watch"] + 1),
+    )
+
+    assert calls == {"overview": 1, "explorer": 1, "index_watch": 1}
+
+
 def test_portfolio_page_routes_etf_data_views():
-    calls = {"overview": 0, "index_pool": 0}
+    calls = {"overview": 0, "chart": 0, "index_pool": 0}
     store = SimpleNamespace(list_watchlist=lambda: pd.DataFrame({"etf_code": ["510300"]}))
     parquet_store = object()
 
     app.portfolio.render(
         store=store,
         parquet_store=parquet_store,
-        view="数据总览",
+        view="ETF总览",
         render_data_overview=lambda store, parquet_store: calls.__setitem__("overview", calls["overview"] + 1),
+        render_etf_chart=lambda store, parquet_store: calls.__setitem__("chart", calls["chart"] + 1),
+        render_index_etf_pool=lambda store, parquet_store: calls.__setitem__("index_pool", calls["index_pool"] + 1),
+        render_search_and_add=lambda store: None,
+        watchlist_status_frame=lambda watchlist, parquet_store: watchlist,
+    )
+
+    app.portfolio.render(
+        store=store,
+        parquet_store=parquet_store,
+        view="ETF行情",
+        render_data_overview=lambda store, parquet_store: calls.__setitem__("overview", calls["overview"] + 1),
+        render_etf_chart=lambda store, parquet_store: calls.__setitem__("chart", calls["chart"] + 1),
         render_index_etf_pool=lambda store, parquet_store: calls.__setitem__("index_pool", calls["index_pool"] + 1),
         render_search_and_add=lambda store: None,
         watchlist_status_frame=lambda watchlist, parquet_store: watchlist,
@@ -274,12 +321,60 @@ def test_portfolio_page_routes_etf_data_views():
         parquet_store=parquet_store,
         view="指数样本池",
         render_data_overview=lambda store, parquet_store: calls.__setitem__("overview", calls["overview"] + 1),
+        render_etf_chart=lambda store, parquet_store: calls.__setitem__("chart", calls["chart"] + 1),
         render_index_etf_pool=lambda store, parquet_store: calls.__setitem__("index_pool", calls["index_pool"] + 1),
         render_search_and_add=lambda store: None,
         watchlist_status_frame=lambda watchlist, parquet_store: watchlist,
     )
 
-    assert calls == {"overview": 1, "index_pool": 1}
+    assert calls == {"overview": 1, "chart": 1, "index_pool": 1}
+
+
+def test_market_overview_summarizes_index_state(monkeypatch):
+    metrics = []
+    dataframe_calls = []
+
+    class FakeMetricColumn:
+        def metric(self, label, value):
+            metrics.append((label, value))
+
+    summary = pd.DataFrame(
+        {
+            "index_code": ["000300", "000905", "399006"],
+            "category": ["A股宽基", "A股宽基", "A股成长"],
+            "allows_new_position": [True, False, True],
+        }
+    )
+
+    monkeypatch.setattr(app.st, "columns", lambda count: [FakeMetricColumn() for _ in range(count)])
+    monkeypatch.setattr(app.st, "markdown", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app.st, "dataframe", lambda frame, *args, **kwargs: dataframe_calls.append(frame.copy()))
+    monkeypatch.setattr(app, "_render_research_table", lambda frame, height=None: dataframe_calls.append(frame.copy()))
+    monkeypatch.setattr(app, "_index_trend_display_frame", lambda frame: frame[["index_code", "allows_new_position"]])
+
+    app._render_market_overview(summary)
+
+    assert metrics == [
+        ("指数总数", "3"),
+        ("可找买点", "2"),
+        ("暂不参与", "1"),
+        ("覆盖分类", "2"),
+    ]
+    category_frame = dataframe_calls[0]
+    assert category_frame.to_dict("records") == [
+        {"分类": "A股宽基", "指数数量": 2, "可参与数量": 1},
+        {"分类": "A股成长", "指数数量": 1, "可参与数量": 1},
+    ]
+
+
+def test_market_overview_handles_empty_index_summary(monkeypatch):
+    info_calls = []
+
+    monkeypatch.setattr(app.st, "info", lambda body: info_calls.append(body))
+
+    app._render_market_overview(pd.DataFrame())
+
+    assert info_calls == ["暂无指数趋势数据。请到“数据维护 -> 补齐任务”补齐指数历史。"]
 
 
 def test_data_maintenance_routes_data_console_views():

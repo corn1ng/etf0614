@@ -7,7 +7,7 @@ from nicegui import ui
 
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.status import metric_strip
-from etf_trading.nicegui_app.components.tables import table_columns
+from etf_trading.nicegui_app.components.tables import render_table
 from etf_trading.nicegui_app.view_models import PlatformSnapshot, current_ui_audit_findings, status_metrics
 from etf_trading.report.daily_report import DailyAdviceReport
 from etf_trading.strategy.features import add_technical_features
@@ -54,7 +54,7 @@ def _render_daily_advice(store, parquet_store, compact: bool = False) -> None:
 
 def _render_rows(rows: list[dict[str, object]], empty_title: str, empty_detail: str) -> None:
     if rows:
-        ui.table(columns=table_columns(rows), rows=rows, pagination=10).classes("workbench-data-table w-full")
+        render_table(rows, pagination=10, ui_module=ui).classes("workbench-data-table w-full")
     else:
         empty_state(empty_title, empty_detail)
 

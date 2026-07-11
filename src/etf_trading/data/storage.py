@@ -218,3 +218,27 @@ class ParquetStore:
         if not path.exists():
             return pd.DataFrame()
         return pd.read_parquet(path)
+
+    def write_index_valuations(self, index_code: str, frame: pd.DataFrame) -> Path:
+        path = self.root / "index_valuations" / f"{index_code}.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_parquet(path, index=False)
+        return path
+
+    def read_index_valuations(self, index_code: str) -> pd.DataFrame:
+        path = self.root / "index_valuations" / f"{index_code}.parquet"
+        if not path.exists():
+            return pd.DataFrame()
+        return pd.read_parquet(path)
+
+    def write_macro_series(self, series_name: str, frame: pd.DataFrame) -> Path:
+        path = self.root / "macro" / f"{series_name}.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_parquet(path, index=False)
+        return path
+
+    def read_macro_series(self, series_name: str) -> pd.DataFrame:
+        path = self.root / "macro" / f"{series_name}.parquet"
+        if not path.exists():
+            return pd.DataFrame()
+        return pd.read_parquet(path)

@@ -40,6 +40,28 @@ def test_build_static_chart_html_renders_svg_without_script_tags():
     assert "K线图" in html
 
 
+def test_build_static_chart_html_uses_line_series_color():
+    payload = [
+        {
+            "chart": {"height": 320},
+            "series": [
+                {
+                    "type": "Line",
+                    "options": {"title": "MA51", "color": "#eab308"},
+                    "data": [
+                        {"time": "2026-01-01", "value": 10.2},
+                        {"time": "2026-01-02", "value": 10.4},
+                    ],
+                }
+            ],
+        }
+    ]
+
+    html = build_static_chart_html(payload, element_id="static-line")
+
+    assert 'stroke="#eab308"' in html
+
+
 def test_build_echart_options_preserves_candles_ma_volume_and_zoom():
     payload = [
         {
@@ -87,6 +109,79 @@ def test_build_echart_options_preserves_candles_ma_volume_and_zoom():
     assert {zoom["type"] for zoom in options["dataZoom"]} == {"inside", "slider"}
 
 
+def test_build_echart_options_sets_line_item_colors_for_legend_symbols():
+    payload = [
+        {
+            "chart": {"height": 520},
+            "series": [
+                {
+                    "type": "Candlestick",
+                    "data": [{"time": "2026-01-01", "open": 10, "high": 11, "low": 9, "close": 10.5}],
+                },
+                {
+                    "type": "Line",
+                    "options": {"title": "MA51", "color": "#eab308"},
+                    "data": [{"time": "2026-01-01", "value": 10.2}],
+                },
+                {
+                    "type": "Line",
+                    "options": {"title": "MA120", "color": "#2563eb"},
+                    "data": [{"time": "2026-01-01", "value": 10.1}],
+                },
+                {
+                    "type": "Line",
+                    "options": {"title": "MA250", "color": "#16a34a"},
+                    "data": [{"time": "2026-01-01", "value": 10.0}],
+                },
+                {
+                    "type": "Line",
+                    "options": {"title": "MA850", "color": "#9333ea"},
+                    "data": [{"time": "2026-01-01", "value": 9.9}],
+                },
+            ],
+        }
+    ]
+
+    options = build_echart_options(payload)
+
+    for name, expected_color in {"MA51": "#eab308", "MA120": "#2563eb", "MA250": "#16a34a", "MA850": "#9333ea"}.items():
+        line = next(series for series in options["series"] if series["name"] == name)
+        assert line["lineStyle"]["color"] == expected_color
+        assert line["itemStyle"]["color"] == expected_color
+
+
+def test_build_echart_options_aligns_sparse_ma_lines_by_trade_date():
+    payload = [
+        {
+            "chart": {"height": 520},
+            "series": [
+                {
+                    "type": "Candlestick",
+                    "data": [
+                        {"time": "2026-01-01", "open": 10, "high": 11, "low": 9, "close": 10.5},
+                        {"time": "2026-01-02", "open": 10.5, "high": 12, "low": 10, "close": 11.5},
+                        {"time": "2026-01-03", "open": 11.5, "high": 13, "low": 11, "close": 12.5},
+                        {"time": "2026-01-04", "open": 12.5, "high": 14, "low": 12, "close": 13.5},
+                    ],
+                },
+                {
+                    "type": "Line",
+                    "options": {"title": "MA120", "color": "#2563eb"},
+                    "data": [
+                        {"time": "2026-01-03", "value": 12.0},
+                        {"time": "2026-01-04", "value": 13.0},
+                    ],
+                },
+            ],
+        }
+    ]
+
+    options = build_echart_options(payload)
+    line = next(series for series in options["series"] if series["name"] == "MA120")
+
+    assert line["data"] == [["2026-01-03", 12.0], ["2026-01-04", 13.0]]
+
+
 def test_build_echart_options_uses_compact_aligned_tooltip_formatter():
     payload = [
         {
@@ -125,6 +220,28 @@ def test_build_echart_options_uses_compact_aligned_tooltip_formatter():
     assert "K线" in formatter
     assert "均线" in formatter
     assert "成交量" in formatter
+    assert 'item.seriesType === "line"' in formatter
+    assert "return item.value[1]" in formatter
+
+
+def test_ranged_chart_component_uses_compact_header_classes():
+    import inspect
+
+    from etf_trading.nicegui_app.components import charts
+    from etf_trading.nicegui_app.theme import WORKBENCH_CSS
+
+    source = inspect.getsource(charts.render_ranged_lightweight_chart)
+
+    assert "workbench-chart-header" in source
+    assert "workbench-chart-title-group" in source
+    assert "workbench-chart-meta" in source
+    assert "workbench-chart-custom-controls" in source
+    assert "workbench-toolbar w-full justify-between" not in source
+    assert "workbench-toolbar w-full justify-end" not in source
+    assert ".workbench-chart-header" in WORKBENCH_CSS
+    assert ".workbench-chart-title-group" in WORKBENCH_CSS
+    assert ".workbench-chart-meta" in WORKBENCH_CSS
+    assert ".workbench-chart-custom-controls" in WORKBENCH_CSS
 
 
 def test_build_echart_options_defaults_long_history_to_recent_window():

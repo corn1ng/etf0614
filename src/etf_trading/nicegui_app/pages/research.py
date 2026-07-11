@@ -10,7 +10,7 @@ from nicegui import ui
 from etf_trading.backtest.engine import BacktestEngine
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.charts import render_ranged_lightweight_chart
-from etf_trading.nicegui_app.components.tables import table_columns
+from etf_trading.nicegui_app.components.tables import render_table
 from etf_trading.nicegui_app.state import index_chart_payload
 from etf_trading.nicegui_app.view_models import (
     PlatformSnapshot,
@@ -32,6 +32,36 @@ from etf_trading.strategy.models import StrategySignal
 RESEARCH_CONFIG = Path("configs/research.yaml")
 RESEARCH_REPORT_DIR = Path("reports/research_dashboard")
 MIN_RESEARCH_ROWS = 252
+MA_OPTIONS = {
+    "20日线": "ma20",
+    "51日线": "ma51",
+    "60日线": "ma60",
+    "120日线": "ma120",
+    "250日线": "ma250",
+}
+SLOPE_FIELD_OPTIONS = {
+    "不启用": None,
+    "60日线20日斜率": "ma60_slope_20",
+    "120日线20日斜率": "ma120_slope_20",
+    "250日线60日斜率": "ma250_slope_60",
+}
+ATR_OPTIONS = {
+    "不启用": None,
+    "1.5倍真实波幅": 1.5,
+    "2倍真实波幅": 2.0,
+    "3倍真实波幅": 3.0,
+}
+CANDIDATE_DISPLAY_NAMES = {
+    "balanced_breakout": "平衡突破",
+    "regime_balanced_breakout": "趋势过滤平衡突破",
+    "early_breakout_tight_heat_filter": "早期突破 + 过热过滤",
+    "regime_early_breakout_tight_heat_filter": "趋势过滤早期突破 + 过热过滤",
+    "relative_strength_momentum": "相对强度动量",
+    "regime_relative_strength_momentum": "趋势过滤相对强度动量",
+    "etf_trend_v1_standard": "ETF趋势标准版",
+    "etf_trend_v1_width_filtered": "ETF趋势宽度过滤版",
+    "etf_trend_v1_tight_heat_filter": "ETF趋势严格过热过滤版",
+}
 
 
 def render(snapshot: PlatformSnapshot, section: str, store=None, parquet_store=None) -> None:
@@ -57,9 +87,9 @@ def render(snapshot: PlatformSnapshot, section: str, store=None, parquet_store=N
 def _render_summary(snapshot: PlatformSnapshot, candidates: list[StrategyCandidate]) -> None:
     with ui.row().classes("w-full gap-2"):
         _metric("策略数", len(candidates), "配置候选")
-        _metric("已采用", sum(1 for candidate in candidates if candidate.status == "adopted"), "adopted")
+        _metric("已采用", sum(1 for candidate in candidates if candidate.status == "adopted"), "当前启用")
         _metric("覆盖指数", snapshot.universe["index_code"].nunique() if not snapshot.universe.empty else 0, "样本池")
-        _metric("默认ETF样本", int(snapshot.universe["is_top_sample"].sum()) if not snapshot.universe.empty and "is_top_sample" in snapshot.universe else 0, "Top样本")
+        _metric("默认ETF样本", int(snapshot.universe["is_top_sample"].sum()) if not snapshot.universe.empty and "is_top_sample" in snapshot.universe else 0, "默认样本")
 
 
 def _render_strategy_library(candidates: list[StrategyCandidate]) -> None:
@@ -70,16 +100,16 @@ def _render_strategy_library(candidates: list[StrategyCandidate]) -> None:
         {
             "策略名称": _candidate_display_name(candidate.name),
             "状态": _strategy_status_name(candidate.status),
-            "入场均线": candidate.entry_ma.upper(),
-            "趋势均线": candidate.trend_ma.upper(),
-            "退出均线": candidate.exit_ma.upper(),
+            "入场均线": _ma_display_name(candidate.entry_ma),
+            "趋势均线": _ma_display_name(candidate.trend_ma),
+            "退出均线": _ma_display_name(candidate.exit_ma),
             "动量窗口": ",".join(str(item) for item in candidate.momentum_windows) or "不启用",
             "相对强度": "不启用" if candidate.rs_rank_max is None else f"前{int(candidate.rs_rank_max * 100)}%",
             "指数过滤": "启用" if candidate.require_trend_regime else "不启用",
         }
         for candidate in candidates
     ]
-    ui.table(columns=table_columns(rows), rows=rows, pagination=12).classes("workbench-data-table w-full")
+    render_table(rows, pagination=12, ui_module=ui).classes("workbench-data-table w-full")
 
 
 def _render_strategy_form() -> None:
@@ -87,9 +117,9 @@ def _render_strategy_form() -> None:
         ui.label("新建参数化策略").classes("text-sm font-semibold text-slate-700")
         name = ui.input("策略名称").props("dense outlined").classes("w-full")
         with ui.row().classes("workbench-toolbar w-full"):
-            entry_ma = ui.select(["ma20", "ma51", "ma60", "ma120"], value="ma51", label="入场均线").props("dense outlined").classes("w-44")
-            trend_ma = ui.select(["ma60", "ma120", "ma250"], value="ma120", label="趋势均线").props("dense outlined").classes("w-44")
-            exit_ma = ui.select(["ma51", "ma60", "ma120"], value="ma120", label="退出均线").props("dense outlined").classes("w-44")
+            entry_ma = ui.select(["20日线", "51日线", "60日线", "120日线"], value="51日线", label="入场均线").props("dense outlined").classes("w-44")
+            trend_ma = ui.select(["60日线", "120日线", "250日线"], value="120日线", label="趋势均线").props("dense outlined").classes("w-44")
+            exit_ma = ui.select(["51日线", "60日线", "120日线"], value="120日线", label="退出均线").props("dense outlined").classes("w-44")
         with ui.row().classes("workbench-toolbar w-full"):
             momentum_20 = ui.checkbox("动量20", value=True)
             momentum_60 = ui.checkbox("动量60", value=True)
@@ -97,8 +127,8 @@ def _render_strategy_form() -> None:
             skip_60 = ui.checkbox("跳过近5日动量60", value=False)
             skip_120 = ui.checkbox("跳过近5日动量120", value=False)
         with ui.row().classes("workbench-toolbar w-full"):
-            relation_enabled = ui.checkbox("要求 MA20 > MA60", value=False)
-            slope_field = ui.select(["不启用", "ma60_slope_20", "ma120_slope_20", "ma250_slope_60"], value="不启用", label="斜率要求").props("dense outlined").classes("w-52")
+            relation_enabled = ui.checkbox("要求20日线高于60日线", value=False)
+            slope_field = ui.select(list(SLOPE_FIELD_OPTIONS), value="不启用", label="斜率要求").props("dense outlined").classes("w-52")
             require_trend_regime = ui.checkbox("启用指数过滤实验因子", value=False)
         with ui.row().classes("workbench-toolbar w-full"):
             rs_rank = ui.select(["不启用", "前20%", "前30%", "前40%"], value="前30%", label="相对强度排名").props("dense outlined").classes("w-44")
@@ -106,8 +136,8 @@ def _render_strategy_form() -> None:
             max_distance = ui.number("距入场均线最大乖离", value=0.12, min=0, max=1, step=0.01).props("dense outlined").classes("w-52")
             min_interval = ui.number("最小交易间隔", value=10, min=1, max=120, step=1).props("dense outlined").classes("w-44")
         with ui.row().classes("workbench-toolbar w-full"):
-            max_atr = ui.select(["不启用", "1.5ATR", "2ATR", "3ATR"], value="不启用", label="ATR过热过滤").props("dense outlined").classes("w-44")
-            trailing_atr = ui.select(["不启用", "1.5ATR", "2ATR", "3ATR"], value="不启用", label="ATR移动止损").props("dense outlined").classes("w-44")
+            max_atr = ui.select(list(ATR_OPTIONS), value="不启用", label="真实波幅过热过滤").props("dense outlined").classes("w-44")
+            trailing_atr = ui.select(list(ATR_OPTIONS), value="不启用", label="真实波幅移动止损").props("dense outlined").classes("w-44")
             target_weight = ui.number("目标仓位", value=1.0, min=0.01, max=1.0, step=0.01).props("dense outlined").classes("w-44")
         result_area = ui.column().classes("w-full")
 
@@ -121,13 +151,13 @@ def _render_strategy_form() -> None:
             skip_momentum = tuple(window for enabled, window in ((skip_60.value, 60), (skip_120.value, 120)) if enabled)
             candidate = StrategyCandidate(
                 name=strategy_name,
-                entry_ma=str(entry_ma.value),
-                trend_ma=str(trend_ma.value),
-                exit_ma=str(exit_ma.value),
+                entry_ma=_ma_code(str(entry_ma.value)),
+                trend_ma=_ma_code(str(trend_ma.value)),
+                exit_ma=_ma_code(str(exit_ma.value)),
                 momentum_windows=momentum,
                 skip_momentum_windows=skip_momentum,
                 required_ma_relations=(("ma20", "ma60"),) if relation_enabled.value else (),
-                slope_field=None if slope_field.value == "不启用" else str(slope_field.value),
+                slope_field=_slope_field_code(str(slope_field.value)),
                 rs_rank_max=_parse_rank_limit(str(rs_rank.value)),
                 max_distance_from_entry_ma=float(max_distance.value or 0),
                 max_recent_return_20=float(max_recent_return.value or 0),
@@ -164,7 +194,7 @@ def _render_run_controls(snapshot: PlatformSnapshot, candidates: list[StrategyCa
     label_to_candidate = dict(zip(candidate_labels, candidates, strict=False))
     index_labels = _index_pool_labels(snapshot.universe)
     if not index_labels:
-        empty_state("当前没有默认 Top 样本", "请先补齐 ETF 历史，让指数样本池生成默认样本。")
+        empty_state("当前没有默认样本", "请先补齐 ETF 历史，让指数样本池生成默认样本。")
         return
 
     result_area = ui.column().classes("w-full gap-2")
@@ -188,7 +218,7 @@ def _render_run_controls(snapshot: PlatformSnapshot, candidates: list[StrategyCa
             ),
         ).props("dense unelevated color=primary")
 
-    ui.label("回测会写入 reports/research_dashboard，完成后可在策略比较和 ETF复盘查看。").classes("text-xs text-slate-500")
+    ui.label("回测结果会保存到本地研究报告目录，完成后可在策略比较和 ETF复盘查看。").classes("text-xs text-slate-500")
     _render_manual_backtest(snapshot, store, parquet_store)
 
 
@@ -248,9 +278,9 @@ def _run_manual_backtest(button, result_area, store, parquet_store, etf_code: st
     else:
         with result_area:
             with ui.row().classes("w-full gap-2"):
-                _metric("总收益", f"{result.metrics.get('total_return', 0) * 100:.2f}%", "Total Return")
-                _metric("最大回撤", f"{result.metrics.get('max_drawdown', 0) * 100:.2f}%", "Max Drawdown")
-                _metric("港股跨境暴露", f"{result.metrics.get('max_hk_cross_market_exposure', 0) * 100:.2f}%", "HK Exposure")
+                _metric("总收益", f"{result.metrics.get('total_return', 0) * 100:.2f}%", "累计表现")
+                _metric("最大回撤", f"{result.metrics.get('max_drawdown', 0) * 100:.2f}%", "风险回撤")
+                _metric("港股跨境暴露", f"{result.metrics.get('max_hk_cross_market_exposure', 0) * 100:.2f}%", "跨境风控")
             payload = _chart_payload_with_trades(featured, result.trades, etf_code)
             render_ranged_lightweight_chart(payload, element_id=f"manual-backtest-{etf_code}", title=f"ETF：{etf_code}")
             _render_rows(_trade_rows(result.trades), "该回测没有产生交易", "检查信号日期是否落在历史区间内。")
@@ -310,10 +340,10 @@ def _render_strategy_results(view: str, store, parquet_store) -> None:
 
 def _render_research_overview(results: pd.DataFrame, ranking: pd.DataFrame) -> None:
     with ui.row().classes("w-full gap-2"):
-        _metric("ETF样本", results["etf_code"].nunique(), "Samples")
-        _metric("候选策略", results["candidate_name"].nunique(), "Strategies")
-        _metric("最佳中位夏普", f"{ranking['median_sharpe'].max():.3f}" if "median_sharpe" in ranking else "", "Sharpe")
-        _metric("最差最大回撤", f"{ranking['worst_max_drawdown'].min() * 100:.1f}%" if "worst_max_drawdown" in ranking else "", "Drawdown")
+        _metric("ETF样本", results["etf_code"].nunique(), "样本数")
+        _metric("候选策略", results["candidate_name"].nunique(), "策略数")
+        _metric("最佳中位夏普", f"{ranking['median_sharpe'].max():.3f}" if "median_sharpe" in ranking else "", "收益风险比")
+        _metric("最差最大回撤", f"{ranking['worst_max_drawdown'].min() * 100:.1f}%" if "worst_max_drawdown" in ranking else "", "回撤")
     ui.label("候选策略排名").classes("text-sm font-semibold text-slate-700")
     _render_rows(_display_rows(ranking), "暂无排名结果", "回测结果为空。")
 
@@ -403,13 +433,13 @@ def _draw_replay_chart(container, candidate_name: str, etf_code: str, category: 
         signals = generate_candidate_signals(etf_code, featured, candidate, category=category)
         result = BacktestEngine().run_single_etf(etf_code, featured, signals, category=category)
         with ui.row().classes("w-full gap-2"):
-            _metric("策略交易", len(result.trades), "Signals")
-            _metric("总收益", f"{result.metrics.get('total_return', 0) * 100:.1f}%", "Total Return")
-            _metric("最大回撤", f"{result.metrics.get('max_drawdown', 0) * 100:.1f}%", "Max Drawdown")
+            _metric("策略交易", len(result.trades), "交易信号")
+            _metric("总收益", f"{result.metrics.get('total_return', 0) * 100:.1f}%", "累计表现")
+            _metric("最大回撤", f"{result.metrics.get('max_drawdown', 0) * 100:.1f}%", "风险回撤")
         payload = _chart_payload_with_trades(featured, result.trades, etf_code)
         render_ranged_lightweight_chart(payload, element_id=f"research-replay-{candidate_name}-{etf_code}", title=f"ETF：{etf_code}")
         trades = _trade_rows(result.trades)
-        _render_rows(trades, "该策略没有产生交易", "当前 ETF 历史区间没有 B/S 点。")
+        _render_rows(trades, "该策略没有产生交易", "当前 ETF 历史区间没有买卖点。")
 
 
 def _render_index_filter_experiment(snapshot: PlatformSnapshot, parquet_store) -> None:
@@ -465,6 +495,9 @@ def _display_rows(frame: pd.DataFrame) -> list[dict[str, object]]:
     result = frame.copy()
     for column in result.select_dtypes(include="number").columns:
         result[column] = result[column].round(4)
+    for column in ("candidate_name", "base_candidate"):
+        if column in result:
+            result[column] = result[column].map(lambda value: _candidate_display_name(str(value)) if pd.notna(value) else value)
     return result.fillna("").to_dict("records")
 
 
@@ -531,14 +564,27 @@ def _parse_rank_limit(label: str) -> float | None:
     return int(label.removeprefix("前").removesuffix("%")) / 100
 
 
+def _ma_code(label: str) -> str:
+    return MA_OPTIONS.get(label, label)
+
+
+def _ma_display_name(code: str) -> str:
+    for label, value in MA_OPTIONS.items():
+        if value == code:
+            return label
+    return code
+
+
+def _slope_field_code(label: str) -> str | None:
+    return SLOPE_FIELD_OPTIONS.get(label)
+
+
 def _parse_atr_value(label: str) -> float | None:
-    if label == "不启用":
-        return None
-    return float(label.removesuffix("ATR"))
+    return ATR_OPTIONS.get(label)
 
 
 def _candidate_display_name(candidate_name: str) -> str:
-    return candidate_name.replace("_", " ")
+    return CANDIDATE_DISPLAY_NAMES.get(candidate_name, f"自定义策略：{candidate_name}")
 
 
 def _strategy_status_name(status: str) -> str:
@@ -547,7 +593,7 @@ def _strategy_status_name(status: str) -> str:
 
 def _render_rows(rows: list[dict[str, object]], empty_title: str, empty_detail: str) -> None:
     if rows:
-        ui.table(columns=table_columns(rows), rows=rows, pagination=12).classes("workbench-data-table w-full")
+        render_table(rows, pagination=12, ui_module=ui).classes("workbench-data-table w-full")
     else:
         empty_state(empty_title, empty_detail)
 

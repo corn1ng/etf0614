@@ -3,14 +3,28 @@ from datetime import datetime
 import pandas as pd
 
 from etf_trading.nicegui_app.view_models import (
+    ATOMIC_HEALTH_COLUMNS,
+    ATOMIC_OPPORTUNITY_COLUMNS,
+    AtomicIndicatorFilters,
+    IndexHealthFilters,
     PlatformSnapshot,
+    atomic_data_update_health,
+    atomic_indicator_detail_groups,
+    atomic_indicator_detail_options,
+    atomic_indicator_rows,
+    atomic_indicator_summary,
     category_options,
     code_from_option,
     current_ui_audit_findings,
-    etf_overview_rows,
     etf_choice_options,
+    etf_overview_rows,
+    filter_atomic_indicator_frame,
     filter_etf_rows,
     index_choice_options,
+    index_health_detail_rows,
+    index_health_filter_options,
+    index_health_rows,
+    index_health_summary,
     maintenance_rows,
     market_overview,
     status_metrics,
@@ -46,6 +60,86 @@ def _snapshot() -> PlatformSnapshot:
     )
 
 
+def _atomic_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "etf_code": ["510300", "512880"],
+            "name": ["沪深300ETF", "证券ETF"],
+            "category": ["A股宽基", "A股行业"],
+            "exchange": ["SSE", "SSE"],
+            "history_status": ["complete", "missing_history"],
+            "feature_status": ["complete", "missing_features"],
+            "latest_trade_date": ["2026-07-03", ""],
+            "history_rows": [520, 0],
+            "return_20": [0.08, None],
+            "return_60": [0.12, None],
+            "return_20_rank_all": [1, None],
+            "return_60_rank_all": [1, None],
+            "return_20_rank_category": [1, None],
+            "return_60_rank_category": [1, None],
+            "close_above_ma20": [True, None],
+            "ma20_above_ma60": [True, None],
+            "close_above_ma60": [True, None],
+            "ma60_slope_20": [0.015, None],
+            "weekly_close_above_ma10": [True, None],
+            "weekly_close_above_ma30": [False, None],
+            "avg_amount_5": [2_000_000.0, None],
+            "avg_amount_20": [1_500_000.0, None],
+            "amount_ratio_5_20": [1.33, None],
+            "distance_ma20_pct": [0.03, None],
+            "distance_ma20_atr": [1.2, None],
+            "is_60d_close_breakout": [True, None],
+            "missing_feature_names": ["", "missing_history"],
+        }
+    )
+
+
+def _index_health_summary_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "index_code": ["000300", "000905"],
+            "index_name": ["沪深300", "中证500"],
+            "market": ["A股", "A股"],
+            "category": ["A股宽基", "A股宽基"],
+            "latest_date": ["2026-07-03", "2026-07-03"],
+            "history_rows": [900, 320],
+            "large_trend": ["UP", "RANGE"],
+            "medium_trend": ["UP", "RANGE"],
+            "small_trend": ["PULLBACK", "BROKEN"],
+            "allows_new_position": [True, False],
+            "trend_health_status": ["normal", "blocked"],
+            "trend_health_reason": ["趋势门槛通过", "小趋势破位"],
+            "valuation_overview_label": ["mid_percentile", "missing"],
+            "valuation_health_status": ["complete", "missing_valuation"],
+            "valuation_health_reason": ["核心估值可用", "没有本地估值历史"],
+            "valuation_latest_date": ["2026-07-03", ""],
+            "valuation_coverage_years": [3.1, 0.0],
+            "valuation_primary_source": ["unit", ""],
+        }
+    )
+
+
+def _index_health_details_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "index_code": ["000300", "000300", "000905"],
+            "detail_kind": ["trend", "valuation", "valuation"],
+            "metric_name": ["large_trend", "pe_ttm", "pe_ttm"],
+            "metric_label": ["大趋势", "市盈率TTM", "市盈率TTM"],
+            "current_value": ["UP", 12.5, pd.NA],
+            "status": ["normal", "computed", "missing_valuation"],
+            "reason": ["大趋势向上", "已计算历史分位", "没有本地估值历史"],
+            "display_direction": ["higher_is_better", "higher_is_more_expensive", "higher_is_more_expensive"],
+            "historical_percentile": [pd.NA, 42.0, pd.NA],
+            "window_years": [pd.NA, 3.1, 0.0],
+            "first_date": ["2022-01-03", "2023-01-03", ""],
+            "latest_date": ["2026-07-03", "2026-07-03", ""],
+            "sample_count": [900, 800, 0],
+            "data_source": ["unit", "unit", ""],
+        }
+    )
+
+
 def test_status_metrics_are_dense_and_human_readable():
     metrics = status_metrics(_snapshot())
 
@@ -68,6 +162,37 @@ def test_market_overview_groups_index_state():
     assert overview["total_indexes"] == 2
     assert overview["allowed_indexes"] == 1
     assert overview["categories"] == [{"category": "A股宽基", "total": 2, "allowed": 1}]
+
+
+def test_index_health_view_models_filter_summary_and_details():
+    summary = _index_health_summary_frame()
+    rows = index_health_rows(
+        summary,
+        IndexHealthFilters(query="300", category="A股宽基", trend_status="normal", valuation_status="complete"),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["index_code"] == "000300"
+    assert rows[0]["valuation_overview_label"] == "mid_percentile"
+    assert "score" not in rows[0]
+    assert index_health_filter_options(summary, "category", "全部分类") == ["全部分类", "A股宽基"]
+    metrics = index_health_summary(summary)
+    assert [metric.label for metric in metrics] == ["指数池", "趋势通过", "估值完整", "估值缺失"]
+    assert [metric.value for metric in metrics] == ["2", "1", "1", "1"]
+
+    details = index_health_detail_rows(_index_health_details_frame(), "000300", "valuation")
+    assert details == [
+        {
+            "metric_label": "市盈率TTM",
+            "current_value": "12.50",
+            "status": "computed",
+            "historical_percentile": "42.0%",
+            "reason": "已计算历史分位",
+            "sample_count": 800,
+            "latest_date": "2026-07-03",
+            "data_source": "unit",
+        }
+    ]
 
 
 def test_table_rows_convert_dataframes_to_records():
@@ -117,3 +242,130 @@ def test_etf_search_filters_by_query_category_and_limit():
     assert [row["ETF代码"] for row in filter_etf_rows(rows, query="证券")] == ["512880"]
     assert [row["ETF代码"] for row in filter_etf_rows(rows, category="A股行业")] == ["512880"]
     assert len(filter_etf_rows(rows, limit=1)) == 1
+
+
+def test_atomic_indicator_summary_counts_data_readiness():
+    metrics = atomic_indicator_summary(_atomic_frame())
+
+    assert [metric.label for metric in metrics][:4] == ["ETF主池", "历史完整", "特征完整", "相对强度可算"]
+    assert [metric.value for metric in metrics][:4] == ["2", "1", "1", "1"]
+
+
+def test_atomic_indicator_rows_are_filtered_and_do_not_expose_advice():
+    rows = atomic_indicator_rows(
+        _atomic_frame(),
+        AtomicIndicatorFilters(query="300", only_breakout=True, only_weekly_ma10=True),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["ETF代码"] == "510300"
+    forbidden = {"综合分", "买入", "卖出", "目标仓位"}
+    assert forbidden.isdisjoint(rows[0].keys())
+
+
+def test_atomic_indicator_rows_support_opportunity_and_health_views():
+    opportunity = atomic_indicator_rows(_atomic_frame(), view_mode="机会特征")
+    health = atomic_indicator_rows(_atomic_frame(), view_mode="体检特征")
+
+    assert tuple(opportunity[0].keys()) == ATOMIC_OPPORTUNITY_COLUMNS
+    assert tuple(health[0].keys()) == ATOMIC_HEALTH_COLUMNS
+    assert opportunity[0]["ETF代码"] == "510300"
+    assert opportunity[0]["20日收益"] == "8.0%"
+    assert opportunity[0]["60日突破"] == "是"
+    assert opportunity[0]["周线>10周"] == "是"
+    assert health[0]["历史行数"] == 520
+    assert health[0]["收盘>20日线"] == "是"
+    assert health[0]["周线>30周"] == "否"
+    assert "缺失字段" in health[1]
+
+
+def test_atomic_indicator_view_switch_keeps_filter_results_stable():
+    filters = AtomicIndicatorFilters(query="300", only_breakout=True, only_weekly_ma10=True)
+
+    filtered = filter_atomic_indicator_frame(_atomic_frame(), filters)
+    opportunity = atomic_indicator_rows(_atomic_frame(), filters, view_mode="机会特征")
+    health = atomic_indicator_rows(_atomic_frame(), filters, view_mode="体检特征")
+
+    assert filtered["etf_code"].tolist() == ["510300"]
+    assert [row["ETF代码"] for row in opportunity] == ["510300"]
+    assert [row["ETF代码"] for row in health] == ["510300"]
+
+
+def test_atomic_indicator_detail_options_follow_current_filters():
+    options = atomic_indicator_detail_options(
+        _atomic_frame(),
+        AtomicIndicatorFilters(category="A股宽基"),
+    )
+
+    assert options == ["510300 沪深300ETF · A股宽基"]
+    assert code_from_option(options[0]) == "510300"
+
+
+def test_atomic_indicator_detail_groups_show_all_atomic_sections_without_advice():
+    groups = atomic_indicator_detail_groups(_atomic_frame(), "510300")
+
+    assert [group.title for group in groups] == ["身份信息", "数据体检", "相对强度", "趋势结构", "量能位置", "偏离程度"]
+    flattened = {
+        row["指标"]: row["数值"]
+        for group in groups
+        for row in group.rows
+    }
+    assert flattened["ETF代码"] == "510300"
+    assert flattened["历史状态"] == "完整"
+    assert flattened["20日收益"] == "8.0%"
+    assert flattened["60日线20日斜率"] == "0.01"
+    assert flattened["5/20成交额"] == "1.33"
+    assert flattened["距20日线ATR"] == "1.20"
+    forbidden = {"综合分", "温度分", "买入", "卖出", "目标仓位"}
+    assert forbidden.isdisjoint(flattened)
+
+
+def test_atomic_indicator_detail_groups_return_empty_for_missing_code():
+    assert atomic_indicator_detail_groups(_atomic_frame(), "999999") == []
+
+
+def test_atomic_indicator_rows_display_stale_history_as_price_lag():
+    frame = _atomic_frame()
+    frame.loc[0, "history_status"] = "stale"
+
+    health_rows = atomic_indicator_rows(frame, view_mode="体检特征")
+    groups = atomic_indicator_detail_groups(frame, "510300")
+    flattened = {
+        row["指标"]: row["数值"]
+        for group in groups
+        for row in group.rows
+    }
+
+    assert health_rows[0]["历史状态"] == "行情滞后"
+    assert flattened["历史状态"] == "行情滞后"
+    assert "正在刷新" not in " ".join(str(value) for value in health_rows[0].values())
+
+
+def test_atomic_data_update_health_counts_repair_states():
+    frame = pd.DataFrame(
+        {
+            "etf_code": ["510300", "512880", "159915", "588000", "560000"],
+            "history_status": ["complete", "stale", "short_history", "missing_history", "read_failed"],
+            "feature_status": ["complete", "complete", "missing_features", "missing_features", "missing_features"],
+        }
+    )
+
+    items = atomic_data_update_health(frame)
+    by_key = {item.key: item for item in items}
+
+    assert [item.label for item in items] == ["行情滞后", "历史不足", "历史缺失", "读取失败", "特征缺失"]
+    assert by_key["stale"].count == 1
+    assert by_key["short_history"].count == 1
+    assert by_key["missing_history"].count == 1
+    assert by_key["read_failed"].count == 1
+    assert by_key["missing_features"].count == 3
+    assert by_key["stale"].filter_type == "history_status"
+    assert by_key["stale"].filter_value == "stale"
+    assert by_key["missing_features"].filter_type == "feature_status"
+    assert by_key["missing_features"].filter_value == "missing_features"
+
+
+def test_atomic_data_update_health_returns_zero_counts_for_empty_frame():
+    items = atomic_data_update_health(pd.DataFrame())
+
+    assert [item.count for item in items] == [0, 0, 0, 0, 0]

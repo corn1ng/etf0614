@@ -24,18 +24,18 @@ NICEGUI_PAGES: tuple[NicePageSpec, ...] = (
         slug="market",
         label="市场地图",
         caption="观察指数和市场参与状态，不承载 ETF 行情下钻。",
-        sections=("市场总览", "指数买卖参考", "指数K线"),
+        sections=("市场总览", "指数体检", "指数买卖参考", "指数K线"),
     ),
     NicePageSpec(
         slug="etf-data",
         label="ETF数据",
         caption="统一查看 ETF 主列表、行情、计算池和样本归属。",
-        sections=("ETF总览", "ETF行情", "搜索加入", "每日计算池", "指数样本池"),
+        sections=("ETF总览", "原子指标", "ETF行情", "搜索加入", "每日计算池", "指数样本池"),
     ),
     NicePageSpec(
         slug="research",
         label="策略实验室",
-        caption="创建策略、运行回测、比较表现并复盘 ETF 的 B/S 点。",
+        caption="创建策略、运行回测、比较表现并复盘 ETF 的买卖点。",
         sections=("策略库", "新建策略", "运行回测", "策略比较", "ETF复盘", "指数过滤实验"),
     ),
     NicePageSpec(

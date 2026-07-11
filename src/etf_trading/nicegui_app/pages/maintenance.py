@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 
 import pandas as pd
-from nicegui import ui
+from nicegui import run, ui
 
 from etf_trading.data.indexes import index_options
-from etf_trading.data.initialization import InitializationService
+from etf_trading.data.initialization import EtfHistoryProgress, InitializationService
 from etf_trading.data.providers.akshare_provider import AkShareProvider
 from etf_trading.nicegui_app.components.alerts import empty_state
-from etf_trading.nicegui_app.components.tables import table_columns
+from etf_trading.nicegui_app.components.tables import render_table
 from etf_trading.nicegui_app.state import invalidate_snapshot_cache
 from etf_trading.nicegui_app.view_models import (
     PlatformSnapshot,
@@ -23,6 +24,86 @@ from etf_trading.nicegui_app.view_models import (
 )
 
 SAMPLE_CATEGORIES = ["A股宽基", "A股行业", "港股宽基", "港股科技", "港股医药", "商品", "债券"]
+EtfHistoryProgressView = EtfHistoryProgress
+
+
+@dataclass
+class MaintenanceTaskStatus:
+    title: str = ""
+    state: str = "idle"
+    message: str = ""
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    result: object | None = None
+    error: str = ""
+    progress_done: int = 0
+    progress_total: int = 0
+    progress_detail: str = ""
+
+
+def _task_state_label(state: str) -> str:
+    return {
+        "idle": "空闲",
+        "running": "运行中",
+        "success": "成功",
+        "failed": "失败",
+        "cancelled": "取消",
+    }.get(state, "空闲")
+
+
+def _task_state_tone(state: str) -> str:
+    return {
+        "idle": "neutral",
+        "running": "info",
+        "success": "success",
+        "failed": "danger",
+        "cancelled": "warning",
+    }.get(state, "neutral")
+
+
+def _format_task_time(value: datetime | None) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S") if value is not None else ""
+
+
+def _render_task_center(container, status: MaintenanceTaskStatus) -> None:
+    container.clear()
+    tone = _task_state_tone(status.state)
+    with container:
+        with ui.column().classes("workbench-task-center w-full"):
+            with ui.row().classes("workbench-task-center-header w-full"):
+                ui.icon("task_alt").classes(f"tone-{tone}")
+                ui.label("任务中心").classes("text-sm font-semibold text-slate-700")
+                ui.badge(_task_state_label(status.state)).classes(f"workbench-task-center-status is-{status.state}")
+            if status.state == "idle":
+                ui.label("暂无任务").classes("text-sm font-semibold text-slate-600")
+                ui.label("点击下方补齐按钮后，这里会显示运行状态和最近结果。").classes("text-xs text-slate-500")
+                return
+
+            ui.label(status.title).classes("text-sm font-semibold text-slate-700")
+            if status.message:
+                ui.label(status.message).classes(f"text-sm font-semibold tone-{tone}")
+
+            meta_parts = []
+            if status.started_at is not None:
+                meta_parts.append(f"开始 {_format_task_time(status.started_at)}")
+            if status.finished_at is not None:
+                meta_parts.append(f"结束 {_format_task_time(status.finished_at)}")
+            if meta_parts:
+                ui.label(" · ".join(meta_parts)).classes("workbench-task-center-meta")
+
+            if status.progress_total > 0:
+                progress_value = max(0.0, min(1.0, status.progress_done / status.progress_total))
+                ui.linear_progress(value=progress_value).props("instant-feedback").classes("w-full")
+                detail = status.progress_detail or status.title
+                ui.label(f"{status.progress_done}/{status.progress_total} · {detail}").classes("text-xs text-slate-500")
+
+            if status.state == "success" and status.result is not None:
+                with ui.column().classes("workbench-task-center-result w-full"):
+                    _render_task_result(status.result)
+            elif status.state == "failed" and status.error:
+                ui.label(status.error).classes("text-xs text-red-700")
+            elif status.state == "cancelled":
+                ui.label("任务没有返回结果，请稍后重试。").classes("text-xs text-amber-700")
 
 
 def render(snapshot: PlatformSnapshot, section: str, store=None, parquet_store=None) -> None:
@@ -74,15 +155,17 @@ def _render_gap_detail(snapshot: PlatformSnapshot) -> None:
 
 
 def _render_tasks(snapshot: PlatformSnapshot, store, parquet_store) -> None:
-    result_area = ui.column().classes("w-full gap-2")
-    _render_master_tasks(store, parquet_store, result_area)
-    _render_etf_history_tasks(snapshot, store, parquet_store, result_area)
-    _render_index_history_tasks(store, parquet_store, result_area)
-    _render_batch_tasks(store, parquet_store, result_area)
+    task_status = MaintenanceTaskStatus()
+    task_center = ui.column().classes("w-full")
+    _render_task_center(task_center, task_status)
+    _render_master_tasks(store, parquet_store, task_center, task_status)
+    _render_etf_history_tasks(snapshot, store, parquet_store, task_center, task_status)
+    _render_index_history_tasks(store, parquet_store, task_center, task_status)
+    _render_batch_tasks(store, parquet_store, task_center, task_status)
     ui.label("补齐任务只在点击后执行，避免打开页面自动触发耗时操作。").classes("text-xs text-slate-500")
 
 
-def _render_master_tasks(store, parquet_store, result_area) -> None:
+def _render_master_tasks(store, parquet_store, task_center, task_status: MaintenanceTaskStatus) -> None:
     with ui.expansion("主列表", icon="database").classes("workbench-task-panel w-full"):
         with ui.row().classes("workbench-toolbar w-full"):
             master_button = ui.button(
@@ -90,7 +173,8 @@ def _render_master_tasks(store, parquet_store, result_area) -> None:
                 icon="database",
                 on_click=lambda: _run_task(
                     master_button,
-                    result_area,
+                    task_center,
+                    task_status,
                     "初始化ETF主列表",
                     lambda: _service_with_provider(store, parquet_store).initialize_master(),
                     lambda result: f"已写入 {len(result)} 只 ETF",
@@ -101,7 +185,8 @@ def _render_master_tasks(store, parquet_store, result_area) -> None:
                 icon="fact_check",
                 on_click=lambda: _run_task(
                     sample_button,
-                    result_area,
+                    task_center,
+                    task_status,
                     "选择样本ETF",
                     lambda: _service(store, parquet_store).select_sample_etfs(SAMPLE_CATEGORIES),
                     lambda result: f"已筛选 {len(result)} 只样本 ETF",
@@ -109,7 +194,7 @@ def _render_master_tasks(store, parquet_store, result_area) -> None:
             ).props("dense outline")
 
 
-def _render_etf_history_tasks(snapshot: PlatformSnapshot, store, parquet_store, result_area) -> None:
+def _render_etf_history_tasks(snapshot: PlatformSnapshot, store, parquet_store, task_center, task_status: MaintenanceTaskStatus) -> None:
     options = etf_choice_options(etf_overview_rows(snapshot))
     start = (date.today() - timedelta(days=365 * 5)).isoformat()
     end = date.today().isoformat()
@@ -126,7 +211,8 @@ def _render_etf_history_tasks(snapshot: PlatformSnapshot, store, parquet_store, 
                 icon="download",
                 on_click=lambda: _run_task(
                     fetch_button,
-                    result_area,
+                    task_center,
+                    task_status,
                     "拉取ETF历史行情",
                     lambda: _service_with_provider(store, parquet_store).fetch_and_store_history(
                         code_from_option(selected.value),
@@ -136,9 +222,28 @@ def _render_etf_history_tasks(snapshot: PlatformSnapshot, store, parquet_store, 
                     lambda result: f"保存 {len(result)} 行历史行情",
                 ),
             ).props("dense outline")
+            fetch_all_button = ui.button(
+                "一键初始化/补齐全部ETF",
+                icon="sync",
+                on_click=lambda: _run_task(
+                    fetch_all_button,
+                    task_center,
+                    task_status,
+                    "补齐全部ETF历史",
+                    lambda: _service_with_provider(store, parquet_store).ensure_all_etf_history(
+                        str(start_input.value or start),
+                        str(end_input.value or end),
+                        refresh_master=True,
+                        sleep_seconds=0.15,
+                        on_progress=lambda progress: _update_etf_history_progress(task_status, progress),
+                    ),
+                    _etf_history_batch_success_message,
+                ),
+            ).props("dense outline")
+        ui.label("全量补齐会跳过已新鲜的本地 ETF 历史；中断后再次点击会从缺失或滞后的 ETF 继续。").classes("text-xs text-slate-500")
 
 
-def _render_index_history_tasks(store, parquet_store, result_area) -> None:
+def _render_index_history_tasks(store, parquet_store, task_center, task_status: MaintenanceTaskStatus) -> None:
     options = index_options()
     end = date.today().isoformat()
     with ui.expansion("指数历史", icon="stacked_line_chart").classes("workbench-task-panel w-full"):
@@ -150,7 +255,8 @@ def _render_index_history_tasks(store, parquet_store, result_area) -> None:
                 icon="download",
                 on_click=lambda: _run_task(
                     fetch_one_button,
-                    result_area,
+                    task_center,
+                    task_status,
                     "拉取指数历史",
                     lambda: pd.DataFrame([_service_with_provider(store, parquet_store).ensure_index_history(code_from_option(selected.value), str(end_input.value or end)).__dict__]),
                     lambda result: f"已检查 {len(result)} 个指数",
@@ -161,7 +267,8 @@ def _render_index_history_tasks(store, parquet_store, result_area) -> None:
                 icon="sync",
                 on_click=lambda: _run_task(
                     fetch_all_button,
-                    result_area,
+                    task_center,
+                    task_status,
                     "补齐全部指数历史",
                     lambda: _service_with_provider(store, parquet_store).ensure_all_index_history(str(end_input.value or end)),
                     lambda result: f"已检查 {len(result)} 个指数",
@@ -170,7 +277,7 @@ def _render_index_history_tasks(store, parquet_store, result_area) -> None:
         ui.label("单个指数失败不会中断全部指数补齐。").classes("text-xs text-slate-500")
 
 
-def _render_batch_tasks(store, parquet_store, result_area) -> None:
+def _render_batch_tasks(store, parquet_store, task_center, task_status: MaintenanceTaskStatus) -> None:
     with ui.expansion("批量任务", icon="queue").classes("workbench-task-panel w-full"):
         with ui.row().classes("workbench-toolbar w-full"):
             jobs_button = ui.button(
@@ -178,7 +285,8 @@ def _render_batch_tasks(store, parquet_store, result_area) -> None:
                 icon="playlist_add",
                 on_click=lambda: _run_task(
                     jobs_button,
-                    result_area,
+                    task_center,
+                    task_status,
                     "生成ETF历史任务",
                     lambda: _service(store, parquet_store).create_history_jobs_for_watchlist(),
                     lambda result: f"已创建 {result} 个历史任务",
@@ -189,7 +297,8 @@ def _render_batch_tasks(store, parquet_store, result_area) -> None:
                 icon="playlist_add_check",
                 on_click=lambda: _run_task(
                     all_master_button,
-                    result_area,
+                    task_center,
+                    task_status,
                     "生成全量ETF历史任务",
                     lambda: _service(store, parquet_store).create_history_jobs_for_all_master(),
                     lambda result: f"已创建 {result} 个全量 ETF 历史任务",
@@ -240,26 +349,83 @@ def _filter_gap_rows(rows: list[dict[str, object]], data_type: str, status: str,
     return filtered
 
 
-def _run_task(button, result_area, title: str, action, success_message) -> None:
+async def _run_task(button, task_center, task_status: MaintenanceTaskStatus, title: str, action, success_message) -> None:
     if button is not None:
         button.disable()
-    result_area.clear()
+
+    task_status.title = title
+    task_status.state = "running"
+    task_status.message = f"{title}正在执行，请稍候..."
+    task_status.started_at = datetime.now()
+    task_status.finished_at = None
+    task_status.result = None
+    task_status.error = ""
+    task_status.progress_done = 0
+    task_status.progress_total = 0
+    task_status.progress_detail = ""
+    _render_task_center(task_center, task_status)
+
+    ui.notify(task_status.message, type="info")
+    if button is not None:
+        button.update()
+    task_center.update()
+    progress_timer = _start_task_progress_timer(task_center, task_status)
+
     try:
-        result = action()
+        result = await run.io_bound(action)
     except Exception as exc:  # noqa: BLE001 - UI should surface provider/storage errors clearly
-        ui.notify(f"{title}失败：{exc}", type="negative")
-        with result_area:
-            empty_state(f"{title}失败", str(exc))
+        task_status.state = "failed"
+        task_status.message = f"{title}失败：{exc}"
+        task_status.finished_at = datetime.now()
+        task_status.result = None
+        task_status.error = str(exc)
+        ui.notify(task_status.message, type="negative")
+        _render_task_center(task_center, task_status)
     else:
+        task_status.finished_at = datetime.now()
+        if result is None:
+            task_status.state = "cancelled"
+            task_status.message = f"{title}已取消或服务正在关闭"
+            task_status.result = None
+            task_status.error = ""
+            ui.notify(task_status.message, type="warning")
+            _render_task_center(task_center, task_status)
+            return
         invalidate_snapshot_cache()
-        message = success_message(result)
-        ui.notify(message, type="positive")
-        with result_area:
-            ui.label(message).classes("text-sm font-semibold text-slate-700")
-            _render_task_result(result)
+        task_status.state = "success"
+        task_status.message = success_message(result)
+        task_status.result = result
+        task_status.error = ""
+        ui.notify(task_status.message, type="positive")
+        _render_task_center(task_center, task_status)
     finally:
+        if progress_timer is not None:
+            progress_timer.cancel()
         if button is not None:
             button.enable()
+
+
+def _start_task_progress_timer(task_center, task_status: MaintenanceTaskStatus):
+    timer_factory = getattr(ui, "timer", None)
+    if timer_factory is None:
+        return None
+    return timer_factory(1.0, lambda: _render_task_center(task_center, task_status), immediate=False)
+
+
+def _update_etf_history_progress(task_status: MaintenanceTaskStatus, progress: EtfHistoryProgress) -> None:
+    task_status.progress_done = progress.done
+    task_status.progress_total = progress.total
+    task_status.progress_detail = f"{progress.etf_code} {progress.status}"
+
+
+def _etf_history_batch_success_message(result: pd.DataFrame) -> str:
+    if result.empty or "status" not in result.columns:
+        return "已检查 0 只 ETF：补齐 0，跳过 0，失败 0"
+    statuses = result["status"].astype(str)
+    skipped = int((statuses == "SKIPPED").sum())
+    failed = int((statuses == "FAILED").sum())
+    completed = int(statuses.isin(["INITIALIZED", "UPDATED", "EMPTY"]).sum())
+    return f"已检查 {len(result)} 只 ETF：补齐 {completed}，跳过 {skipped}，失败 {failed}"
 
 
 def _render_task_result(result) -> None:
@@ -270,12 +436,12 @@ def _render_task_result(result) -> None:
     else:
         rows = [{"结果": result}]
     if rows:
-        ui.table(columns=table_columns(rows), rows=rows, pagination=10).classes("workbench-data-table w-full")
+        render_table(rows, pagination=10, ui_module=ui).classes("workbench-data-table w-full")
 
 
 def _render_rows(rows: list[dict[str, object]], empty_title: str, empty_detail: str) -> None:
     if rows:
-        ui.table(columns=table_columns(rows), rows=rows, pagination=12).classes("workbench-data-table w-full")
+        render_table(rows, pagination=12, ui_module=ui).classes("workbench-data-table w-full")
     else:
         empty_state(empty_title, empty_detail)
 
