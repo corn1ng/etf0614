@@ -38,7 +38,7 @@ from .view_models import PlatformSnapshot
 SNAPSHOT_CACHE_TTL_SECONDS = 600.0
 _SNAPSHOT_CACHE: dict[tuple[str, str], tuple[float, PlatformSnapshot]] = {}
 _SNAPSHOT_CACHE_LOCK = RLock()
-ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 1
+ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 2
 _ATOMIC_SNAPSHOT_CACHE: dict[str, tuple[str, pd.DataFrame, datetime | None]] = {}
 _ATOMIC_SNAPSHOT_ERRORS: dict[str, str] = {}
 _ATOMIC_SNAPSHOT_CACHE_LOCK = RLock()

@@ -42,7 +42,7 @@ def _atomic_master() -> pd.DataFrame:
     )
 
 
-def _write_atomic_cache(root: Path, signature: str) -> None:
+def _write_atomic_cache(root: Path, signature: str, schema_version: int | None = None) -> None:
     cache_dir = root / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
@@ -57,7 +57,7 @@ def _write_atomic_cache(root: Path, signature: str) -> None:
     (cache_dir / "atomic_indicators.meta.json").write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": state.ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION if schema_version is None else schema_version,
                 "source_signature": signature,
                 "generated_at": "2026-07-05T12:00:00",
                 "rows": 1,
@@ -65,6 +65,13 @@ def _write_atomic_cache(root: Path, signature: str) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def test_read_atomic_snapshot_disk_cache_rejects_legacy_schema(tmp_path):
+    root = tmp_path / "parquet"
+    _write_atomic_cache(root, "legacy-signature", schema_version=1)
+
+    assert state._read_atomic_snapshot_disk_cache(FakeParquetStore(str(root))) is None
 
 
 def test_load_snapshot_cached_reuses_snapshot_within_ttl(monkeypatch):

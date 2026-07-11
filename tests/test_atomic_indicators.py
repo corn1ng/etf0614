@@ -60,7 +60,7 @@ def test_atomic_snapshot_reports_history_feature_status_and_ranks():
 
     assert snapshot["etf_code"].tolist() == ["510300", "512880", "513180"]
     ready = snapshot[snapshot["etf_code"] == "510300"].iloc[0]
-    assert ready["history_status"] == "complete"
+    assert ready["history_status"] == "ready"
     assert ready["feature_status"] == "complete"
     assert ready["return_20_rank_all"] in {1, 2}
     short = snapshot[snapshot["etf_code"] == "513180"].iloc[0]
@@ -89,3 +89,33 @@ def test_atomic_snapshot_schema_excludes_scores_and_trade_advice():
 
     forbidden = {"score", "weighted_score", "action", "buy", "sell", "target_weight", "买入", "卖出", "目标仓位"}
     assert forbidden.isdisjoint({column.lower() for column in snapshot.columns})
+
+
+def test_atomic_snapshot_keeps_stale_diagnostics_but_excludes_it_from_ranks():
+    snapshot = build_etf_atomic_indicator_snapshot(
+        _master().iloc[:3],
+        FakeParquetStore(
+            {
+                "510300": _prices("510300", 300, "2026-07-03", 10.0),
+                "512880": _prices("512880", 300, "2026-07-10", 20.0),
+                "513180": _prices("513180", 20, "2026-07-10", 30.0),
+            }
+        ),
+        today=pd.Timestamp("2026-07-10"),
+    )
+
+    stale = snapshot.loc[snapshot["etf_code"] == "510300"].iloc[0]
+    ready = snapshot.loc[snapshot["etf_code"] == "512880"].iloc[0]
+    short = snapshot.loc[snapshot["etf_code"] == "513180"].iloc[0]
+
+    assert stale["history_status"] == "stale"
+    assert stale["history_reason_codes"] == "stale"
+    assert bool(stale["is_rank_eligible"]) is False
+    assert pd.isna(stale["return_20_rank_all"])
+    assert pd.notna(stale["return_20"])
+    assert ready["history_status"] == "ready"
+    assert bool(ready["is_rank_eligible"]) is True
+    assert ready["return_20_rank_all"] == 1
+    assert short["history_status"] == "short_history"
+    assert bool(short["is_rank_eligible"]) is False
+    assert pd.isna(short["return_20_rank_all"])

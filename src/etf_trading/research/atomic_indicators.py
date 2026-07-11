@@ -6,8 +6,14 @@ from typing import Any
 
 import pandas as pd
 
+from etf_trading.data.quality import (
+    HistoryAssessment,
+    HistoryReadiness,
+    assess_price_history,
+    expected_latest_trade_date,
+    read_failed_assessment,
+)
 from etf_trading.strategy.features import add_technical_features, add_weekly_trend_features
-from etf_trading.ui.data_coverage import expected_latest_trade_date
 
 ATOMIC_INDICATOR_COLUMNS = [
     "trade_date",
@@ -18,8 +24,12 @@ ATOMIC_INDICATOR_COLUMNS = [
     "tradability_status",
     "history_status",
     "feature_status",
+    "expected_trade_date",
     "latest_trade_date",
+    "trading_day_lag",
     "history_rows",
+    "history_reason_codes",
+    "is_rank_eligible",
     "return_20",
     "return_60",
     "return_20_rank_all",
@@ -85,30 +95,26 @@ def _build_row(item: dict[str, object], parquet_store: Any, *, expected: pd.Time
     try:
         prices = parquet_store.read_prices(code)
     except Exception:  # noqa: BLE001 - diagnostics must keep one bad file from breaking the table
-        row.update({"history_status": "read_failed", "feature_status": "missing_features", "missing_feature_names": "read_failed"})
+        row.update(_assessment_values(read_failed_assessment(expected)))
+        row.update({"feature_status": "missing_features", "missing_feature_names": "read_failed"})
         return row
 
-    if prices.empty:
-        row.update({"history_status": "missing_history", "feature_status": "missing_features", "missing_feature_names": "missing_history"})
+    assessment = assess_price_history(prices, expected, min_history_rows)
+    if assessment.readiness is HistoryReadiness.MISSING_HISTORY:
+        row.update(_assessment_values(assessment))
+        row.update({"feature_status": "missing_features", "missing_feature_names": "missing_history"})
         return row
 
     prepared = prices.copy()
     prepared["trade_date"] = pd.to_datetime(prepared["trade_date"], errors="coerce")
     prepared = prepared.dropna(subset=["trade_date"]).sort_values("trade_date").reset_index(drop=True)
     if prepared.empty:
-        row.update({"history_status": "read_failed", "feature_status": "missing_features", "missing_feature_names": "invalid_trade_date"})
+        row.update(_assessment_values(read_failed_assessment(expected, history_rows=int(len(prices)), reason_code="invalid_trade_date")))
+        row.update({"feature_status": "missing_features", "missing_feature_names": "invalid_trade_date"})
         return row
 
-    latest = pd.Timestamp(prepared["trade_date"].max()).normalize()
-    history_rows = int(len(prepared))
-    row.update(
-        {
-            "trade_date": latest.strftime("%Y-%m-%d"),
-            "latest_trade_date": latest.strftime("%Y-%m-%d"),
-            "history_rows": history_rows,
-            "history_status": _history_status(history_rows, latest, expected, min_history_rows),
-        }
-    )
+    assessment = assess_price_history(prepared, expected, min_history_rows)
+    row.update(_assessment_values(assessment))
 
     try:
         featured = add_weekly_trend_features(add_technical_features(prepared))
@@ -136,6 +142,7 @@ def _build_row(item: dict[str, object], parquet_store: Any, *, expected: pd.Time
             "distance_ma20_atr": _value_or_na(last.get("distance_ma20_atr")),
             "is_60d_close_breakout": _value_or_na(last.get("is_60d_close_breakout")) if not _is_missing(last.get("rolling_high_close_60")) else pd.NA,
             "missing_feature_names": ",".join(missing),
+            "is_rank_eligible": assessment.readiness is HistoryReadiness.READY and not missing,
         }
     )
     return row
@@ -177,30 +184,42 @@ def _base_row(item: dict[str, object], expected_date: str) -> dict[str, object]:
             "tradability_status": str(item.get("tradability_status") or "exchange_traded"),
             "history_status": "missing_history",
             "feature_status": "missing_features",
+            "expected_trade_date": expected_date,
             "latest_trade_date": "",
+            "trading_day_lag": pd.NA,
             "history_rows": 0,
+            "history_reason_codes": "missing_history",
+            "is_rank_eligible": False,
             "missing_feature_names": "missing_history",
         }
     )
     return row
 
 
-def _history_status(history_rows: int, latest: pd.Timestamp, expected: pd.Timestamp, min_history_rows: int) -> str:
-    if history_rows < min_history_rows:
-        return "short_history"
-    if latest < expected:
-        return "stale"
-    return "complete"
+def _assessment_values(assessment: HistoryAssessment) -> dict[str, object]:
+    return {
+        "trade_date": assessment.latest_trade_date or assessment.expected_trade_date,
+        "expected_trade_date": assessment.expected_trade_date,
+        "latest_trade_date": assessment.latest_trade_date,
+        "trading_day_lag": assessment.trading_day_lag if assessment.trading_day_lag is not None else pd.NA,
+        "history_rows": assessment.history_rows,
+        "history_status": assessment.readiness.value,
+        "history_reason_codes": ",".join(assessment.reason_codes),
+        "is_rank_eligible": False,
+    }
 
 
 def _add_return_ranks(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
+    eligible = result.get("is_rank_eligible", pd.Series(False, index=result.index)).fillna(False).astype(bool)
     for column, rank_column in (("return_20", "return_20_rank_all"), ("return_60", "return_60_rank_all")):
         result[column] = pd.to_numeric(result[column], errors="coerce")
-        result[rank_column] = result[column].rank(ascending=False, method="min")
+        result[rank_column] = pd.Series(pd.NA, index=result.index, dtype="Float64")
+        result.loc[eligible, rank_column] = result.loc[eligible, column].rank(ascending=False, method="min")
 
     for column, rank_column in (("return_20", "return_20_rank_category"), ("return_60", "return_60_rank_category")):
-        result[rank_column] = result.groupby("category", dropna=False)[column].rank(ascending=False, method="min")
+        result[rank_column] = pd.Series(pd.NA, index=result.index, dtype="Float64")
+        result.loc[eligible, rank_column] = result.loc[eligible].groupby("category", dropna=False)[column].rank(ascending=False, method="min")
     return result[ATOMIC_INDICATOR_COLUMNS]
 
 
