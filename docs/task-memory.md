@@ -329,3 +329,13 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Keep `指数买卖参考` as the trend gate view only; put diagnostics in `指数体检`.
   - Keep the page render cache-only; heavy snapshot work belongs in `research/*` and `nicegui_app/state.py`.
   - Show missing or insufficient valuation rows explicitly instead of filling fake valuation values.
+
+## 2026-07-11 - Build data trust layer
+
+- Summary: Unified ETF/index history readiness into Chinese user-facing states (`数据可用`、`行情滞后`、`历史不足`、`历史缺失`、`读取失败`), excluded non-ready ETF data from opportunity rankings, and exposed source-data health consistently in the top bar, ETF atomic health panel, index health page, and `数据维护 -> 数据体检`.
+- Verification: `.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\etf0614-data-trust-full-final` passed with 264 tests. Browser QA used Playwright with the local Chrome executable because the Browser plugin and Playwright-managed browser were unavailable; desktop checked top-bar routing, the index readiness notice, and Chinese valuation states, while 390px mobile checked compact accessible navigation with no horizontal overflow or console errors.
+- Watch out next time:
+  - Keep the source-data effective trade date separate from the page calculation time; never relabel a page render timestamp as a data update.
+  - Count ETF repair issues by mutually exclusive primary history status; show feature gaps only as additional diagnostics.
+  - Every internal data-status code added to a visible NiceGUI table needs a Chinese value mapping and a table-display test.
+  - The browser smoke environment intentionally had an empty isolated data directory; assess real production freshness from the user’s normal local data workspace, not from this QA fixture.

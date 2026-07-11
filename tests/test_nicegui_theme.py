@@ -1,4 +1,7 @@
+import inspect
+
 from etf_trading.nicegui_app.components.tables import table_columns
+from etf_trading.nicegui_app import layout
 from etf_trading.nicegui_app.theme import WORKBENCH_CSS, tone_class
 
 
@@ -11,6 +14,14 @@ def test_theme_contains_dense_professional_workbench_rules():
     assert ".workbench-data-table" in WORKBENCH_CSS
     assert "height: 34px" in WORKBENCH_CSS
     assert "overflow-x: auto" in WORKBENCH_CSS
+
+
+def test_theme_keeps_mobile_sidebar_navigation_labels_readable():
+    assert "@media (max-width: 720px)" in WORKBENCH_CSS
+    assert ".workbench-sidebar { width: 58px; flex-shrink: 0; }" in WORKBENCH_CSS
+    assert ".workbench-nav-item::before" in WORKBENCH_CSS
+    assert "content: attr(data-short);" in WORKBENCH_CSS
+    assert "data-short" in inspect.getsource(layout._render_sidebar)
     assert "#0f172a" in WORKBENCH_CSS
 
 

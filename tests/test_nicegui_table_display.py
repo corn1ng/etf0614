@@ -140,6 +140,8 @@ def test_table_rows_translate_internal_status_codes_and_booleans_to_chinese():
             "history_status": "stale",
             "feature_status": "missing_features",
             "missing_feature_names": "read_failed",
+            "valuation_overview_label": "missing",
+            "valuation_health_status": "missing_valuation",
             "action": "BUY",
             "status": "FAILED",
             "note": "short_history",
@@ -157,13 +159,15 @@ def test_table_rows_translate_internal_status_codes_and_booleans_to_chinese():
             "history_status": "行情滞后",
             "feature_status": "特征缺失",
             "missing_feature_names": "读取失败",
+            "valuation_overview_label": "估值缺失",
+            "valuation_health_status": "估值缺失",
             "action": "买入",
             "status": "失败",
             "note": "历史不足",
         }
     ]
     rendered_text = " ".join(str(value) for value in display[0].values())
-    for raw_code in ["UP", "RANGE", "RIGHT_SIDE_START", "true", "stale", "missing_features", "read_failed", "short_history", "BUY", "FAILED"]:
+    for raw_code in ["UP", "RANGE", "RIGHT_SIDE_START", "true", "stale", "missing_features", "read_failed", "short_history", "missing", "missing_valuation", "BUY", "FAILED"]:
         assert raw_code not in rendered_text
     assert "正在刷新" not in rendered_text
 

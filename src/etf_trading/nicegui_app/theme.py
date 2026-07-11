@@ -575,8 +575,14 @@ body {
 .tone-warning { color: var(--wb-amber); }
 .tone-danger { color: var(--wb-red); }
 @media (max-width: 720px) {
-  .workbench-sidebar { width: 58px; }
+  .workbench-sidebar { width: 58px; flex-shrink: 0; }
   .workbench-brand { padding: 0 8px; font-size: 0; }
+  .workbench-nav-item { padding: 0; justify-content: center; font-size: 0; }
+  .workbench-nav-item::before {
+    content: attr(data-short);
+    font-size: 14px;
+    font-weight: 700;
+  }
   .workbench-page { padding: 10px; }
   .workbench-page-title { font-size: 20px; }
   .workbench-action-panel { width: 100%; }

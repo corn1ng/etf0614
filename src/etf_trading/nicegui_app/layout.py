@@ -37,7 +37,9 @@ def _render_sidebar(active_slug: str) -> None:
             classes = "workbench-nav-item"
             if page.slug == active_slug:
                 classes += " is-active"
-            ui.link(page.label, f"/page/{page.slug}").classes(classes)
+            ui.link(page.label, f"/page/{page.slug}").props(
+                f'aria-label="{page.label}" title="{page.label}" data-short="{page.label[:1]}"'
+            ).classes(classes)
 
 
 def _render_topbar(snapshot: PlatformSnapshot) -> None:

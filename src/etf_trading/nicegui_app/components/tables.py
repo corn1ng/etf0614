@@ -223,6 +223,9 @@ FIELD_VALUE_LABELS = {
     "history_status": {
         "stale": "行情滞后",
     },
+    "valuation_overview_label": {
+        "missing": "估值缺失",
+    },
     "status": {
         "stale": "待刷新",
     },
