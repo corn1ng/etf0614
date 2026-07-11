@@ -23,6 +23,7 @@ from etf_trading.nicegui_app.view_models import (
     index_health_filter_options,
     index_health_rows,
     index_health_summary,
+    index_data_status_notice,
     market_overview,
 )
 
@@ -56,6 +57,7 @@ def _render_overview(snapshot: PlatformSnapshot) -> None:
 def _render_index_reference(snapshot: PlatformSnapshot) -> None:
     rows = snapshot.index_summary.fillna("").to_dict("records") if not snapshot.index_summary.empty else []
     if rows:
+        ui.label(index_data_status_notice(snapshot)).classes("workbench-chart-note")
         ui.label("这里只看趋势过滤：大趋势 / 中趋势 / 小趋势对齐时，才允许新开仓。").classes("workbench-chart-note")
         render_table(rows, row_key="index_code", compact=True, ui_module=ui).classes("workbench-data-table workbench-data-table--compact")
     else:
@@ -77,6 +79,7 @@ def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
         _render_audit("market")
         return
 
+    ui.label(index_data_status_notice(snapshot)).classes("workbench-chart-note")
     status_area = ui.row().classes("w-full")
     metric_area = ui.row().classes("w-full gap-2")
     table_area = ui.column().classes("w-full")

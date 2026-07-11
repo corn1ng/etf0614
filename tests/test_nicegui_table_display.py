@@ -234,9 +234,9 @@ def test_atomic_status_filter_options_show_chinese_labels_but_keep_internal_valu
 
     options = _atomic_filter_options(frame, "history_status", "全部历史状态")
 
-    assert list(options) == ["全部历史状态", "完整", "历史缺失", "历史不足", "行情滞后"]
+    assert list(options) == ["全部历史状态", "数据可用", "历史缺失", "历史不足", "行情滞后"]
     assert _atomic_filter_value(options, "全部历史状态") == "全部历史状态"
-    assert _atomic_filter_value(options, "完整") == "complete"
+    assert _atomic_filter_value(options, "数据可用") == "complete"
     assert _atomic_filter_value(options, "历史缺失") == "missing_history"
     assert _atomic_filter_value(options, "历史不足") == "short_history"
     assert _atomic_filter_value(options, "行情滞后") == "stale"

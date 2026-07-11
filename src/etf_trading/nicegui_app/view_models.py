@@ -93,8 +93,12 @@ ATOMIC_HEALTH_COLUMNS = (
     "ETF名称",
     "分类",
     "最新交易日",
+    "应有最新交易日",
+    "缺失交易日",
     "历史状态",
+    "状态原因",
     "特征状态",
+    "可参与机会排名",
     "历史行数",
     "缺失字段",
     "收盘>20日线",
@@ -124,8 +128,26 @@ class AtomicDataHealthItem:
     tone: str = "neutral"
 
 
+@dataclass(frozen=True)
+class AtomicDataHealthSummary:
+    total: int
+    issue_count: int
+    primary_status_counts: dict[str, int]
+    feature_missing_count: int
+    items: list[AtomicDataHealthItem]
+
+
+@dataclass(frozen=True)
+class PlatformDataStatusSummary:
+    etf_label: str
+    index_label: str
+    latest_trade_date: str
+    generated_label: str
+
+
 ATOMIC_HISTORY_STATUS_LABELS = {
-    "complete": "完整",
+    "ready": "数据可用",
+    "complete": "数据可用",
     "stale": "行情滞后",
     "missing_history": "历史缺失",
     "short_history": "历史不足",
@@ -161,6 +183,48 @@ def status_metrics(snapshot: PlatformSnapshot) -> list[MetricTile]:
     ]
 
 
+def platform_data_status_summary(snapshot: PlatformSnapshot) -> PlatformDataStatusSummary:
+    """Build compact, source-data status for the global application chrome."""
+
+    master = snapshot.master
+    etf_total = int(len(master))
+    etf_ready = int((master.get("本地历史", pd.Series(dtype=str)).fillna("").astype(str) == "数据可用").sum())
+    indexes = snapshot.index_summary
+    index_total = int(len(indexes))
+    index_ready = int((indexes.get("data_status", pd.Series(dtype=str)).fillna("").astype(str) == "数据可用").sum())
+
+    dates: list[str] = []
+    for frame, column in ((master, "最新日期"), (indexes, "latest_date")):
+        if column not in frame:
+            continue
+        values = pd.to_datetime(frame[column], errors="coerce").dropna()
+        if not values.empty:
+            dates.append(values.max().strftime("%Y-%m-%d"))
+
+    return PlatformDataStatusSummary(
+        etf_label=f"ETF：{etf_ready}/{etf_total} 数据可用",
+        index_label=f"指数：{index_ready}/{index_total} 数据可用",
+        latest_trade_date=max(dates) if dates else "",
+        generated_label=f"页面计算 {snapshot.generated_at.strftime('%Y-%m-%d %H:%M')}",
+    )
+
+
+def index_data_status_notice(snapshot: PlatformSnapshot) -> str:
+    """Describe index data readiness before users interpret market signals."""
+
+    indexes = snapshot.index_summary
+    latest_date = ""
+    if "latest_date" in indexes:
+        dates = pd.to_datetime(indexes["latest_date"], errors="coerce").dropna()
+        if not dates.empty:
+            latest_date = dates.max().strftime("%Y-%m-%d")
+    status = platform_data_status_summary(snapshot)
+    return (
+        f"指数数据状态：{status.index_label}；最近有效交易日 {latest_date or '暂无'}。"
+        "非“数据可用”的指数不应作为趋势或买卖依据。"
+    )
+
+
 def market_overview(snapshot: PlatformSnapshot) -> dict[str, object]:
     frame = snapshot.index_summary.copy()
     if frame.empty:
@@ -191,33 +255,36 @@ def atomic_indicator_summary(frame: pd.DataFrame) -> list[MetricTile]:
     if frame.empty:
         return [
             MetricTile("ETF主池", "0", "warning", "场内"),
-            MetricTile("历史完整", "0", "warning", "已完整"),
-            MetricTile("特征完整", "0", "warning", "已完整"),
-            MetricTile("相对强度可算", "0", "warning", "20/60日"),
-            MetricTile("60日突破", "0", "neutral", "收盘新高"),
-            MetricTile("周线强势", "0", "neutral", "站上10周线"),
+            MetricTile("数据可用", "0", "warning", "主状态"),
+            MetricTile("可参与机会排名", "0", "warning", "数据与特征均可用"),
+            MetricTile("行情滞后", "0", "neutral", "需补齐行情"),
+            MetricTile("历史不足", "0", "neutral", "样本行数不足"),
+            MetricTile("特征缺失", "0", "neutral", "指标暂不可算"),
         ]
 
-    history_complete = int((frame.get("history_status", pd.Series(dtype=str)) == "complete").sum())
-    feature_complete = int((frame.get("feature_status", pd.Series(dtype=str)) == "complete").sum())
-    relative_ready = int((pd.to_numeric(frame.get("return_20"), errors="coerce").notna() & pd.to_numeric(frame.get("return_60"), errors="coerce").notna()).sum())
-    breakout_count = int(frame.get("is_60d_close_breakout", pd.Series(dtype=object)).map(_truthy).sum())
-    weekly_count = int(frame.get("weekly_close_above_ma10", pd.Series(dtype=object)).map(_truthy).sum())
+    history = _string_series(frame, "history_status").replace({"complete": "ready"})
+    feature = _string_series(frame, "feature_status")
+    rank_eligible = _rank_eligible_series(frame)
+    ready = int((history == "ready").sum())
+    stale = int((history == "stale").sum())
+    short = int((history == "short_history").sum())
+    feature_missing = int((feature != "complete").sum())
     return [
         MetricTile("ETF主池", str(len(frame)), "neutral", "场内"),
-        MetricTile("历史完整", str(history_complete), "success" if history_complete == len(frame) else "warning", "已完整"),
-        MetricTile("特征完整", str(feature_complete), "success" if feature_complete == len(frame) else "warning", "已完整"),
-        MetricTile("相对强度可算", str(relative_ready), "info", "20/60日"),
-        MetricTile("60日突破", str(breakout_count), "info", "收盘新高"),
-        MetricTile("周线强势", str(weekly_count), "info", "站上10周线"),
+        MetricTile("数据可用", str(ready), "success" if ready == len(frame) else "warning", "主状态"),
+        MetricTile("可参与机会排名", str(int(rank_eligible.sum())), "success" if rank_eligible.any() else "warning", "数据与特征均可用"),
+        MetricTile("行情滞后", str(stale), "warning" if stale else "success", "需补齐行情"),
+        MetricTile("历史不足", str(short), "warning" if short else "success", "样本行数不足"),
+        MetricTile("特征缺失", str(feature_missing), "warning" if feature_missing else "success", "指标暂不可算"),
     ]
 
 
 def atomic_data_update_health(frame: pd.DataFrame) -> list[AtomicDataHealthItem]:
-    history = _string_series(frame, "history_status")
+    history = _string_series(frame, "history_status").replace({"complete": "ready"})
     feature = _string_series(frame, "feature_status")
 
     return [
+        AtomicDataHealthItem("ready", "数据可用", int((history == "ready").sum()), "本地行情满足行数与新鲜度要求", "history_status", "ready", "success"),
         AtomicDataHealthItem("stale", "行情滞后", int((history == "stale").sum()), "本地行情不是最新", "history_status", "stale", "warning"),
         AtomicDataHealthItem("short_history", "历史不足", int((history == "short_history").sum()), "样本行数不足", "history_status", "short_history", "warning"),
         AtomicDataHealthItem("missing_history", "历史缺失", int((history == "missing_history").sum()), "没有本地历史", "history_status", "missing_history", "danger"),
@@ -226,19 +293,40 @@ def atomic_data_update_health(frame: pd.DataFrame) -> list[AtomicDataHealthItem]
     ]
 
 
+def atomic_data_health_summary(frame: pd.DataFrame) -> AtomicDataHealthSummary:
+    """Summarize one primary status per ETF without double-counting reasons."""
+
+    items = atomic_data_update_health(frame)
+    primary_items = items[:5]
+    primary_status_counts = {item.label: item.count for item in primary_items}
+    total = int(sum(primary_status_counts.values()))
+    ready = primary_status_counts["数据可用"]
+    feature_missing = next(item.count for item in items if item.key == "missing_features")
+    return AtomicDataHealthSummary(
+        total=total,
+        issue_count=total - ready,
+        primary_status_counts=primary_status_counts,
+        feature_missing_count=feature_missing,
+        items=items,
+    )
+
+
 def atomic_indicator_rows(
     frame: pd.DataFrame,
     filters: AtomicIndicatorFilters | None = None,
-    limit: int = 300,
+    limit: int | None = None,
     view_mode: str = "机会特征",
 ) -> list[dict[str, object]]:
     data = filter_atomic_indicator_frame(frame, filters)
+    if view_mode == "机会特征":
+        data = data[_rank_eligible_series(data)]
     if data.empty:
         return []
 
     columns = ATOMIC_HEALTH_COLUMNS if view_mode == "体检特征" else ATOMIC_OPPORTUNITY_COLUMNS
     rows = []
-    for row in data.head(limit).to_dict("records"):
+    records = data.head(limit).to_dict("records") if limit is not None else data.to_dict("records")
+    for row in records:
         display = _atomic_display_row(row)
         rows.append({column: display.get(column, "") for column in columns})
     return rows
@@ -286,11 +374,15 @@ def filter_atomic_indicator_frame(
 def atomic_indicator_detail_options(
     frame: pd.DataFrame,
     filters: AtomicIndicatorFilters | None = None,
-    limit: int = 300,
+    limit: int | None = None,
+    opportunity_only: bool = False,
 ) -> list[str]:
     data = filter_atomic_indicator_frame(frame, filters)
+    if opportunity_only:
+        data = data[_rank_eligible_series(data)]
     options: list[str] = []
-    for row in data.head(limit).fillna("").to_dict("records"):
+    records = data.head(limit).fillna("").to_dict("records") if limit is not None else data.fillna("").to_dict("records")
+    for row in records:
         code = str(row.get("etf_code", "")).strip()
         if not code:
             continue
@@ -564,8 +656,18 @@ def _row_value(row: dict[str, object], *keys: str) -> str:
 
 def _string_series(frame: pd.DataFrame, column: str) -> pd.Series:
     if frame.empty or column not in frame:
-        return pd.Series(dtype=str)
+        return pd.Series("", index=frame.index, dtype=str)
     return frame[column].fillna("").astype(str).str.strip()
+
+
+def _rank_eligible_series(frame: pd.DataFrame) -> pd.Series:
+    if frame.empty:
+        return pd.Series(False, index=frame.index, dtype=bool)
+    if "is_rank_eligible" in frame:
+        return frame["is_rank_eligible"].fillna(False).map(_truthy).astype(bool)
+    history = _string_series(frame, "history_status").replace({"complete": "ready"})
+    feature = _string_series(frame, "feature_status")
+    return ((history == "ready") & (feature == "complete")).astype(bool)
 
 
 def _atomic_display_row(row: dict[str, object]) -> dict[str, object]:
@@ -575,8 +677,12 @@ def _atomic_display_row(row: dict[str, object]) -> dict[str, object]:
         "分类": _text(row.get("category")),
         "交易所": _text(row.get("exchange")),
         "最新交易日": _text(row.get("latest_trade_date")),
+        "应有最新交易日": _text(row.get("expected_trade_date")),
+        "缺失交易日": _value_or_blank(row.get("trading_day_lag")),
         "历史状态": _status_text(row.get("history_status"), ATOMIC_HISTORY_STATUS_LABELS),
+        "状态原因": _text(row.get("history_reason_codes")),
         "特征状态": _status_text(row.get("feature_status"), ATOMIC_FEATURE_STATUS_LABELS),
+        "可参与机会排名": _format_bool(row.get("is_rank_eligible")),
         "历史行数": _value_or_blank(row.get("history_rows")),
         "20日收益": _format_pct(row.get("return_20")),
         "60日收益": _format_pct(row.get("return_60")),

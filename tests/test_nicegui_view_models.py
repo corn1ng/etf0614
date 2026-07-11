@@ -9,6 +9,7 @@ from etf_trading.nicegui_app.view_models import (
     IndexHealthFilters,
     PlatformSnapshot,
     atomic_data_update_health,
+    atomic_data_health_summary,
     atomic_indicator_detail_groups,
     atomic_indicator_detail_options,
     atomic_indicator_rows,
@@ -25,8 +26,10 @@ from etf_trading.nicegui_app.view_models import (
     index_health_filter_options,
     index_health_rows,
     index_health_summary,
+    index_data_status_notice,
     maintenance_rows,
     market_overview,
+    platform_data_status_summary,
     status_metrics,
 )
 
@@ -67,8 +70,9 @@ def _atomic_frame() -> pd.DataFrame:
             "name": ["沪深300ETF", "证券ETF"],
             "category": ["A股宽基", "A股行业"],
             "exchange": ["SSE", "SSE"],
-            "history_status": ["complete", "missing_history"],
+            "history_status": ["ready", "missing_history"],
             "feature_status": ["complete", "missing_features"],
+            "is_rank_eligible": [True, False],
             "latest_trade_date": ["2026-07-03", ""],
             "history_rows": [520, 0],
             "return_20": [0.08, None],
@@ -247,8 +251,8 @@ def test_etf_search_filters_by_query_category_and_limit():
 def test_atomic_indicator_summary_counts_data_readiness():
     metrics = atomic_indicator_summary(_atomic_frame())
 
-    assert [metric.label for metric in metrics][:4] == ["ETF主池", "历史完整", "特征完整", "相对强度可算"]
-    assert [metric.value for metric in metrics][:4] == ["2", "1", "1", "1"]
+    assert [metric.label for metric in metrics][:4] == ["ETF主池", "数据可用", "可参与机会排名", "行情滞后"]
+    assert [metric.value for metric in metrics][:4] == ["2", "1", "1", "0"]
 
 
 def test_atomic_indicator_rows_are_filtered_and_do_not_expose_advice():
@@ -311,7 +315,7 @@ def test_atomic_indicator_detail_groups_show_all_atomic_sections_without_advice(
         for row in group.rows
     }
     assert flattened["ETF代码"] == "510300"
-    assert flattened["历史状态"] == "完整"
+    assert flattened["历史状态"] == "数据可用"
     assert flattened["20日收益"] == "8.0%"
     assert flattened["60日线20日斜率"] == "0.01"
     assert flattened["5/20成交额"] == "1.33"
@@ -353,7 +357,8 @@ def test_atomic_data_update_health_counts_repair_states():
     items = atomic_data_update_health(frame)
     by_key = {item.key: item for item in items}
 
-    assert [item.label for item in items] == ["行情滞后", "历史不足", "历史缺失", "读取失败", "特征缺失"]
+    assert [item.label for item in items] == ["数据可用", "行情滞后", "历史不足", "历史缺失", "读取失败", "特征缺失"]
+    assert by_key["ready"].count == 1
     assert by_key["stale"].count == 1
     assert by_key["short_history"].count == 1
     assert by_key["missing_history"].count == 1
@@ -365,7 +370,85 @@ def test_atomic_data_update_health_counts_repair_states():
     assert by_key["missing_features"].filter_value == "missing_features"
 
 
+def test_atomic_health_summary_counts_unique_assets_not_overlapping_reasons():
+    frame = pd.DataFrame(
+        {
+            "etf_code": ["510300", "512880", "159915", "588000", "560000"],
+            "history_status": ["ready", "stale", "short_history", "missing_history", "read_failed"],
+            "feature_status": ["complete", "complete", "missing_features", "missing_features", "missing_features"],
+        }
+    )
+
+    summary = atomic_data_health_summary(frame)
+
+    assert summary.total == 5
+    assert summary.issue_count == 4
+    assert summary.primary_status_counts == {
+        "数据可用": 1,
+        "行情滞后": 1,
+        "历史不足": 1,
+        "历史缺失": 1,
+        "读取失败": 1,
+    }
+    assert summary.feature_missing_count == 3
+
+
+def test_opportunity_rows_exclude_non_rank_eligible_but_health_rows_keep_them():
+    frame = _atomic_frame()
+
+    assert [row["ETF代码"] for row in atomic_indicator_rows(frame, view_mode="机会特征")] == ["510300"]
+    assert [row["ETF代码"] for row in atomic_indicator_rows(frame, view_mode="体检特征")] == ["510300", "512880"]
+
+
+def test_platform_status_summary_separates_snapshot_time_and_source_date():
+    snapshot = _snapshot()
+    snapshot = PlatformSnapshot(
+        master=pd.DataFrame(
+            {
+                "ETF代码": ["510300", "512880"],
+                "本地历史": ["数据可用", "行情滞后"],
+                "最新日期": ["2026-07-03", "2026-07-01"],
+            }
+        ),
+        watchlist=snapshot.watchlist,
+        index_summary=pd.DataFrame({"data_status": ["数据可用", "行情滞后"], "latest_date": ["2026-07-03", "2026-07-01"]}),
+        universe=snapshot.universe,
+        gaps=snapshot.gaps,
+        coverage=snapshot.coverage,
+        generated_at=snapshot.generated_at,
+    )
+
+    summary = platform_data_status_summary(snapshot)
+
+    assert summary.etf_label == "ETF：1/2 数据可用"
+    assert summary.index_label == "指数：1/2 数据可用"
+    assert summary.latest_trade_date == "2026-07-03"
+    assert summary.generated_label == "页面计算 2026-07-05 10:00"
+
+
+def test_index_data_status_notice_uses_index_effective_date_and_excludes_unready_data():
+    snapshot = PlatformSnapshot(
+        master=pd.DataFrame(),
+        watchlist=pd.DataFrame(),
+        index_summary=pd.DataFrame(
+            {
+                "data_status": ["数据可用", "行情滞后"],
+                "latest_date": ["2026-07-03", "2026-07-01"],
+            }
+        ),
+        universe=pd.DataFrame(),
+        gaps=pd.DataFrame(),
+        coverage=pd.DataFrame(),
+        generated_at=datetime(2026, 7, 5, 15, 30),
+    )
+
+    assert index_data_status_notice(snapshot) == (
+        "指数数据状态：指数：1/2 数据可用；最近有效交易日 2026-07-03。"
+        "非“数据可用”的指数不应作为趋势或买卖依据。"
+    )
+
+
 def test_atomic_data_update_health_returns_zero_counts_for_empty_frame():
     items = atomic_data_update_health(pd.DataFrame())
 
-    assert [item.count for item in items] == [0, 0, 0, 0, 0]
+    assert [item.count for item in items] == [0, 0, 0, 0, 0, 0]

@@ -42,7 +42,7 @@ NICEGUI_PAGES: tuple[NicePageSpec, ...] = (
         slug="maintenance",
         label="数据维护",
         caption="统一检查全局数据缺口、补齐历史和查看日志。",
-        sections=("数据总览", "缺口明细", "补齐任务", "日志与设置"),
+        sections=("数据体检", "缺口明细", "补齐任务", "日志与设置"),
     ),
 )
 

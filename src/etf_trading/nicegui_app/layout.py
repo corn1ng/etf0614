@@ -8,7 +8,7 @@ from nicegui import ui
 
 from .navigation import NICEGUI_PAGES, NicePageSpec, get_page_by_slug, resolve_section
 from .theme import apply_theme
-from .view_models import PlatformSnapshot
+from .view_models import PlatformSnapshot, platform_data_status_summary
 
 
 def render_shell(page_slug: str | None = None, section: str | None = None) -> None:
@@ -41,12 +41,17 @@ def _render_sidebar(active_slug: str) -> None:
 
 
 def _render_topbar(snapshot: PlatformSnapshot) -> None:
-    refresh_time = snapshot.generated_at.strftime("%Y-%m-%d %H:%M")
+    status = platform_data_status_summary(snapshot)
+    data_health_target = f"/page/maintenance/{quote('数据体检', safe='')}"
     with ui.row().classes("workbench-topbar w-full items-center justify-between px-4"):
         ui.label("本地量化工作台").classes("text-sm font-semibold text-slate-700")
         with ui.row().classes("items-center gap-2"):
             ui.icon("radio_button_checked").classes("text-xs text-emerald-500")
-            ui.label(f"数据更新 {refresh_time}").classes("text-xs text-slate-500")
+            ui.link(status.etf_label, data_health_target).classes("text-xs text-slate-500")
+            ui.link(status.index_label, data_health_target).classes("text-xs text-slate-500")
+            if status.latest_trade_date:
+                ui.label(f"行情有效至 {status.latest_trade_date}").classes("text-xs text-slate-500")
+            ui.label(status.generated_label).classes("text-xs text-slate-500")
 
 
 def _render_page_header(page: NicePageSpec, active_section: str) -> None:

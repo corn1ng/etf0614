@@ -107,7 +107,7 @@ def _render_task_center(container, status: MaintenanceTaskStatus) -> None:
 
 
 def render(snapshot: PlatformSnapshot, section: str, store=None, parquet_store=None) -> None:
-    if section == "数据总览":
+    if section in {"数据体检", "数据总览"}:
         _render_data_overview(snapshot)
     elif section == "缺口明细":
         _render_gap_detail(snapshot)

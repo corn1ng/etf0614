@@ -20,7 +20,7 @@ from etf_trading.nicegui_app.view_models import (
     atomic_indicator_detail_options,
     atomic_indicator_rows,
     atomic_indicator_summary,
-    atomic_data_update_health,
+    atomic_data_health_summary,
     category_options,
     code_from_option,
     ATOMIC_FEATURE_STATUS_LABELS,
@@ -156,6 +156,9 @@ def _render_atomic_indicators(snapshot: PlatformSnapshot, parquet_store) -> None
     def apply_health_filter(item: AtomicDataHealthItem) -> None:
         if item.count <= 0:
             return
+        if view_mode.value != "体检特征":
+            view_mode.value = "体检特征"
+            view_mode.update()
         if item.filter_type == "history_status":
             label = _atomic_filter_label(history_statuses, item.filter_value)
             if label:
@@ -174,22 +177,23 @@ def _render_atomic_indicators(snapshot: PlatformSnapshot, parquet_store) -> None
 
     def render_data_health() -> None:
         health_area.clear()
-        items = atomic_data_update_health(frame_holder["frame"])
-        issue_total = sum(item.count for item in items)
+        health_summary = atomic_data_health_summary(frame_holder["frame"])
+        items = health_summary.items
+        issue_total = health_summary.issue_count
         with health_area:
             with ui.column().classes("atomic-data-health w-full"):
                 with ui.row().classes("atomic-data-health-header w-full"):
                     ui.icon("monitoring").classes("tone-info")
                     ui.label("数据更新体检").classes("text-sm font-semibold text-slate-700")
-                    ui.badge("数据就绪" if issue_total == 0 else f"{issue_total} 项需关注").classes(
+                    ui.badge("数据就绪" if issue_total == 0 else f"{issue_total} 只ETF需关注").classes(
                         "atomic-data-health-status is-ready" if issue_total == 0 else "atomic-data-health-status is-warning"
                     )
                     if issue_total:
                         ui.link(
-                            "去补齐任务",
-                            f"/page/maintenance/{quote(chr(34917) + chr(40784) + chr(20219) + chr(21153), safe='')}",
+                            "前往数据体检",
+                            f"/page/maintenance/{quote('数据体检', safe='')}",
                         ).classes("workbench-section-tab")
-                ui.label("行情滞后表示本地行情最新交易日落后；补齐后刷新快照即可更新指标。").classes("atomic-data-health-note")
+                ui.label("主状态互斥统计每只 ETF 一次；特征缺失是附加诊断。行情滞后或历史不足的数据不会进入机会排名。").classes("atomic-data-health-note")
                 with ui.row().classes("atomic-data-health-items"):
                     for item in items:
                         if item.count > 0:
@@ -248,7 +252,11 @@ def _render_atomic_indicators(snapshot: PlatformSnapshot, parquet_store) -> None
             filters,
             view_mode=str(view_mode.value or ATOMIC_VIEW_MODES[0]),
         )
-        options = atomic_indicator_detail_options(frame_holder["frame"], filters)
+        options = atomic_indicator_detail_options(
+            frame_holder["frame"],
+            filters,
+            opportunity_only=str(view_mode.value or ATOMIC_VIEW_MODES[0]) == "机会特征",
+        )
         current_code = selected_holder["code"]
         option_by_code = {code_from_option(option): option for option in options}
         if not current_code or current_code not in option_by_code:
@@ -475,7 +483,7 @@ def _event_row_code(event) -> str:
 
 
 def _atomic_detail_value_tone(metric: str, value: str) -> str:
-    if value in {"完整", "是"}:
+    if value in {"完整", "数据可用", "是"}:
         return "tone-success"
     if value == "否":
         return "tone-neutral"

@@ -73,7 +73,7 @@ def test_nicegui_run_sets_longer_connection_timeouts(monkeypatch):
     assert calls["run_kwargs"]["reconnect_timeout"] == 60.0
 
 
-def test_nicegui_topbar_shows_data_refresh_time_instead_of_framework_name(monkeypatch):
+def test_nicegui_topbar_separates_page_calculation_from_source_data_status(monkeypatch):
     from etf_trading.nicegui_app import layout
     from etf_trading.nicegui_app.view_models import PlatformSnapshot
 
@@ -100,14 +100,29 @@ def test_nicegui_topbar_shows_data_refresh_time_instead_of_framework_name(monkey
             labels.append(text)
             return FakeElement(text)
 
+        def link(self, text, target):
+            labels.append(text)
+            return FakeElement(text)
+
         def icon(self, name):
             return FakeElement(name)
 
     monkeypatch.setattr(layout, "ui", FakeUi())
     snapshot = PlatformSnapshot(
-        master=pd.DataFrame(),
+        master=pd.DataFrame(
+            {
+                "ETF代码": ["510300", "512880"],
+                "本地历史": ["数据可用", "行情滞后"],
+                "最新日期": ["2026-07-03", "2026-07-01"],
+            }
+        ),
         watchlist=pd.DataFrame(),
-        index_summary=pd.DataFrame(),
+        index_summary=pd.DataFrame(
+            {
+                "data_status": ["数据可用", "行情滞后"],
+                "latest_date": ["2026-07-03", "2026-07-01"],
+            }
+        ),
         universe=pd.DataFrame(),
         gaps=pd.DataFrame(),
         coverage=pd.DataFrame(),
@@ -117,7 +132,11 @@ def test_nicegui_topbar_shows_data_refresh_time_instead_of_framework_name(monkey
     layout._render_topbar(snapshot)
 
     assert "本地量化工作台" in labels
-    assert "数据更新 2026-07-05 15:30" in labels
+    assert "ETF：1/2 数据可用" in labels
+    assert "指数：1/2 数据可用" in labels
+    assert "行情有效至 2026-07-03" in labels
+    assert "页面计算 2026-07-05 15:30" in labels
+    assert not any("数据更新" in label for label in labels)
     assert "NiceGUI" not in labels
 
 
@@ -545,7 +564,7 @@ def test_atomic_indicator_page_renders_data_health_and_filters_from_summary(monk
     etf_data._render_atomic_indicators(snapshot, object())
 
     assert "数据更新体检" in labels
-    assert "行情滞后表示本地行情最新交易日落后；补齐后刷新快照即可更新指标。" in labels
+    assert "主状态互斥统计每只 ETF 一次；特征缺失是附加诊断。行情滞后或历史不足的数据不会进入机会排名。" in labels
     assert any(text.startswith("去补齐任务->/page/maintenance/") for text in labels)
     assert "行情滞后" in health_actions
     assert "特征缺失" in health_actions
@@ -864,6 +883,7 @@ def test_index_health_page_uses_cached_snapshot(monkeypatch):
             "market": ["A股"],
             "category": ["A股宽基"],
             "latest_date": ["2026-07-03"],
+            "data_status": ["数据可用"],
             "history_rows": [900],
             "large_trend": ["UP"],
             "medium_trend": ["UP"],
@@ -918,5 +938,6 @@ def test_index_health_page_uses_cached_snapshot(monkeypatch):
 
     assert calls == [False]
     assert table_batches[0][0]["index_code"] == "000300"
+    assert "指数数据状态：指数：1/1 数据可用；最近有效交易日 2026-07-03。非“数据可用”的指数不应作为趋势或买卖依据。" in labels
     assert "趋势原子指标：000300" in labels
     assert "估值原子指标：000300" in labels
