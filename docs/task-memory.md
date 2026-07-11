@@ -25,6 +25,14 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - 所有用户可见状态使用中文；英文状态码只用于内部计算与存储。
   - 数据维护是完整事实来源，顶部栏和研究页面只展示与当前位置相关的状态摘要。
 
+## 2026-07-11 - 计划数据可信层实施
+
+- 摘要：将统一历史数据评估、原子指标准入、覆盖摘要、中文状态展示和浏览器验证拆成五个可独立验证的任务。
+- 验证：文档自审；实施前必须从每个任务的失败测试开始。
+- 下次注意：
+  - 缓存的快照列变化必须同步升级缓存 schema 版本。
+  - 机会列表的分页可限制页面显示，不能截断筛选结果本身。
+
 ## 2026-07-11 - Prepare isolated data-trust-layer worktree
 
 - Summary: Added the project-local `.worktrees/` ignore rule so the forthcoming data-trust-layer refactor can run in an isolated Git worktree without tracking its files.
