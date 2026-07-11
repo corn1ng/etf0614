@@ -1,73 +1,75 @@
-# Data Trust Layer Design
+# 数据可信层设计
 
-## Scope
+## 本阶段范围
 
-This first refactor makes local market-data readiness a shared, testable rule for ETF and index diagnostics. It fixes contradictory freshness/status counts and prevents stale or insufficient-history ETFs from appearing in opportunity rankings. It does not expand the security catalogue, add HKEX-listed ETF coverage, change strategy formulas, or fetch external data.
+本次重构先让本地行情数据的可用状态成为 ETF 和指数诊断共用、可测试的规则。它解决新鲜度和状态统计相互矛盾的问题，并阻止行情滞后或历史不足的 ETF 出现在机会排名中。
 
-## Goals
+本阶段不扩展证券目录、不增加港交所上市 ETF、不改变策略公式、不自动批量拉取外部数据。
 
-- Give every ETF and index history one primary, mutually exclusive readiness status: `ready`, `stale`, `short_history`, `missing_history`, or `read_failed`.
-- Preserve overlapping reasons separately. For example, a new ETF whose latest bar is old is primarily `stale` and also records `short_history` as a reason.
-- Use the same assessment in atomic indicators, ETF overview, maintenance gaps, coverage totals, and index summaries.
-- Separate source freshness from feature availability and snapshot generation time.
-- Exclude any ETF that is not fresh, has insufficient history, or lacks required features from opportunity rankings and opportunity counts.
-- Ensure every health headline counts unique assets; detailed reason chips may overlap but never become the total.
+## 目标
 
-## Non-goals
+- 为每只 ETF 和每个指数历史给出一个互斥的主就绪状态：`ready`、`stale`、`short_history`、`missing_history`、`read_failed`。
+- 同时保留可重叠的问题原因。例如，新 ETF 若最新行情也过期，主状态为 `stale`，原因中仍记录 `short_history`。
+- ETF 总览、维护缺口、原子指标、覆盖摘要和指数摘要使用同一套评估结果。
+- 将源数据新鲜度、特征可计算性和页面快照生成时间明确区分。
+- 行情过期、历史不足或缺少必要特征的 ETF 不参与机会排名和机会统计。
+- 健康摘要的总数只统计唯一资产；原因标签可重叠，但不能再被相加为总数。
 
-- No new external market-data dependency or automatic batch refresh in this phase.
-- No scoring, buy/sell recommendation, or strategy parameter change.
-- No attempt to infer missing ETF tracking-index mappings or replace the current curated index list.
-- No schema migration. Existing SQLite and Parquet files remain readable.
+## 非目标
 
-## Data Model
+- 本阶段不引入新的外部行情依赖，也不在页面加载时自动刷新数据。
+- 不增加综合评分、买卖建议或修改策略参数。
+- 不尝试补全 ETF 跟踪指数映射，也不替换现有的精选指数列表。
+- 不做数据库迁移；现有 SQLite 与 Parquet 数据必须继续可读。
 
-Create `etf_trading.data.quality` as the single owner of local history assessment.
+## 数据模型
 
-`HistoryReadiness` is a string enum with `ready`, `stale`, `short_history`, `missing_history`, and `read_failed`. `HistoryAssessment` contains the primary status, latest local trading date, expected local trading date, history row count, trading-day lag, and a tuple of reason codes.
+新增 `etf_trading.data.quality`，作为本地历史数据状态判断的唯一实现位置。
 
-`assess_price_history(prices, expected_trade_date, min_history_rows)` evaluates a successfully read price frame. Callers convert read exceptions to `read_failed` and empty frames to `missing_history`. The primary-status precedence is `read_failed`, `missing_history`, `stale`, `short_history`, then `ready`. The reasons tuple retains every applicable condition.
+`HistoryReadiness` 是字符串枚举，取值为 `ready`、`stale`、`short_history`、`missing_history`、`read_failed`。`HistoryAssessment` 包含主状态、本地最新交易日、应有最新交易日、历史行数、缺失交易日数量和问题原因列表。
 
-`expected_latest_trade_date(as_of, holidays=())` keeps the current weekday behaviour but accepts explicit exchange-holiday dates. `trading_day_lag` uses the same calendar input, so page data can declare the calendar assumption rather than silently using a business-day approximation.
+`assess_price_history(prices, expected_trade_date, min_history_rows)` 评估读取成功的行情表；读取异常由调用方转为 `read_failed`，空表转为 `missing_history`。主状态的优先级为：`read_failed`、`missing_history`、`stale`、`short_history`、`ready`。问题原因保留所有同时成立的条件。
 
-## Data Flow
+`expected_latest_trade_date(as_of, holidays=())` 保留现有的工作日默认逻辑，并接受显式交易所休市日期。`trading_day_lag` 使用同一日历输入，因此页面可以明确数据日期的日历假设，而不是静默采用近似工作日。
+
+## 数据流
 
 ```text
-Parquet price frame / read error
+Parquet 行情表 / 读取错误
         -> assess_price_history
         -> HistoryAssessment
-        -> ETF overview + maintenance gaps + atomic snapshot
-        -> view-model summaries and filters
-        -> NiceGUI health/status presentation
+        -> ETF 总览 + 维护缺口 + 原子指标快照
+        -> 视图模型摘要与筛选
+        -> NiceGUI 健康状态展示
 ```
 
-The atomic snapshot keeps existing `history_status` and `feature_status` fields for compatibility, and adds readiness evidence: `expected_trade_date`, `trading_day_lag`, `history_reason_codes`, and `is_rank_eligible`.
+原子指标快照保留已有的 `history_status` 与 `feature_status`，以兼容现有页面和缓存；增加 `expected_trade_date`、`trading_day_lag`、`history_reason_codes` 与 `is_rank_eligible`。
 
-Technical indicators remain visible in the diagnostic view whenever they can be calculated. Their return ranks, breakout count, weekly-strength count, and opportunity-table membership are computed only for `is_rank_eligible == True`. This avoids treating a technically calculable but stale price series as a current opportunity.
+只要技术指标本身可计算，就继续在诊断视图展示。只有 `is_rank_eligible == True` 的 ETF 才计算收益排名、计入突破/周线强势数量，并进入机会列表。这样，技术上可以计算但行情已经过期的 ETF 不会被当作当期机会。
 
-## UI Semantics
+## 页面语义
 
-- The shell labels `generated_at` as `页面计算` or `快照生成`, never as `数据更新`.
-- ETF health uses the primary readiness status for the mutually exclusive asset breakdown and uses one unique `需关注 ETF` total.
-- Feature gaps are shown as a secondary diagnostic factor rather than added to the primary total.
-- The opportunity view defaults to rank-eligible ETFs. The health view contains all ETFs and exposes primary status, extra reasons, expected date, latest date, and lag.
-- Filtered atomic tables must retain the complete filtered set for pagination; they may not silently cap it at 300 rows.
+- 顶部的 `generated_at` 改为“页面计算”或“快照生成”，不能再叫“数据更新”。
+- ETF 健康区按主就绪状态展示互斥资产数，并显示一个唯一的“需关注 ETF”总数。
+- 特征缺失是次级诊断因素，不能再加入主问题总数。
+- 机会视图默认只展示可参与排名的 ETF；体检视图展示全部 ETF，并给出主状态、附加原因、应有日期、最新日期和缺失天数。
+- 原子指标的筛选结果必须完整交给分页组件，不能悄悄限制在 300 行。
 
-## Error Handling
+## 错误处理
 
-One unreadable Parquet file produces `read_failed` for that asset and cannot prevent snapshot generation. Invalid or absent trade-date values are treated as unreadable history. Empty histories are `missing_history`. The view displays the assessment reason and directs repair actions to the maintenance workflow.
+单个 Parquet 文件无法读取时，只让对应资产成为 `read_failed`，不能使整张快照生成失败。无效或缺失交易日视为不可读取历史；空行情视为 `missing_history`。页面展示对应原因，并把修复动作导向数据维护流程。
 
-## Testing and Acceptance
+## 测试与验收
 
-- Weekend and explicit-holiday calendars produce the expected latest tradable date and lag.
-- A stale-and-short asset has primary status `stale` and contains both reason codes.
-- Primary readiness counts sum to the ETF pool total; the unique issue total is never greater than that total.
-- A stale, short, missing, or feature-incomplete ETF has no opportunity rank and is absent from the opportunity table.
-- A ready, feature-complete ETF retains its existing indicator and rank behaviour.
-- ETF overview and maintenance gaps report the same status for the same local frame.
-- Page snapshot time is not labelled as source-data update time.
-- Full pytest and desktop/mobile NiceGUI smoke checks remain green.
+- 周末和显式休市日能正确得到应有最新交易日和缺失交易日数量。
+- 同时行情滞后和历史不足的资产，主状态为 `stale`，原因包含两项。
+- 主就绪状态统计之和等于 ETF 池总数；唯一问题总数绝不大于 ETF 池总数。
+- 行情滞后、历史不足、缺失或特征不完整的 ETF 没有机会排名，也不出现在机会列表。
+- 数据就绪且特征完整的 ETF 保留已有指标与排名行为。
+- 同一份本地行情在 ETF 总览与维护缺口中显示一致状态。
+- 页面快照时间不再被标成源行情更新时间。
+- 全量 pytest 以及 NiceGUI 桌面/移动端冒烟检查通过。
 
-## Follow-up Phases
+## 后续阶段
 
-After this foundation is stable, the next independent changes are: exchange-calendar integration, full index/ETF catalogue ingestion, tracking-index mapping lineage, and classification corrections. Those changes remain separate because they alter source coverage rather than readiness semantics.
+这层基础稳定后，再独立推进交易所日历接入、全量指数/ETF 目录、跟踪指数映射血缘和分类纠错。这些工作改变的是数据覆盖范围，应与本阶段的就绪状态语义分开实施。

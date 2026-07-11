@@ -15,13 +15,13 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - ...
 ```
 
-## 2026-07-11 - Design data trust layer
+## 2026-07-11 - 设计数据可信层
 
-- Summary: Defined the first data-layer refactor around one shared readiness assessment, unique health counts, and eligibility-gated ETF opportunity rankings.
-- Verification: Documentation-only review; `rg -n "TBD|TODO|FIXME|待定|待补|不确定|implement later|fill in" docs/superpowers/specs/2026-07-11-data-trust-layer-design.md` returned no matches.
-- Watch out next time:
-  - Treat source freshness, technical feature availability, and page snapshot time as distinct facts.
-  - Preserve all diagnostic reasons, but use one mutually exclusive primary readiness status for headline counts.
+- 摘要：定义第一阶段数据层重构，以统一就绪状态、唯一健康统计和 ETF 机会排名准入为核心。
+- 验证：仅文档审查；`rg -n "TBD|TODO|FIXME|待定|待补|不确定|implement later|fill in" docs/superpowers/specs/2026-07-11-data-trust-layer-design.md` 未返回匹配项。
+- 下次注意：
+  - 源数据新鲜度、技术特征可用性和页面快照时间必须是三类独立事实。
+  - 诊断原因可以重叠，但摘要统计只能使用一个互斥的主就绪状态。
 
 ## 2026-07-11 - Prepare isolated data-trust-layer worktree
 
