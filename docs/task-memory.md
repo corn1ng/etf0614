@@ -15,6 +15,14 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - ...
 ```
 
+## 2026-07-11 - Design data trust layer
+
+- Summary: Defined the first data-layer refactor around one shared readiness assessment, unique health counts, and eligibility-gated ETF opportunity rankings.
+- Verification: Documentation-only review; `rg -n "TBD|TODO|FIXME|待定|待补|不确定|implement later|fill in" docs/superpowers/specs/2026-07-11-data-trust-layer-design.md` returned no matches.
+- Watch out next time:
+  - Treat source freshness, technical feature availability, and page snapshot time as distinct facts.
+  - Preserve all diagnostic reasons, but use one mutually exclusive primary readiness status for headline counts.
+
 ## 2026-07-11 - Prepare isolated data-trust-layer worktree
 
 - Summary: Added the project-local `.worktrees/` ignore rule so the forthcoming data-trust-layer refactor can run in an isolated Git worktree without tracking its files.
