@@ -22,6 +22,8 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
 - 下次注意：
   - 源数据新鲜度、技术特征可用性和页面快照时间必须是三类独立事实。
   - 诊断原因可以重叠，但摘要统计只能使用一个互斥的主就绪状态。
+  - 所有用户可见状态使用中文；英文状态码只用于内部计算与存储。
+  - 数据维护是完整事实来源，顶部栏和研究页面只展示与当前位置相关的状态摘要。
 
 ## 2026-07-11 - Prepare isolated data-trust-layer worktree
 
