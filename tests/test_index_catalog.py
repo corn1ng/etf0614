@@ -102,6 +102,11 @@ def test_catalog_evidence_overlay_updates_only_named_index(tmp_path):
         ("official_api", "unresolved", None),
         ("official_api", "publication_date", "2004-12-31"),
         ("third_party_reference", "official_base_date", "2004-12-31"),
+        ("official_api", "third_party_base_date", "2004-12-31"),
+        ("official_api", "unresolved", "2004-12-31"),
+        ("unverified", "third_party_base_date", "2004-12-31"),
+        ("third_party_publication", "third_party_base_date", "2004-12-31"),
+        ("third_party_reference", "unresolved", "2004-12-31"),
     ],
 )
 def test_baseline_evidence_rejects_incompatible_source_kind_or_missing_date(tmp_path, source, kind, reference_date):

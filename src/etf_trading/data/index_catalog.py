@@ -33,6 +33,22 @@ BaselineEvidenceKind = Literal[
 SourceKind = Literal["csi", "shenwan", "hk"]
 DEFAULT_INDEX_CATALOG_PATH = Path(__file__).resolve().parents[3] / "configs" / "index_universe.yaml"
 DEFAULT_BASELINE_EVIDENCE_PATH = Path(__file__).resolve().parents[3] / "configs" / "index_baseline_evidence.yaml"
+_BASELINE_EVIDENCE_KINDS_BY_SOURCE: dict[BaselineSource, frozenset[BaselineEvidenceKind]] = {
+    "official_methodology": frozenset({"official_base_date"}),
+    "official_factsheet": frozenset({"official_base_date"}),
+    "official_api": frozenset({"official_base_date"}),
+    "third_party_reference": frozenset({"third_party_base_date"}),
+    "third_party_publication": frozenset({"publication_date"}),
+    "unverified": frozenset({"unresolved"}),
+}
+_DEFAULT_EVIDENCE_KIND_BY_SOURCE: dict[BaselineSource, BaselineEvidenceKind] = {
+    "official_methodology": "official_base_date",
+    "official_factsheet": "official_base_date",
+    "official_api": "official_base_date",
+    "third_party_reference": "third_party_base_date",
+    "third_party_publication": "publication_date",
+    "unverified": "unresolved",
+}
 _LEGACY_CATEGORIES = {
     "000300": "A股宽基", "000905": "A股宽基", "000852": "A股宽基", "932000": "A股宽基",
     "000510": "A股宽基", "930050": "A股宽基", "000903": "A股宽基", "000906": "A股宽基",
@@ -260,6 +276,10 @@ def _entry_from_mapping(item: dict[str, object]) -> IndexCatalogEntry:
     source_kind = _required_text(item, "source_kind")
     provider_symbol = str(item.get("provider_symbol") or index_code.replace(".SI", "")).strip()
     baseline_source = str(item.get("baseline_source") or "unverified").strip()
+    baseline_evidence_kind = str(
+        item.get("baseline_evidence_kind")
+        or _DEFAULT_EVIDENCE_KIND_BY_SOURCE.get(baseline_source, "unresolved")
+    ).strip()
     return IndexCatalogEntry(
         index_code=index_code,
         name=_required_text(item, "name"),
@@ -273,6 +293,7 @@ def _entry_from_mapping(item: dict[str, object]) -> IndexCatalogEntry:
         source_kind=source_kind,  # type: ignore[arg-type]
         provider_symbol=provider_symbol,
         aliases=tuple(str(value).strip() for value in item.get("aliases", []) if str(value).strip()),
+        baseline_evidence_kind=baseline_evidence_kind,  # type: ignore[arg-type]
     )
 
 
@@ -315,10 +336,9 @@ def _validate_baseline_metadata(
         raise ValueError(f"unsupported baseline evidence kind: {kind}")
     if source != "unverified" and reference_date is None:
         raise ValueError(f"verified baseline requires index_base_date: {index_code}")
-    if kind == "publication_date" and source != "third_party_publication":
-        raise ValueError(f"publication_date requires third_party_publication: {index_code}")
-    if kind == "official_base_date" and not source.startswith("official_"):
-        raise ValueError(f"official_base_date requires official source: {index_code}")
+    allowed_kinds = _BASELINE_EVIDENCE_KINDS_BY_SOURCE[source]
+    if kind not in allowed_kinds:
+        raise ValueError(f"{kind} is incompatible with {source}: {index_code}")
 
 
 def _required_text(item: dict[str, object], key: str) -> str:
