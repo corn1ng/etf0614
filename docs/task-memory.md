@@ -30,6 +30,13 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - A view-model formatter may use a raw-code fallback. Page render boundaries still need safe Chinese fallbacks for unknown status and source codes.
   - Generic table inference is insufficient for a fixed UX contract; explicitly project display fields before passing rows to the shared table helper.
 
+## 2026-07-12 - Close final atomic main-table status review
+
+- Summary: Sanitized the explicit main-table `data_status` projection itself, so a known internal code displays in Chinese and any unknown code displays `未知状态` before reaching the shared table component.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-main-status-full` passed (335 tests). Seeded Playwright confirmed the visible table contains `已计算`, not `computed`, preserves the eight headers, and records no console errors/warnings in `C:\Users\cjj\AppData\Local\Temp\index-atomic-market-browser-seeded\main-status-result.json`.
+- Watch out next time:
+  - Sanitizing a detail or status-bar boundary is not sufficient when a separately projected main-table field passes through the shared table renderer.
+
 ## 2026-07-12 - Add durable index atomic snapshot maintenance task
 
 - Summary: Added a persisted, local-only maintenance runner and `数据维护 -> 指数目录与完整性` entry point for rebuilding index atomic indicators. The task records per-index progress, published snapshot metadata, and its result so it restores after a page reload.

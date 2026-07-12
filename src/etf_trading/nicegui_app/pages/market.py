@@ -211,6 +211,7 @@ def _index_atomic_table_rows(rows: list[dict[str, object]]) -> list[dict[str, ob
     result: list[dict[str, object]] = []
     for row in rows:
         projected = {column: row.get(column, "") for column in INDEX_ATOMIC_DISPLAY_COLUMNS}
+        projected["data_status"] = _status_text(row.get("data_status"), "数据不足")
         projected["index_code"] = row.get("index_code", "")
         result.append(projected)
     return result

@@ -135,6 +135,19 @@ def test_market_atomic_table_projection_keeps_exactly_eight_visible_columns_and_
     ]
 
 
+def test_market_atomic_table_projection_sanitizes_known_and_unknown_data_statuses():
+    from etf_trading.nicegui_app.pages import market
+
+    rows = market._index_atomic_table_rows(
+        [
+            {"index_code": "000300", "index": "000300 沪深300", "data_status": "computed"},
+            {"index_code": "000905", "index": "000905 中证500", "data_status": "unrecognized_status"},
+        ]
+    )
+
+    assert [row["data_status"] for row in rows] == ["已计算", "未知状态"]
+
+
 def test_index_trend_summary_exposes_chinese_data_status_and_trading_day_lag():
     from etf_trading.data.indexes import IndexDefinition
     from etf_trading.nicegui_app.state import build_index_trend_summary
