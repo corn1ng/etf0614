@@ -410,3 +410,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Do not reuse `index_health_snapshot*` caches because their schema contains valuation and trend-era fields.
   - Treat `stale`, `missing`, and `failed` snapshots as persistent, user-visible data-quality states; only the maintenance task may write a replacement snapshot.
   - Keep atomic facts independent: missing amount invalidates only volume metrics, and a moving-average crossing is never a trading conclusion.
+
+## 2026-07-12 - Clarify index history status explanations
+
+- Summary: Replaced opaque index-history status text with factual Chinese explanations across data maintenance and market snapshots. New and legacy task results now state the missing latest trading date, actual local coverage range, missing official base date and non-trading restriction, or the source that returned no history. Legacy coverage records are upgraded at display time without changing stored enums or schema.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-status-final` passed with 310 tests; final independent code review approved commit `d9e757a`.
+- Watch out next time:
+  - Maintenance task `result_json` and persisted coverage can predate a wording change; normalize recognized legacy messages before rendering rather than assuming a new data run has occurred.
+  - Keep `source_kind` when converting catalog entries to `IndexDefinition`, otherwise old empty-history records lose their concrete Chinese data-source explanation in market snapshots.
+  - Only default an empty completeness message to “尚未校验历史完整性” for `NOT_VALIDATED`; empty `MISSING_HISTORY` must still be interpreted as a recoverable legacy state.
