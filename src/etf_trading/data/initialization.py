@@ -20,6 +20,7 @@ from etf_trading.data.quality import (
     IndexHistoryCompleteness,
     assess_index_history_completeness,
     expected_latest_trade_date,
+    index_history_freshness_message,
 )
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.strategy.features import add_technical_features
@@ -347,12 +348,19 @@ class InitializationService:
         combined = fetched if existing.empty else pd.concat([existing, fetched], ignore_index=True)
         if combined.empty:
             completeness = self._persist_index_history_coverage(entry, combined)
-            self.store.upsert_update_state("index_daily_price", entry.index_code, None, status="EMPTY")
+            self.store.upsert_update_state(
+                "index_daily_price",
+                entry.index_code,
+                None,
+                status="EMPTY",
+                error_message=completeness.message,
+            )
             return IndexHistoryResult(
                 index_code=entry.index_code,
                 status="EMPTY",
                 fetched_rows=0,
                 total_rows=0,
+                error_message=completeness.message,
                 completeness_status=completeness.status,
                 completeness_message=completeness.message,
             )
@@ -388,7 +396,7 @@ class InitializationService:
     ) -> IndexHistoryResult:
         first_date = pd.Timestamp(frame["trade_date"].min()).date()
         last_date = pd.Timestamp(frame["trade_date"].max()).date()
-        message = f"本地最新交易日 {last_date.isoformat()}，未达到目标交易日 {expected_date.isoformat()}"
+        message = index_history_freshness_message(last_date, expected_date)
         self.store.upsert_update_state(
             "index_daily_price",
             index_code,
@@ -467,6 +475,8 @@ class InitializationService:
             frame,
             entry.index_base_date,
             baseline_source=entry.baseline_source,
+            index_code=entry.index_code,
+            source_kind=entry.source_kind,
         )
         source_first = _frame_first_trade_date(source_frame) if source_frame is not None else None
         self.store.upsert_index_history_coverage(

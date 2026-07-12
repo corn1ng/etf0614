@@ -2,7 +2,7 @@ from datetime import date
 
 import pandas as pd
 
-from etf_trading.data.index_catalog import IndexCatalogEntry
+from etf_trading.data.index_catalog import BaselineSource, IndexCatalogEntry, SourceKind
 from etf_trading.data.initialization import InitializationService
 from etf_trading.data.provider import DataProvider
 from etf_trading.data.storage import ParquetStore, SQLiteStore
@@ -58,6 +58,15 @@ class _EmptyIndexProvider(_FakeEtfBatchProvider):
         return pd.DataFrame(columns=["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount"])
 
 
+class _FakeProvider(_FakeEtfBatchProvider):
+    def __init__(self, index_frame: pd.DataFrame) -> None:
+        super().__init__()
+        self.index_frame = index_frame
+
+    def fetch_index_daily(self, code, start_date, end_date) -> pd.DataFrame:
+        return self.index_frame.copy()
+
+
 class _IndexProvider(_FakeEtfBatchProvider):
     def fetch_index_daily(self, code, start_date, end_date) -> pd.DataFrame:
         return pd.DataFrame(
@@ -87,6 +96,55 @@ def _index_prices_through(code: str, end_date: str) -> pd.DataFrame:
             "amount": [10000],
         }
     )
+
+
+def _prices(code: str, *, start: str, end: str) -> pd.DataFrame:
+    dates = pd.to_datetime([start, end])
+    return pd.DataFrame(
+        {
+            "index_code": [code] * len(dates),
+            "trade_date": dates,
+            "open": [1.0] * len(dates),
+            "high": [1.1] * len(dates),
+            "low": [0.9] * len(dates),
+            "close": [1.05] * len(dates),
+            "volume": [1000] * len(dates),
+            "amount": [10000] * len(dates),
+        }
+    )
+
+
+def _catalog_entry(
+    index_code: str,
+    *,
+    source_kind: SourceKind = "csi",
+    index_base_date: date | None = date(2005, 1, 4),
+    baseline_source: BaselineSource = "official_methodology",
+) -> IndexCatalogEntry:
+    return IndexCatalogEntry(
+        index_code=index_code,
+        name=index_code,
+        market="港股" if source_kind == "hk" else "A股",
+        category_level_1="测试",
+        category_level_2="测试",
+        index_type="测试",
+        pool="core",
+        index_base_date=index_base_date,
+        baseline_source=baseline_source,
+        source_kind=source_kind,
+        provider_symbol=index_code,
+    )
+
+
+def _service_with_catalog(
+    tmp_path,
+    provider: DataProvider,
+    entries: list[IndexCatalogEntry],
+) -> tuple[InitializationService, SQLiteStore]:
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    service = InitializationService(store, provider=provider, parquet_store=ParquetStore(tmp_path / "parquet"))
+    service.sync_index_catalog(entries)
+    return service, store
 
 
 def _fresh_etf_history(code: str) -> pd.DataFrame:
@@ -225,6 +283,39 @@ def test_ensure_index_history_marks_existing_history_stale_when_provider_returns
     assert state["status"] == "STALE"
     assert "2026-07-01" in state["error_message"]
     assert "2026-07-10" in state["error_message"]
+
+
+def test_ensure_index_history_records_exact_missing_latest_trade_date(tmp_path):
+    service, store = _service_with_catalog(
+        tmp_path,
+        _FakeProvider(index_frame=_prices("000300", start="2005-01-04", end="2026-07-09")),
+        [_catalog_entry("000300", index_base_date=date(2005, 1, 4))],
+    )
+
+    result = service.ensure_index_history("000300", "2026-07-10")
+
+    assert result.status == "STALE"
+    assert result.error_message == "已更新至 2026-07-09，缺少 2026-07-10 行情。"
+    with store.connect() as conn:
+        state = pd.read_sql_query("SELECT error_message FROM data_update_state", conn).iloc[0]
+    assert state["error_message"] == result.error_message
+
+
+def test_ensure_index_history_records_empty_provider_response_with_source(tmp_path):
+    service, store = _service_with_catalog(
+        tmp_path,
+        _FakeProvider(index_frame=pd.DataFrame()),
+        [_catalog_entry("H30533", source_kind="hk", index_base_date=None, baseline_source="unverified")],
+    )
+
+    result = service.ensure_index_history("H30533", "2026-07-10")
+
+    assert result.status == "EMPTY"
+    assert result.error_message == "港股数据源未返回 H30533 的历史行情。"
+    assert result.completeness_message == result.error_message
+    with store.connect() as conn:
+        state = pd.read_sql_query("SELECT error_message FROM data_update_state", conn).iloc[0]
+    assert state["error_message"] == result.error_message
 
 
 def test_ensure_all_index_history_reports_each_index_progress(tmp_path):
@@ -417,7 +508,7 @@ def test_ensure_index_history_marks_incomplete_when_verified_base_date_is_not_co
     assert result.completeness_status == "INCOMPLETE"
     coverage = store.list_index_history_coverage().iloc[0]
     assert coverage["local_first_trade_date"] == "2005-01-04"
-    assert coverage["completeness_message"] == "应从 1999-12-30 开始，本地仅从 2005-01-04 开始"
+    assert coverage["completeness_message"] == "应从 1999-12-30 开始，当前仅有 2005-01-04 起的数据。"
 
 
 def test_validate_index_sources_uses_only_latest_ten_calendar_days_and_persists_result(tmp_path):
