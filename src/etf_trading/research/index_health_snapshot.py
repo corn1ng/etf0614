@@ -46,6 +46,8 @@ INDEX_ATOMIC_SUMMARY_COLUMNS = [
     "close_vs_ma_60",
     "close_vs_ma_120",
     "close_vs_ma_250",
+    "range_20_high",
+    "range_20_low",
     "range_20_status",
     "return_20",
     "return_20_status",
@@ -142,7 +144,14 @@ def build_index_atomic_snapshot(
             )
 
     summary = pd.DataFrame(summary_rows, columns=INDEX_ATOMIC_SUMMARY_COLUMNS)
-    for column in ("close_above_ma_20", "close_above_ma_60", "close_above_ma_120", "close_above_ma_250"):
+    for column in (
+        "close_above_ma_20",
+        "close_above_ma_60",
+        "close_above_ma_120",
+        "close_above_ma_250",
+        "range_20_high",
+        "range_20_low",
+    ):
         if column in summary:
             summary[column] = summary[column].astype(object)
     details = pd.DataFrame(detail_rows, columns=INDEX_ATOMIC_DETAIL_COLUMNS)
@@ -555,6 +564,8 @@ def _summary_from_details(
         "close_vs_ma_60",
         "close_vs_ma_120",
         "close_vs_ma_250",
+        "range_20_high",
+        "range_20_low",
         "return_20",
     ):
         metric = metrics[key]

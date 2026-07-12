@@ -6,6 +6,7 @@ from etf_trading.nicegui_app.view_models import (
     ATOMIC_HEALTH_COLUMNS,
     ATOMIC_OPPORTUNITY_COLUMNS,
     AtomicIndicatorFilters,
+    IndexAtomicFilters,
     IndexHealthFilters,
     PlatformSnapshot,
     atomic_data_update_health,
@@ -14,6 +15,7 @@ from etf_trading.nicegui_app.view_models import (
     atomic_indicator_detail_options,
     atomic_indicator_rows,
     atomic_indicator_summary,
+    build_index_atomic_rows,
     category_options,
     code_from_option,
     current_ui_audit_findings,
@@ -22,6 +24,7 @@ from etf_trading.nicegui_app.view_models import (
     filter_atomic_indicator_frame,
     filter_etf_rows,
     index_choice_options,
+    index_atomic_detail_groups,
     index_health_detail_rows,
     index_health_filter_options,
     index_health_rows,
@@ -144,6 +147,22 @@ def _index_health_details_frame() -> pd.DataFrame:
     )
 
 
+def _atomic_details() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"index_code": "000300", "group_key": "price_ma", "metric_key": "close_vs_ma_20", "metric_label": "相对20日均线偏离率", "value": 0.034, "status": "computed", "reason": "已从本地指数历史计算", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "akshare_zh_em"},
+            {"index_code": "000300", "group_key": "ma_cross", "metric_key": "ma_cross_up_20", "metric_label": "向上穿越20日均线", "value": True, "status": "computed", "reason": "已按相邻交易日计算", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "unit"},
+            {"index_code": "000300", "group_key": "range_position", "metric_key": "range_20_high", "metric_label": "20日收盘新高", "value": False, "status": "computed", "reason": "已从本地指数历史计算", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "unit"},
+            {"index_code": "000300", "group_key": "range_position", "metric_key": "range_20_from_high", "metric_label": "距20日收盘最高偏离率", "value": -0.05, "status": "computed", "reason": "已从本地指数历史计算", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "unit"},
+            {"index_code": "000300", "group_key": "return_drawdown", "metric_key": "return_20", "metric_label": "20日收益率", "value": 0.08, "status": "computed", "reason": "已从本地指数历史计算", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "unit"},
+            {"index_code": "000300", "group_key": "volatility_volume", "metric_key": "amount_avg_20", "metric_label": "20日平均成交额", "value": pd.NA, "status": "missing_input", "reason": "缺少 amount 字段", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "unit"},
+            {"index_code": "000300", "group_key": "volatility_volume", "metric_key": "amount_avg_ratio_5_20", "metric_label": "5日与20日平均成交额比值", "value": 1.33, "status": "computed", "reason": "已从本地指数历史计算", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "unit"},
+            {"index_code": "000300", "group_key": "data_quality", "metric_key": "latest_date", "metric_label": "最新交易日", "value": "2026-07-11", "status": "computed", "reason": "已读取本地指数历史", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "unit"},
+            {"index_code": "000300", "group_key": "data_quality", "metric_key": "data_source", "metric_label": "数据源", "value": "akshare_hk_em", "status": "computed", "reason": "已读取本地指数历史", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "akshare_hk_em"},
+        ]
+    )
+
+
 def test_status_metrics_are_dense_and_human_readable():
     metrics = status_metrics(_snapshot())
 
@@ -224,6 +243,93 @@ def test_index_health_view_models_filter_summary_and_details():
             "data_source": "unit",
         }
     ]
+
+
+def test_index_atomic_rows_keep_catalog_order_within_each_pool_and_search_only_filters():
+    summary = pd.DataFrame(
+        [
+            {"index_code": "399001", "index_name": "深证成指", "category": "仅分类匹配", "pool": "core", "catalog_order": 2},
+            {"index_code": "000300", "index_name": "沪深300", "category": "A股宽基", "pool": "core", "catalog_order": 1},
+            {"index_code": "000905", "index_name": "中证500", "category": "A股宽基", "pool": "core", "catalog_order": 1},
+            {"index_code": "801010", "index_name": "农林牧渔", "category": "申万一级", "pool": "research", "catalog_order": 3},
+            {"index_code": "930000", "index_name": "候补指数", "category": "候补", "pool": "reserve", "catalog_order": 0},
+        ]
+    )
+
+    core = build_index_atomic_rows(summary, IndexAtomicFilters(pool="core"))
+    searched = build_index_atomic_rows(summary, IndexAtomicFilters(pool="core", query="深证"))
+    category_searched = build_index_atomic_rows(summary, IndexAtomicFilters(pool="core", query="仅分类匹配"))
+    reserve = build_index_atomic_rows(summary, IndexAtomicFilters(pool="reserve"))
+
+    assert [row["index_code"] for row in core] == ["000300", "000905", "399001"]
+    assert [row["index_code"] for row in searched] == ["399001"]
+    assert category_searched == []
+    assert reserve == []
+
+
+def test_index_atomic_rows_format_fixed_atomic_summary_columns_without_conclusions():
+    summary = pd.DataFrame(
+        [
+            {
+                "index_code": "000300",
+                "index_name": "沪深300",
+                "category": "A股宽基",
+                "pool": "core",
+                "catalog_order": 0,
+                "latest_date": "2026-07-11",
+                "close_vs_ma_20": 0.034,
+                "close_vs_ma_60": -0.025,
+                "range_20_high": False,
+                "range_20_low": False,
+                "range_20_status": "computed",
+                "return_20": 0.018,
+                "snapshot_status": "computed",
+            }
+        ]
+    )
+
+    row = build_index_atomic_rows(summary, IndexAtomicFilters())[0]
+
+    assert row["index"] == "000300 沪深300"
+    assert row["close_vs_ma_20"] == "高于 3.4%"
+    assert row["close_vs_ma_60"] == "低于 2.5%"
+    assert row["range_20"] == "区间内"
+    assert row["return_20"] == "1.8%"
+    assert row["data_status"] == "已计算"
+    assert not {"估值", "趋势", "评分", "排名", "策略", "交易"}.intersection(row)
+
+
+def test_index_atomic_rows_format_20_day_range_from_stored_high_low_facts():
+    summary = pd.DataFrame(
+        [
+            {"index_code": "000300", "index_name": "沪深300", "pool": "core", "catalog_order": 0, "range_20_high": True, "range_20_low": True, "range_20_status": "computed"},
+            {"index_code": "000905", "index_name": "中证500", "pool": "core", "catalog_order": 1, "range_20_high": False, "range_20_low": True, "range_20_status": "computed"},
+            {"index_code": "399001", "index_name": "深证成指", "pool": "core", "catalog_order": 2, "range_20_high": False, "range_20_low": False, "range_20_status": "computed"},
+            {"index_code": "801010", "index_name": "农林牧渔", "pool": "core", "catalog_order": 3, "range_20_high": pd.NA, "range_20_low": pd.NA, "range_20_status": "insufficient_history"},
+        ]
+    )
+
+    rows = build_index_atomic_rows(summary, IndexAtomicFilters())
+
+    assert [row["range_20"] for row in rows] == ["20日新高", "20日新低", "区间内", "数据不足"]
+
+
+def test_index_atomic_detail_groups_are_fact_categories_without_strategy_conclusions():
+    groups = index_atomic_detail_groups(_atomic_details(), "000300")
+
+    assert [group.title for group in groups] == ["价格与均线", "均线穿越", "区间位置", "收益与回撤", "波动与成交", "数据质量"]
+    assert all("趋势" not in item.label and "交易" not in item.label for group in groups for item in group.items)
+
+    items = {item.metric_key: item for group in groups for item in group.items}
+    assert items["close_vs_ma_20"].value == "3.4%"
+    assert items["ma_cross_up_20"].value == "是"
+    assert items["range_20_from_high"].value == "-5.0%"
+    assert items["amount_avg_20"].value == "数据不足"
+    assert items["amount_avg_20"].status == "缺少输入字段"
+    assert items["amount_avg_ratio_5_20"].value == "1.33"
+    assert items["latest_date"].value == "2026-07-11"
+    assert items["close_vs_ma_20"].data_source == "AkShare（东方财富指数行情）"
+    assert items["data_source"].value == "AkShare（东方财富港股指数行情）"
 
 
 def test_table_rows_convert_dataframes_to_records():

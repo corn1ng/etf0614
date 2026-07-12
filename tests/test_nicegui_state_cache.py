@@ -341,6 +341,57 @@ def test_atomic_snapshot_meta_records_schema_catalog_source_and_task_result(tmp_
     assert meta["coverage_signature"] == state._index_atomic_snapshot_coverage_signature(coverage)
 
 
+def test_index_atomic_snapshot_round_trip_preserves_20_day_range_facts(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    summary = _summary("000300")
+    summary.loc[0, "range_20_high"] = True
+    summary.loc[0, "range_20_low"] = False
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+
+    state.write_index_atomic_snapshot(
+        summary,
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+    )
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert result.status == "ready"
+    assert bool(result.summary.iloc[0]["range_20_high"]) is True
+    assert bool(result.summary.iloc[0]["range_20_low"]) is False
+
+
+def test_index_atomic_snapshot_old_schema_is_stale_not_ready(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+    )
+    meta_file = parquet_store.root / "cache" / "index_atomic_snapshot.meta.json"
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    meta["schema_version"] = state.INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION - 1
+    meta_file.write_text(json.dumps(meta), encoding="utf-8")
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert result.status == "stale"
+    assert result.summary["index_code"].tolist() == ["000300"]
+
+
 def test_index_atomic_snapshot_inputs_excludes_reserve_catalog_entries(tmp_path):
     store = SQLiteStore(tmp_path / "etf.sqlite")
     store.initialize_schema()

@@ -462,3 +462,13 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Migrate `nicegui_app.state` from the removed `build_index_health_snapshot` / `INDEX_HEALTH_*` interface before running the full suite.
   - A moving-average cross requires an adjacent-day side switch; a persistent above/below position is not a new event.
   - Missing `amount` is a volume-only input gap and must not invalidate price-derived atoms.
+
+## 2026-07-12 - Present index atomic indicator rows
+
+- Summary: Added atomic index summary rows with core/research pool filtering, stable catalog-order sorting, code/name-only search, Chinese fixed-column formatting, and six stored-fact detail groups. Promoted the existing 20-day range high/low facts into the atomic summary schema so the list can distinguish new high, new low, and in-range without recomputation. The snapshot cache now uses schema v2 so existing v1 snapshots are stale rather than silently presented as current data.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_nicegui_view_models.py tests\test_nicegui_table_display.py tests\test_nicegui_theme.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-view-model-green-final-review` passed with 48 tests; `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_nicegui_state_cache.py tests\test_nicegui_app_import.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-state-app-green` passed with 36 tests; full `pytest -q` passed with 328 tests.
+- Watch out next time:
+  - Keep `range_20_high` and `range_20_low` as stored summary facts; `range_20_status` is only the calculation-state field and cannot identify the range position by itself.
+  - Any atomic-summary schema change needs the index-atomic cache schema version, boolean-safe Parquet serialization, and an old-schema stale-cache regression in the same change.
+  - Filter the selected visible pool before searching only code/name, then sort solely and stably by `catalog_order`; reserve rows stay hidden.
+  - Detail groups format stored values and statuses only. Do not add calculations, valuation, trend tiers, scoring, ranking, position permission, strategies, or transaction conclusions.

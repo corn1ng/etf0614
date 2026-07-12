@@ -55,7 +55,7 @@ _ATOMIC_SNAPSHOT_CACHE: dict[str, tuple[str, pd.DataFrame, datetime | None]] = {
 _ATOMIC_SNAPSHOT_ERRORS: dict[str, str] = {}
 _ATOMIC_SNAPSHOT_CACHE_LOCK = RLock()
 ATOMIC_SNAPSHOT_BUILD_MARKER_MAX_AGE_SECONDS = 600.0
-INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 1
+INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 2
 _INDEX_ATOMIC_SNAPSHOT_LOCK = RLock()
 
 
@@ -258,7 +258,7 @@ def load_index_atomic_snapshot_readonly(
 
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
-            _validate_index_atomic_snapshot_meta(meta)
+            _validate_index_atomic_snapshot_meta(meta, require_current_schema=False)
             summary = pd.read_parquet(summary_file)
             details = pd.read_parquet(details_file)
             generated_at = _parse_cache_datetime(meta["generated_at"])
@@ -275,7 +275,11 @@ def load_index_atomic_snapshot_readonly(
         coverage_signature = _index_atomic_snapshot_coverage_signature(coverage)
         status = (
             "ready"
-            if meta["source_signature"] == source_signature and meta["coverage_signature"] == coverage_signature
+            if (
+                meta["schema_version"] == INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION
+                and meta["source_signature"] == source_signature
+                and meta["coverage_signature"] == coverage_signature
+            )
             else "stale"
         )
         return IndexAtomicSnapshotCacheResult(
@@ -722,10 +726,13 @@ def _empty_index_atomic_snapshot_result(
     )
 
 
-def _validate_index_atomic_snapshot_meta(meta: object) -> None:
+def _validate_index_atomic_snapshot_meta(meta: object, *, require_current_schema: bool = True) -> None:
     if not isinstance(meta, dict):
         raise ValueError("元数据不是对象")
-    if meta.get("schema_version") != INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION:
+    schema_version = meta.get("schema_version")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool):
+        raise ValueError("快照 schema 版本无效")
+    if require_current_schema and schema_version != INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION:
         raise ValueError("快照 schema 版本不匹配")
     required = (
         "catalog_signature",
@@ -799,15 +806,24 @@ _INDEX_ATOMIC_SUMMARY_TEXT_COLUMNS = {
     "return_20_status",
 }
 
+_INDEX_ATOMIC_SUMMARY_BOOLEAN_COLUMNS = {
+    "close_above_ma_20",
+    "close_above_ma_60",
+    "close_above_ma_120",
+    "close_above_ma_250",
+    "range_20_high",
+    "range_20_low",
+}
+
 
 def _index_atomic_cache_safe_summary(summary: pd.DataFrame) -> pd.DataFrame:
     result = summary.copy()
     for column in _INDEX_ATOMIC_SUMMARY_TEXT_COLUMNS.intersection(result.columns):
         result[column] = result[column].astype("string")
-    for column in {"close_above_ma_20", "close_above_ma_60", "close_above_ma_120", "close_above_ma_250"}.intersection(result.columns):
+    for column in _INDEX_ATOMIC_SUMMARY_BOOLEAN_COLUMNS.intersection(result.columns):
         result[column] = result[column].astype("boolean")
     for column in set(result.columns).difference(_INDEX_ATOMIC_SUMMARY_TEXT_COLUMNS).difference(
-        {"close_above_ma_20", "close_above_ma_60", "close_above_ma_120", "close_above_ma_250"}
+        _INDEX_ATOMIC_SUMMARY_BOOLEAN_COLUMNS
     ):
         result[column] = pd.to_numeric(result[column], errors="coerce")
     return result

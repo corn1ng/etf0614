@@ -1,6 +1,9 @@
+import pandas as pd
+
 from etf_trading.nicegui_app.components import tables
 from etf_trading.nicegui_app.components.tables import render_table, table_columns, table_rows
 from etf_trading.nicegui_app.pages.etf_data import _atomic_filter_options, _atomic_filter_value
+from etf_trading.nicegui_app.view_models import IndexAtomicFilters, build_index_atomic_rows
 
 
 def test_table_columns_translate_internal_index_headers_to_chinese():
@@ -235,6 +238,70 @@ def test_compact_table_columns_add_width_hints_for_index_summary():
     assert by_name["index_name"]["style"] == "width: 116px; min-width: 116px; max-width: 116px;"
     assert by_name["index_code"]["classes"] == "text-no-wrap"
     assert by_name["index_code"]["headerClasses"] == "text-no-wrap"
+
+
+def test_index_atomic_table_columns_and_status_codes_are_chinese_and_compact():
+    rows = build_index_atomic_rows(
+        pd.DataFrame(
+            [
+                {
+                    "index_code": "000300",
+                    "index_name": "沪深300",
+                    "category": "A股宽基",
+                    "pool": "core",
+                    "catalog_order": 0,
+                    "latest_date": "2026-07-11",
+                    "close_vs_ma_20": 0.034,
+                    "close_vs_ma_60": -0.025,
+                    "range_20_high": False,
+                    "range_20_low": False,
+                    "range_20_status": "computed",
+                    "return_20": 0.018,
+                    "snapshot_status": "computed",
+                }
+            ]
+        ),
+        IndexAtomicFilters(),
+    )
+
+    columns = table_columns(rows, compact=True)
+    by_name = {column["name"]: column for column in columns}
+
+    assert [column["label"] for column in columns] == [
+        "指数",
+        "分类",
+        "最新日期",
+        "相对20日线",
+        "相对60日线",
+        "20日区间",
+        "20日收益",
+        "数据状态",
+    ]
+    assert "width:" in by_name["index"]["style"]
+    assert "width:" in by_name["close_vs_ma_20"]["style"]
+    assert "width:" in by_name["data_status"]["style"]
+
+    status_rows = table_rows(
+        [
+            {"snapshot_status": "ready", "status": "computed"},
+            {"snapshot_status": "stale", "status": "insufficient_history"},
+            {"snapshot_status": "missing", "status": "missing_input"},
+            {"snapshot_status": "failed", "status": "calculation_failed"},
+            {"status": "read_failed"},
+            {"data_source": "akshare_zh_em"},
+            {"data_source": "akshare_shenwan"},
+        ]
+    )
+
+    assert status_rows == [
+        {"snapshot_status": "已验证", "status": "已计算"},
+        {"snapshot_status": "待重建", "status": "历史不足"},
+        {"snapshot_status": "不存在", "status": "缺少输入字段"},
+        {"snapshot_status": "生成失败", "status": "计算失败"},
+        {"status": "读取失败"},
+        {"data_source": "AkShare（东方财富指数行情）"},
+        {"data_source": "AkShare（申万指数行情）"},
+    ]
 
 
 def test_atomic_status_filter_options_show_chinese_labels_but_keep_internal_values():

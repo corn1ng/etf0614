@@ -55,6 +55,12 @@ class IndexHealthFilters:
     valuation_status: str = "全部估值体检"
 
 
+@dataclass(frozen=True)
+class IndexAtomicFilters:
+    pool: str = "core"
+    query: str = ""
+
+
 ATOMIC_VIEW_MODES = ("机会特征", "体检特征")
 
 INDEX_HEALTH_SUMMARY_COLUMNS = (
@@ -122,6 +128,24 @@ class AtomicIndicatorDetailGroup:
 
 
 @dataclass(frozen=True)
+class IndexAtomicDetailItem:
+    metric_key: str
+    label: str
+    value: str
+    status: str
+    reason: str
+    as_of_date: str
+    sample_count: str
+    data_source: str
+
+
+@dataclass(frozen=True)
+class IndexAtomicDetailGroup:
+    title: str
+    items: list[IndexAtomicDetailItem]
+
+
+@dataclass(frozen=True)
 class AtomicDataHealthItem:
     key: str
     label: str
@@ -164,6 +188,59 @@ ATOMIC_FEATURE_STATUS_LABELS = {
     "missing_features": "特征缺失",
     "feature_calculation_failed": "特征计算失败",
 }
+
+INDEX_ATOMIC_SNAPSHOT_STATUS_LABELS = {
+    "ready": "已验证",
+    "stale": "待重建",
+    "missing": "不存在",
+    "failed": "生成失败",
+}
+
+INDEX_ATOMIC_METRIC_STATUS_LABELS = {
+    "computed": "已计算",
+    "insufficient_history": "历史不足",
+    "missing_input": "缺少输入字段",
+    "read_failed": "读取失败",
+    "calculation_failed": "计算失败",
+}
+
+INDEX_ATOMIC_HISTORY_COMPLETENESS_LABELS = {
+    "COMPLETE": "历史完整",
+    "INCOMPLETE": "历史不完整",
+    "BASELINE_UNVERIFIED": "基日待核验",
+    "SOURCE_LIMITED": "数据源历史不完整",
+    "MISSING_HISTORY": "历史缺失",
+    "NOT_VALIDATED": "待校验",
+}
+
+INDEX_ATOMIC_DATA_SOURCE_LABELS = {
+    "akshare_zh_em": "AkShare（东方财富指数行情）",
+    "akshare_zh_sina": "AkShare（新浪指数行情）",
+    "akshare_csindex": "AkShare（中证官网指数行情）",
+    "akshare_hk_sina": "AkShare（新浪港股指数行情）",
+    "akshare_shenwan": "AkShare（申万指数行情）",
+    "akshare_hk_em": "AkShare（东方财富港股指数行情）",
+}
+
+INDEX_ATOMIC_DISPLAY_COLUMNS = (
+    "index",
+    "category",
+    "latest_date",
+    "close_vs_ma_20",
+    "close_vs_ma_60",
+    "range_20",
+    "return_20",
+    "data_status",
+)
+
+INDEX_ATOMIC_DETAIL_GROUPS = (
+    ("price_ma", "价格与均线"),
+    ("ma_cross", "均线穿越"),
+    ("range_position", "区间位置"),
+    ("return_drawdown", "收益与回撤"),
+    ("volatility_volume", "波动与成交"),
+    ("data_quality", "数据质量"),
+)
 
 
 def current_ui_audit_findings() -> tuple[AuditFinding, ...]:
@@ -591,6 +668,52 @@ def index_health_detail_rows(details: pd.DataFrame, index_code: str, detail_kind
     return rows
 
 
+def build_index_atomic_rows(
+    summary: pd.DataFrame,
+    filters: IndexAtomicFilters | None = None,
+) -> list[dict[str, object]]:
+    """Format stored index atomic summary facts for the fixed health table."""
+
+    if summary.empty or "pool" not in summary:
+        return []
+
+    filters = filters or IndexAtomicFilters()
+    if filters.pool not in {"core", "research"}:
+        return []
+
+    data = summary[_string_series(summary, "pool") == filters.pool].copy()
+    query = filters.query.strip().lower()
+    if query:
+        searchable = (_string_series(data, "index_code") + " " + _string_series(data, "index_name")).str.lower()
+        data = data[searchable.str.contains(query, regex=False, na=False)]
+    if data.empty:
+        return []
+
+    if "catalog_order" in data:
+        data = data.assign(_catalog_order=pd.to_numeric(data["catalog_order"], errors="coerce"))
+        data = data.sort_values("_catalog_order", kind="stable", na_position="last").drop(columns=["_catalog_order"])
+
+    return [_index_atomic_display_row(row) for row in data.to_dict("records")]
+
+
+def index_atomic_detail_groups(details: pd.DataFrame, index_code: str) -> list[IndexAtomicDetailGroup]:
+    """Group stored atomic detail rows without calculating additional metrics."""
+
+    if details.empty or not index_code or "index_code" not in details:
+        return []
+
+    data = details[details["index_code"].fillna("").astype(str) == str(index_code)].copy()
+    if data.empty:
+        return []
+    group_keys = _string_series(data, "group_key")
+
+    groups: list[IndexAtomicDetailGroup] = []
+    for group_key, title in INDEX_ATOMIC_DETAIL_GROUPS:
+        items = [_index_atomic_detail_item(row) for row in data[group_keys == group_key].to_dict("records")]
+        groups.append(IndexAtomicDetailGroup(title=title, items=items))
+    return groups
+
+
 def etf_choice_options(rows: list[dict[str, object]]) -> list[str]:
     options: list[str] = []
     for row in rows:
@@ -782,6 +905,164 @@ def _format_index_detail_value(value: object) -> str:
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
         return str(value).strip()
+
+
+def _index_atomic_display_row(row: dict[str, object]) -> dict[str, object]:
+    code = _text(row.get("index_code"))
+    name = _text(row.get("index_name"))
+    return {
+        "index_code": code,
+        "index": " ".join(item for item in (code, name) if item) or "数据不足",
+        "category": _text(row.get("category")) or "数据不足",
+        "latest_date": _format_index_atomic_date(row.get("latest_date")),
+        "close_vs_ma_20": _format_index_atomic_relative_ma(row.get("close_vs_ma_20")),
+        "close_vs_ma_60": _format_index_atomic_relative_ma(row.get("close_vs_ma_60")),
+        "range_20": _format_index_atomic_range(row),
+        "return_20": _format_index_atomic_percent(row.get("return_20")),
+        "data_status": _index_atomic_status_label(row.get("snapshot_status")),
+    }
+
+
+def _index_atomic_detail_item(row: dict[str, object]) -> IndexAtomicDetailItem:
+    metric_key = _text(row.get("metric_key"))
+    return IndexAtomicDetailItem(
+        metric_key=metric_key,
+        label=_index_atomic_detail_label(metric_key, row.get("metric_label")),
+        value=_format_index_atomic_detail_value(metric_key, row.get("value")),
+        status=_index_atomic_status_label(row.get("status")),
+        reason=_text(row.get("reason")) or "数据不足",
+        as_of_date=_format_index_atomic_date(row.get("as_of_date")),
+        sample_count=_format_index_atomic_count(row.get("sample_count")),
+        data_source=_index_atomic_data_source_label(row.get("data_source")),
+    )
+
+
+def _index_atomic_detail_label(metric_key: str, value: object) -> str:
+    label = _text(value) or metric_key or "数据不足"
+    return label.replace("交易日", "日数" if metric_key.startswith("days_since_") else "日期")
+
+
+def _format_index_atomic_relative_ma(value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "数据不足"
+    direction = "高于" if number >= 0 else "低于"
+    return f"{direction} {abs(number):.1%}"
+
+
+def _format_index_atomic_range(row: dict[str, object]) -> str:
+    high = row.get("range_20_high")
+    low = row.get("range_20_low")
+    if not _missing(high) and _truthy(high):
+        return "20日新高"
+    if not _missing(low) and _truthy(low):
+        return "20日新低"
+    if (
+        not _missing(high)
+        and not _missing(low)
+        and _text(row.get("range_20_status")) == "computed"
+    ):
+        return "区间内"
+    return "数据不足"
+
+
+def _format_index_atomic_detail_value(metric_key: str, value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    if metric_key in {"history_status", "history_completeness_status"}:
+        return _index_atomic_status_label(value)
+    if metric_key == "data_source":
+        return _index_atomic_data_source_label(value)
+    if metric_key in {"latest_date", "as_of_date"}:
+        return _format_index_atomic_date(value)
+    if _index_atomic_boolean_metric(metric_key):
+        return "是" if _truthy(value) else "否"
+    if metric_key.startswith(("close_vs_ma_", "range_", "return_", "drawdown_")):
+        return _format_index_atomic_percent(value)
+    if metric_key in {"amount_avg_5", "amount_avg_20"}:
+        return _format_index_atomic_amount(value)
+    return _format_index_atomic_number(value)
+
+
+def _index_atomic_boolean_metric(metric_key: str) -> bool:
+    if metric_key.startswith(("close_above_ma_", "ma_cross_up_", "ma_cross_down_")):
+        return True
+    return metric_key.startswith("range_") and metric_key.rsplit("_", 1)[-1] in {"high", "low"} and "_from_" not in metric_key
+
+
+def _format_index_atomic_date(value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    try:
+        return pd.Timestamp(value).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return _text(value) or "数据不足"
+
+
+def _format_index_atomic_percent(value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    try:
+        return f"{float(value):.1%}"
+    except (TypeError, ValueError):
+        return "数据不足"
+
+
+def _format_index_atomic_amount(value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "数据不足"
+    if abs(number) >= 100_000_000:
+        return f"{number / 100_000_000:.1f}亿"
+    if abs(number) >= 10_000:
+        return f"{number / 10_000:.1f}万"
+    return f"{number:.0f}"
+
+
+def _format_index_atomic_number(value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return _text(value) or "数据不足"
+    return str(int(number)) if number.is_integer() else f"{number:.2f}"
+
+
+def _format_index_atomic_count(value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    try:
+        return str(int(float(value)))
+    except (TypeError, ValueError):
+        return _text(value) or "数据不足"
+
+
+def _index_atomic_status_label(value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    text = _text(value)
+    return (
+        INDEX_ATOMIC_SNAPSHOT_STATUS_LABELS.get(text)
+        or INDEX_ATOMIC_METRIC_STATUS_LABELS.get(text)
+        or INDEX_ATOMIC_HISTORY_COMPLETENESS_LABELS.get(text)
+        or text
+    )
+
+
+def _index_atomic_data_source_label(value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    text = _text(value)
+    return INDEX_ATOMIC_DATA_SOURCE_LABELS.get(text, text)
 
 
 def _format_percentile(value: object) -> str:

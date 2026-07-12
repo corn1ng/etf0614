@@ -92,6 +92,17 @@ def test_build_index_atomic_snapshot_calculates_price_ma_cross_range_return_and_
     )
 
 
+def test_snapshot_summary_exposes_20_day_range_high_and_low_facts(tmp_path):
+    store = _store_with_index_prices(tmp_path, "000300", _price_history(260))
+
+    summary, _ = build_index_atomic_snapshot(store, (_definition("000300"),))
+
+    row = summary.iloc[0]
+    assert row["range_20_status"] == "computed"
+    assert row["range_20_high"] is True
+    assert row["range_20_low"] is False
+
+
 def test_build_index_atomic_snapshot_reports_progress_after_each_local_index(tmp_path):
     store = _store_with_index_prices(tmp_path, "000300", _price_history(260))
     store.write_index_prices("000905", _price_history(260).assign(index_code="000905"))
