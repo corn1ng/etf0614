@@ -600,6 +600,86 @@ def test_persisted_history_repair_task_uses_chinese_incomplete_history_summary()
     assert status.progress_detail == "801010 已修复"
 
 
+def test_persisted_legacy_index_history_result_upgrades_baseline_explanation():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    run = MaintenanceTaskRun(
+        task_id=13,
+        task_type="index_history_batch",
+        state="success",
+        progress_done=1,
+        progress_total=1,
+        progress_detail="000300 UPDATED",
+        result_json=(
+            '[{"index_code":"000300","status":"UPDATED","start_date":"1990-12-19",'
+            '"end_date":"2026-07-10","completeness_status":"BASELINE_UNVERIFIED",'
+            '"completeness_message":"基日待核验，不能判定历史完整"}]'
+        ),
+        error_message=None,
+        started_at="2026-07-12 10:00:00",
+        finished_at="2026-07-12 10:01:00",
+        updated_at="2026-07-12 10:01:00",
+    )
+
+    status = maintenance._task_status_from_run(run)
+
+    assert status.result[0]["completeness_message"] == (
+        "已有 1990-12-19 至 2026-07-10 的行情，但缺少官方基日；"
+        "暂时无法判断是否从指数起点完整，不作为交易依据。"
+    )
+
+
+def test_persisted_legacy_stale_result_upgrades_technical_gap_message():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    run = MaintenanceTaskRun(
+        task_id=14,
+        task_type="index_history_batch",
+        state="success",
+        progress_done=1,
+        progress_total=1,
+        progress_detail="000300 STALE",
+        result_json=(
+            '[{"index_code":"000300","status":"STALE",'
+            '"error_message":"本地最新交易日 2026-07-09，未达到目标交易日 2026-07-10"}]'
+        ),
+        error_message=None,
+        started_at="2026-07-12 10:00:00",
+        finished_at="2026-07-12 10:01:00",
+        updated_at="2026-07-12 10:01:00",
+    )
+
+    status = maintenance._task_status_from_run(run)
+
+    assert status.result[0]["error_message"] == "已更新至 2026-07-09，缺少 2026-07-10 行情。"
+
+
+def test_persisted_legacy_empty_result_names_default_source_and_index_code():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    run = MaintenanceTaskRun(
+        task_id=15,
+        task_type="index_history_batch",
+        state="success",
+        progress_done=1,
+        progress_total=1,
+        progress_detail="H30533 EMPTY",
+        result_json=(
+            '[{"index_code":"H30533","status":"EMPTY","completeness_status":"MISSING_HISTORY",'
+            '"completeness_message":"历史数据缺失"}]'
+        ),
+        error_message=None,
+        started_at="2026-07-12 10:00:00",
+        finished_at="2026-07-12 10:01:00",
+        updated_at="2026-07-12 10:01:00",
+    )
+
+    status = maintenance._task_status_from_run(run)
+
+    assert status.result[0]["error_message"] == "港股数据源未返回 H30533 的历史行情。"
+    assert status.result[0]["completeness_message"] == "港股数据源未返回 H30533 的历史行情。"
+
+
 def test_render_tasks_restores_persisted_index_batch_after_page_refresh(monkeypatch):
     from etf_trading.nicegui_app.pages import maintenance
 

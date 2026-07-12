@@ -9,9 +9,11 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 from nicegui import run, ui
 
+from etf_trading.data.index_catalog import default_index_catalog
 from etf_trading.data.indexes import index_options
 from etf_trading.data.initialization import EtfHistoryProgress, InitializationService
 from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.quality import upgrade_legacy_index_history_message
 from etf_trading.data.storage import MaintenanceTaskRun
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.tables import VALUE_LABELS, render_table
@@ -81,6 +83,7 @@ def _format_task_time(value: datetime | None) -> str:
 
 def _task_status_from_run(run: MaintenanceTaskRun) -> MaintenanceTaskStatus:
     result = json.loads(run.result_json) if run.result_json else None
+    result = _upgrade_legacy_index_history_result(result)
     title = INDEX_TASK_TITLES.get(run.task_type, run.task_type)
     if run.state == "success":
         message = _catalog_task_message(run.task_type, result or [])
@@ -103,6 +106,54 @@ def _task_status_from_run(run: MaintenanceTaskRun) -> MaintenanceTaskStatus:
         progress_total=run.progress_total,
         progress_detail=_task_progress_detail_label(run.progress_detail),
     )
+
+
+def _upgrade_legacy_index_history_result(result: object) -> object:
+    if not isinstance(result, list):
+        return result
+    upgraded: list[object] = []
+    for item in result:
+        if not isinstance(item, dict):
+            upgraded.append(item)
+            continue
+        row = dict(item)
+        index_code = str(row.get("index_code") or "").strip()
+        source_kind = _default_index_source_kind(index_code)
+        first_trade_date = row.get("start_date") or row.get("local_first_trade_date")
+        latest_trade_date = row.get("end_date") or row.get("latest_trade_date")
+        completeness_message = upgrade_legacy_index_history_message(
+            str(row.get("completeness_status") or ""),
+            row.get("completeness_message"),
+            first_trade_date=first_trade_date,
+            latest_trade_date=latest_trade_date,
+            index_code=index_code or None,
+            source_kind=source_kind,
+        )
+        if completeness_message != _persisted_message_text(row.get("completeness_message")):
+            row["completeness_message"] = completeness_message
+        error_message = upgrade_legacy_index_history_message(
+            str(row.get("status") or ""),
+            row.get("error_message"),
+            first_trade_date=first_trade_date,
+            latest_trade_date=latest_trade_date,
+            index_code=index_code or None,
+            source_kind=source_kind,
+        )
+        if error_message != _persisted_message_text(row.get("error_message")):
+            row["error_message"] = error_message
+        upgraded.append(row)
+    return upgraded
+
+
+def _default_index_source_kind(index_code: str) -> str | None:
+    for entry in default_index_catalog():
+        if entry.index_code == index_code:
+            return entry.source_kind
+    return None
+
+
+def _persisted_message_text(value: object) -> str:
+    return "" if value is None else str(value)
 
 
 def _parse_task_time(value: str | None) -> datetime | None:

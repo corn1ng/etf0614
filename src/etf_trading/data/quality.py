@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
+import re
 from typing import Iterable
 
 import pandas as pd
@@ -64,6 +65,12 @@ _READINESS_LABELS = {
     HistoryReadiness.MISSING_HISTORY: "历史缺失",
     HistoryReadiness.READ_FAILED: "读取失败",
 }
+
+_LEGACY_BASELINE_UNVERIFIED_MESSAGES = frozenset({"基日待核验", "基日待核验，不能判定历史完整"})
+_LEGACY_MISSING_HISTORY_MESSAGES = frozenset({"", "历史数据缺失"})
+_LEGACY_STALE_MESSAGE = re.compile(
+    r"^本地最新交易日 (?P<latest>\d{4}-\d{2}-\d{2})，未达到目标交易日 (?P<expected>\d{4}-\d{2}-\d{2})$"
+)
 
 
 def expected_latest_trade_date(
@@ -200,7 +207,7 @@ def assess_index_history_completeness(
     if prices.empty:
         return IndexHistoryCompleteness(
             status="MISSING_HISTORY",
-            message=_missing_history_message(index_code, source_kind),
+            message=index_history_missing_message(index_code, source_kind),
             local_first_trade_date=None,
             latest_trade_date=None,
             history_rows=0,
@@ -277,9 +284,42 @@ def index_history_freshness_message(
     return f"已更新至 {_date_text(latest_trade_date)}，缺少 {_date_text(expected_trade_date)} 行情。"
 
 
-def _missing_history_message(index_code: str | None, source_kind: str | None) -> str:
+def upgrade_legacy_index_history_message(
+    status: str | None,
+    message: object,
+    *,
+    first_trade_date: date | pd.Timestamp | str | None = None,
+    latest_trade_date: date | pd.Timestamp | str | None = None,
+    index_code: str | None = None,
+    source_kind: str | None = None,
+) -> str:
+    """Upgrade only recognized pre-localization index-history messages."""
+
+    normalized_status = str(status or "").strip()
+    text = "" if message is None else str(message)
+    legacy_text = text.strip()
+    if normalized_status == "BASELINE_UNVERIFIED" and legacy_text in _LEGACY_BASELINE_UNVERIFIED_MESSAGES:
+        first = _parse_date(first_trade_date)
+        latest = _parse_date(latest_trade_date)
+        if first is not None and latest is not None:
+            return (
+                f"已有 {first.strftime('%Y-%m-%d')} 至 {latest.strftime('%Y-%m-%d')} 的行情，但缺少官方基日；"
+                "暂时无法判断是否从指数起点完整，不作为交易依据。"
+            )
+    if normalized_status == "STALE":
+        match = _LEGACY_STALE_MESSAGE.fullmatch(legacy_text)
+        if match is not None:
+            return index_history_freshness_message(match["latest"], match["expected"])
+    if normalized_status in {"EMPTY", "MISSING_HISTORY"} and legacy_text in _LEGACY_MISSING_HISTORY_MESSAGES:
+        return index_history_missing_message(index_code, source_kind)
+    return text
+
+
+def index_history_missing_message(index_code: str | None, source_kind: str | None) -> str:
     if index_code and source_kind:
         return f"{_source_kind_label(source_kind)}未返回 {index_code} 的历史行情。"
+    if index_code:
+        return f"数据源未返回 {index_code} 的历史行情。"
     return "数据源未返回该指数的历史行情。"
 
 

@@ -30,6 +30,7 @@ from etf_trading.data.quality import (
     history_readiness_label,
     index_history_freshness_message,
     read_failed_assessment,
+    upgrade_legacy_index_history_message,
 )
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.research.atomic_indicators import ATOMIC_INDICATOR_COLUMNS, build_etf_atomic_indicator_snapshot
@@ -728,7 +729,13 @@ def build_index_trend_summary(
             "pool": definition.pool or "core",
             "index_base_date": base_text,
             "history_completeness_status": str(coverage_row.get("completeness_status") or "NOT_VALIDATED"),
-            "history_completeness_message": str(coverage_row.get("completeness_message") or "尚未校验历史完整性"),
+            "history_completeness_message": upgrade_legacy_index_history_message(
+                str(coverage_row.get("completeness_status") or "NOT_VALIDATED"),
+                coverage_row.get("completeness_message") or "尚未校验历史完整性",
+                first_trade_date=coverage_row.get("local_first_trade_date"),
+                latest_trade_date=coverage_row.get("latest_trade_date"),
+                index_code=definition.index_code,
+            ),
             "large_trend": "UNKNOWN",
             "medium_trend": "UNKNOWN",
             "small_trend": "UNKNOWN",

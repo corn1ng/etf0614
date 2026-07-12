@@ -69,6 +69,49 @@ def test_build_index_trend_summary_exposes_exact_stale_gap_message(tmp_path):
     assert summary.iloc[0]["data_status_message"] == "已更新至 2026-07-09，缺少 2026-07-10 行情。"
 
 
+def test_index_trend_summary_upgrades_legacy_coverage_baseline_explanation():
+    from etf_trading.data.indexes import IndexDefinition
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    class FakeParquetStore:
+        def read_index_prices(self, index_code: str) -> pd.DataFrame:
+            dates = pd.bdate_range(end="2026-07-10", periods=300)
+            close = pd.Series(range(300), dtype=float) + 100.0
+            return pd.DataFrame(
+                {
+                    "index_code": index_code,
+                    "trade_date": dates,
+                    "open": close,
+                    "high": close + 1.0,
+                    "low": close - 1.0,
+                    "close": close,
+                    "volume": 1_000,
+                    "amount": 1_000_000,
+                }
+            )
+
+    coverage = pd.DataFrame(
+        {
+            "index_code": ["000300"],
+            "local_first_trade_date": ["1990-12-19"],
+            "latest_trade_date": ["2026-07-10"],
+            "completeness_status": ["BASELINE_UNVERIFIED"],
+            "completeness_message": ["基日待核验，不能判定历史完整"],
+        }
+    )
+    summary = build_index_trend_summary(
+        FakeParquetStore(),
+        definitions=(IndexDefinition("000300", "沪深300", "A股", "A股宽基", "000300"),),
+        coverage=coverage,
+        today="2026-07-10",
+    )
+
+    assert summary.iloc[0]["history_completeness_message"] == (
+        "已有 1990-12-19 至 2026-07-10 的行情，但缺少官方基日；"
+        "暂时无法判断是否从指数起点完整，不作为交易依据。"
+    )
+
+
 def test_nicegui_app_factory_imports_without_running_server():
     from etf_trading.nicegui_app.main import create_app, run
 
