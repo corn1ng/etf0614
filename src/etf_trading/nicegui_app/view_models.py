@@ -146,6 +146,53 @@ class IndexAtomicDetailGroup:
 
 
 @dataclass(frozen=True)
+class IndexAtomicOverviewMetric:
+    label: str
+    value: str
+    status: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class IndexAtomicTrendOverview:
+    close: IndexAtomicOverviewMetric
+    levels: tuple[IndexAtomicOverviewMetric, ...]
+    relations: tuple[IndexAtomicOverviewMetric, ...]
+    visible: bool
+
+
+@dataclass(frozen=True)
+class IndexAtomicRangeOverview:
+    headline: str
+    from_high: IndexAtomicOverviewMetric
+    from_low: IndexAtomicOverviewMetric
+    marker: float | None
+    reason: str
+
+
+@dataclass(frozen=True)
+class IndexAtomicOverviewEvent:
+    label: str
+    days: str
+
+
+@dataclass(frozen=True)
+class IndexAtomicOverviewEvidenceGroup:
+    title: str
+    items: tuple[IndexAtomicDetailItem, ...]
+
+
+@dataclass(frozen=True)
+class IndexAtomicOverview:
+    trend: IndexAtomicTrendOverview
+    range_position: IndexAtomicRangeOverview
+    events: tuple[IndexAtomicOverviewEvent, ...]
+    events_empty_text: str
+    quality: tuple[IndexAtomicOverviewMetric, ...]
+    evidence_groups: tuple[IndexAtomicOverviewEvidenceGroup, ...]
+
+
+@dataclass(frozen=True)
 class AtomicDataHealthItem:
     key: str
     label: str
@@ -236,9 +283,9 @@ INDEX_ATOMIC_DISPLAY_COLUMNS = (
 INDEX_ATOMIC_DETAIL_GROUPS = (
     ("price_ma", "价格与均线"),
     ("ma_cross", "均线穿越"),
-    ("range_position", "区间位置"),
+    ("range_position", "区间位置与突破"),
     ("return_drawdown", "收益与回撤"),
-    ("volatility_volume", "波动与成交"),
+    ("volatility_volume", "波动与量能"),
     ("data_quality", "数据质量"),
 )
 
@@ -712,6 +759,96 @@ def index_atomic_detail_groups(details: pd.DataFrame, index_code: str) -> list[I
         items = [_index_atomic_detail_item(row) for row in data[group_keys == group_key].to_dict("records")]
         groups.append(IndexAtomicDetailGroup(title=title, items=items))
     return groups
+
+
+def index_atomic_overview(summary: dict[str, object], details: pd.DataFrame, index_code: str) -> IndexAtomicOverview | None:
+    if not index_code or details.empty or "index_code" not in details:
+        return None
+    data = details[details["index_code"].fillna("").astype(str) == str(index_code)].copy()
+    if data.empty:
+        return None
+    rows = {str(row.get("metric_key") or ""): row for row in data.to_dict("records")}
+    close = _overview_metric(rows.get("close"), "最新收盘")
+    levels = tuple(_overview_metric(rows.get("ma_{}".format(window)), "MA{}".format(window)) for window in (20, 60, 120, 250))
+    relations = tuple(_overview_metric(rows.get("close_above_ma_{}".format(window)), "相对MA{}".format(window)) for window in (20, 60, 120, 250))
+    from_high = _overview_metric(rows.get("range_20_from_high"), "距20日高点")
+    from_low = _overview_metric(rows.get("range_20_from_low"), "距20日低点")
+    high_flag = _overview_metric(rows.get("range_20_high"), "20日收盘新高")
+    low_flag = _overview_metric(rows.get("range_20_low"), "20日收盘新低")
+    headline = _range_headline(high_flag, low_flag, from_high, from_low)
+    reason = next((item.reason for item in (from_high, from_low, high_flag, low_flag) if item.status != "已计算"), "")
+    return IndexAtomicOverview(
+        trend=IndexAtomicTrendOverview(close, levels, relations, close.status == "已计算" and all(item.status == "已计算" for item in levels)),
+        range_position=IndexAtomicRangeOverview(headline, from_high, from_low, _range_marker(rows.get("close"), rows.get("range_20_from_high"), rows.get("range_20_from_low")) if headline != "数据不足" else None, reason),
+        events=_overview_events(rows),
+        events_empty_text="暂无已记录事件",
+        quality=_overview_quality(summary),
+        evidence_groups=tuple(
+            IndexAtomicOverviewEvidenceGroup(group.title, tuple(group.items))
+            for group in index_atomic_detail_groups(details, index_code)
+            if group.title != "数据质量"
+        ),
+    )
+
+
+def _overview_metric(row: dict[str, object] | None, label: str) -> IndexAtomicOverviewMetric:
+    if row is None:
+        return IndexAtomicOverviewMetric(label, "数据不足", "数据不足", "快照中缺少该原子指标")
+    metric_key = _text(row.get("metric_key"))
+    value = _format_index_atomic_detail_value(metric_key, row.get("value"))
+    if metric_key == "close" or metric_key.startswith("ma_"):
+        value = _format_number(row.get("value")) if not _missing(row.get("value")) else value
+    return IndexAtomicOverviewMetric(label, value, _index_atomic_status_label(row.get("status")), _text(row.get("reason")) or "数据不足")
+
+
+def _range_headline(high_flag, low_flag, from_high, from_low) -> str:
+    if high_flag.status != "已计算" or low_flag.status != "已计算":
+        return "数据不足"
+    if high_flag.value == "是":
+        return "20日收盘新高"
+    if low_flag.value == "是":
+        return "20日收盘新低"
+    return "20日区间内" if from_high.status == "已计算" and from_low.status == "已计算" else "数据不足"
+
+
+def _range_marker(
+    close: dict[str, object] | None,
+    from_high: dict[str, object] | None,
+    from_low: dict[str, object] | None,
+) -> float | None:
+    try:
+        close_value = float(close.get("value"))
+        high_offset = float(from_high.get("value"))
+        low_offset = float(from_low.get("value"))
+        high = close_value / (1 + high_offset)
+        low = close_value / (1 + low_offset)
+        return None if high <= low else max(0.0, min(1.0, (close_value - low) / (high - low)))
+    except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _overview_events(rows: dict[str, dict[str, object]]) -> tuple[IndexAtomicOverviewEvent, ...]:
+    events: list[tuple[int, IndexAtomicOverviewEvent]] = []
+    for direction, label in (("up", "上穿"), ("down", "下穿")):
+        for window in (20, 60, 120, 250):
+            row = rows.get("days_since_ma_cross_{}_{}".format(direction, window))
+            if row is None or _text(row.get("status")) != "computed":
+                continue
+            try:
+                days = int(float(row.get("value")))
+            except (TypeError, ValueError):
+                continue
+            events.append((days, IndexAtomicOverviewEvent("{}{}日均线".format(label, window), "{} 日前".format(days))))
+    return tuple(event for _, event in sorted(events, key=lambda item: item[0])[:2])
+
+
+def _overview_quality(summary: dict[str, object]) -> tuple[IndexAtomicOverviewMetric, ...]:
+    return (
+        IndexAtomicOverviewMetric("快照状态", _index_atomic_status_label(summary.get("snapshot_status")), "", _text(summary.get("snapshot_reason"))),
+        IndexAtomicOverviewMetric("历史覆盖", _index_atomic_status_label(summary.get("history_completeness_status")), "", _text(summary.get("history_completeness_message"))),
+        IndexAtomicOverviewMetric("有效交易日", _format_index_atomic_count(summary.get("history_rows")), "", ""),
+        IndexAtomicOverviewMetric("数据来源", _index_atomic_data_source_label(summary.get("data_source")), "", ""),
+    )
 
 
 def etf_choice_options(rows: list[dict[str, object]]) -> list[str]:

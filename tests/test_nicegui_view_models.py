@@ -27,6 +27,7 @@ from etf_trading.nicegui_app.view_models import (
     filter_etf_rows,
     index_choice_options,
     index_atomic_detail_groups,
+    index_atomic_overview,
     index_health_detail_rows,
     index_health_filter_options,
     index_health_rows,
@@ -164,6 +165,91 @@ def _atomic_details() -> pd.DataFrame:
             {"index_code": "000300", "group_key": "data_quality", "metric_key": "data_source", "metric_label": "数据源", "value": "akshare_hk_em", "status": "computed", "reason": "已读取本地指数历史", "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "akshare_hk_em"},
         ]
     )
+
+
+def _overview_detail(metric_key: str, value: object, *, status: str = "computed", reason: str = "已从本地指数历史计算") -> dict[str, object]:
+    return {
+        "index_code": "000300", "group_key": "price_ma", "metric_key": metric_key,
+        "metric_label": metric_key, "value": value, "status": status, "reason": reason,
+        "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "akshare_zh_em",
+    }
+
+
+def test_index_atomic_overview_reads_stored_atoms_without_conclusions():
+    summary = {
+        "index_code": "000300", "snapshot_status": "computed",
+        "history_completeness_status": "COMPLETE", "history_rows": 260,
+        "latest_date": "2026-07-11", "data_source": "akshare_zh_em",
+    }
+    details = pd.DataFrame([
+        _overview_detail("close", 100.0),
+        _overview_detail("ma_20", 102.0), _overview_detail("ma_60", 98.0),
+        _overview_detail("ma_120", 96.0), _overview_detail("ma_250", 90.0),
+        _overview_detail("close_above_ma_20", False), _overview_detail("close_above_ma_60", True),
+        _overview_detail("close_above_ma_120", True), _overview_detail("close_above_ma_250", True),
+        _overview_detail("range_20_high", False), _overview_detail("range_20_low", False),
+        _overview_detail("range_20_from_high", -0.05), _overview_detail("range_20_from_low", 0.05),
+        _overview_detail("days_since_ma_cross_down_60", 1), _overview_detail("days_since_ma_cross_up_20", 9),
+    ])
+
+    overview = index_atomic_overview(summary, details, "000300")
+
+    assert overview is not None
+    assert overview.trend.close.value == "100.00"
+    assert [(level.label, level.value) for level in overview.trend.levels] == [
+        ("MA20", "102.00"), ("MA60", "98.00"), ("MA120", "96.00"), ("MA250", "90.00"),
+    ]
+    assert overview.range_position.headline == "20日区间内"
+    assert overview.range_position.marker == pytest.approx(0.475)
+    assert [(event.label, event.days) for event in overview.events] == [
+        ("下穿60日均线", "1 日前"), ("上穿20日均线", "9 日前"),
+    ]
+    assert [item.label for item in overview.quality] == ["快照状态", "历史覆盖", "有效交易日", "数据来源"]
+    assert isinstance(overview.evidence_groups[0].items, tuple)
+    assert "评分" not in repr(overview) and "买卖" not in repr(overview)
+
+
+def test_index_atomic_overview_hides_unreliable_visuals_and_reports_empty_events():
+    summary = {
+        "index_code": "000300", "snapshot_status": "stale",
+        "history_completeness_status": "INCOMPLETE", "history_rows": 18,
+        "latest_date": "2026-07-11", "data_source": "akshare_zh_em",
+    }
+    details = pd.DataFrame([
+        _overview_detail("close", pd.NA, status="insufficient_history", reason="历史不足 20 行"),
+        _overview_detail("range_20_high", pd.NA, status="insufficient_history", reason="历史不足 20 行"),
+        _overview_detail("range_20_low", pd.NA, status="insufficient_history", reason="历史不足 20 行"),
+        _overview_detail("range_20_from_high", pd.NA, status="insufficient_history", reason="历史不足 20 行"),
+        _overview_detail("range_20_from_low", pd.NA, status="insufficient_history", reason="历史不足 20 行"),
+    ])
+
+    overview = index_atomic_overview(summary, details, "000300")
+
+    assert overview is not None
+    assert overview.trend.visible is False
+    assert overview.range_position.marker is None
+    assert overview.range_position.reason == "历史不足 20 行"
+    assert overview.events == ()
+    assert overview.events_empty_text == "暂无已记录事件"
+    assert overview.quality[0].value == "待重建"
+
+
+def test_index_atomic_overview_range_marker_uses_unrounded_stored_offsets():
+    summary = {
+        "index_code": "000300", "snapshot_status": "computed",
+        "history_completeness_status": "COMPLETE", "history_rows": 260,
+        "latest_date": "2026-07-11", "data_source": "akshare_zh_em",
+    }
+    details = pd.DataFrame([
+        _overview_detail("close", 100.0),
+        _overview_detail("range_20_high", False), _overview_detail("range_20_low", False),
+        _overview_detail("range_20_from_high", -0.0004), _overview_detail("range_20_from_low", 0.0004),
+    ])
+
+    overview = index_atomic_overview(summary, details, "000300")
+
+    assert overview is not None
+    assert overview.range_position.marker == pytest.approx(0.4998)
 
 
 def test_status_metrics_are_dense_and_human_readable():
@@ -320,7 +406,7 @@ def test_index_atomic_rows_format_20_day_range_from_stored_high_low_facts():
 def test_index_atomic_detail_groups_are_fact_categories_without_strategy_conclusions():
     groups = index_atomic_detail_groups(_atomic_details(), "000300")
 
-    assert [group.title for group in groups] == ["价格与均线", "均线穿越", "区间位置", "收益与回撤", "波动与成交", "数据质量"]
+    assert [group.title for group in groups] == ["价格与均线", "均线穿越", "区间位置与突破", "收益与回撤", "波动与量能", "数据质量"]
     assert all("趋势" not in item.label and "交易" not in item.label for group in groups for item in group.items)
 
     items = {item.metric_key: item for group in groups for item in group.items}
