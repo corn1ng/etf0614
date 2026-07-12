@@ -375,3 +375,11 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Keep data-invalid indexes visible and inspectable, but suppress all trend-based transaction conclusions.
   - Search must retain `DEFAULT_INDEXES` relative order; never replace it with category or code sorting.
   - Keep valuation interfaces intact but outside the trend page's data flow until a complete, validated source is available.
+
+## 2026-07-12 - Align index health design with expanded index universe
+
+- Summary: Revised the approved trend-workbench design for the current 210-entry catalog: `指数体检` defaults to the 100-index core pool, switches to the 80-index research pool, and excludes the 30-index reserve pool; research never produces a transaction conclusion.
+- Verification: `DEFAULT_INDEXES` contains 180 formal indexes generated from the current catalog; the catalog contains 100 core, 80 research, and 30 reserve entries.
+- Watch out next time:
+  - Do not flatten core and research pools into an undifferentiated table in a trading-assistance workflow.
+  - Preserve the catalog's declared order independently inside both visible pools.
