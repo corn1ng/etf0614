@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 
 import pandas as pd
 
+from etf_trading.data.baseline_evidence import BaselineEvidenceResolver, write_baseline_evidence
 from etf_trading.data.index_catalog import (
+    DEFAULT_BASELINE_EVIDENCE_PATH,
     IndexCatalogEntry,
     catalog_entries_from_frame,
     default_index_catalog,
@@ -99,6 +101,7 @@ class InitializationService:
         self.store = store
         self.provider = provider
         self.parquet_store = parquet_store or ParquetStore()
+        self.evidence_resolver = BaselineEvidenceResolver()
 
     def initialize_master(self) -> pd.DataFrame:
         if self.provider is None:
@@ -164,6 +167,49 @@ class InitializationService:
                     "message": message,
                 }
             )
+        return pd.DataFrame(results)
+
+    def verify_index_baseline_evidence(
+        self,
+        through: date | str,
+        write_evidence: bool = True,
+    ) -> pd.DataFrame:
+        """Reassess cached index coverage after resolving baseline evidence only."""
+
+        self.store.initialize_schema()
+        catalog = self._formal_catalog_entries()
+        checked_at = pd.Timestamp(through).date()
+        evidence = self.evidence_resolver.collect(catalog, checked_at)
+        if write_evidence:
+            write_baseline_evidence(DEFAULT_BASELINE_EVIDENCE_PATH, evidence)
+
+        synchronized = tuple(_entry_with_resolved_evidence(entry, evidence) for entry in catalog)
+        self.sync_index_catalog(synchronized)
+        refreshed_catalog = self._formal_catalog_entries()
+        covered_codes = set(
+            self.store.list_index_history_coverage().get("index_code", pd.Series(dtype=str)).astype(str)
+        )
+        evidence_by_code = {
+            str(row.get("index_code") or ""): row
+            for row in evidence.to_dict(orient="records")
+        }
+        results: list[dict[str, object]] = []
+        for entry in refreshed_catalog:
+            record = dict(evidence_by_code.get(entry.index_code, {}))
+            record["index_code"] = entry.index_code
+            frame = self.parquet_store.read_index_prices(entry.index_code)
+            if not frame.empty or entry.index_code in covered_codes:
+                completeness = self._persist_index_history_coverage(entry, frame)
+                record.update(
+                    {
+                        "completeness_status": completeness.status,
+                        "completeness_message": completeness.message,
+                        "local_first_trade_date": completeness.local_first_trade_date,
+                        "latest_trade_date": completeness.latest_trade_date,
+                        "history_rows": completeness.history_rows,
+                    }
+                )
+            results.append(record)
         return pd.DataFrame(results)
 
     def select_sample_etfs(self, required_categories: list[str]) -> pd.DataFrame:
@@ -477,6 +523,8 @@ class InitializationService:
             baseline_source=entry.baseline_source,
             index_code=entry.index_code,
             source_kind=entry.source_kind,
+            evidence_name=entry.baseline_evidence_name,
+            evidence_kind=entry.baseline_evidence_kind,
         )
         source_first = _frame_first_trade_date(source_frame) if source_frame is not None else None
         self.store.upsert_index_history_coverage(
@@ -494,6 +542,29 @@ def _normalize_existing_index_frame(frame: pd.DataFrame, index_code: str) -> pd.
     result["trade_date"] = pd.to_datetime(result["trade_date"])
     result = result.drop_duplicates(subset=["index_code", "trade_date"], keep="last")
     return result.sort_values("trade_date").reset_index(drop=True)
+
+
+def _entry_with_resolved_evidence(entry: IndexCatalogEntry, evidence: pd.DataFrame) -> IndexCatalogEntry:
+    """Apply only resolver evidence that is safe for durable catalogue metadata."""
+
+    matched = evidence[evidence["index_code"].astype(str) == entry.index_code]
+    if matched.empty:
+        return entry
+    row = matched.iloc[0]
+    status = str(row.get("evidence_status") or "")
+    reference_date = pd.to_datetime(row.get("reference_date"), errors="coerce")
+    if status not in {"OFFICIAL", "THIRD_PARTY_BASE_DATE", "THIRD_PARTY_PUBLICATION"} or pd.isna(reference_date):
+        return entry
+    checked_at = pd.to_datetime(row.get("checked_at"), errors="coerce")
+    return replace(
+        entry,
+        index_base_date=pd.Timestamp(reference_date).date(),
+        baseline_source=str(row.get("baseline_source") or entry.baseline_source),  # type: ignore[arg-type]
+        baseline_evidence_kind=str(row.get("baseline_evidence_kind") or entry.baseline_evidence_kind),  # type: ignore[arg-type]
+        baseline_evidence_name=str(row.get("baseline_evidence_name") or ""),
+        baseline_evidence_url=str(row.get("baseline_evidence_url") or ""),
+        baseline_checked_at=None if pd.isna(checked_at) else pd.Timestamp(checked_at).date(),
+    )
 
 
 def _frame_first_trade_date(frame: pd.DataFrame | None) -> str | None:

@@ -71,6 +71,7 @@ _LEGACY_MISSING_HISTORY_MESSAGES = frozenset({"", "历史数据缺失"})
 _LEGACY_STALE_MESSAGE = re.compile(
     r"^本地最新交易日 (?P<latest>\d{4}-\d{2}-\d{2})，未达到目标交易日 (?P<expected>\d{4}-\d{2}-\d{2})$"
 )
+_OFFICIAL_BASELINE_SOURCES = frozenset({"official_methodology", "official_factsheet", "official_api"})
 
 
 def expected_latest_trade_date(
@@ -186,6 +187,12 @@ def history_readiness_label(readiness: HistoryReadiness | str) -> str:
     return _READINESS_LABELS[normalized]
 
 
+def has_official_baseline(source: str, base_date: object) -> bool:
+    """Return whether a parseable base date came from an official source."""
+
+    return source in _OFFICIAL_BASELINE_SOURCES and _parse_date(base_date) is not None
+
+
 def assess_index_history_completeness(
     prices: pd.DataFrame,
     index_base_date: date | pd.Timestamp | str | None,
@@ -193,6 +200,8 @@ def assess_index_history_completeness(
     baseline_source: str,
     index_code: str | None = None,
     source_kind: str | None = None,
+    evidence_name: str = "",
+    evidence_kind: str = "",
 ) -> IndexHistoryCompleteness:
     """Assess coverage against a verified index base date without guessing it.
 
@@ -241,7 +250,23 @@ def assess_index_history_completeness(
     latest = pd.Timestamp(dates.max()).normalize()
     first_text = first.strftime("%Y-%m-%d")
     latest_text = latest.strftime("%Y-%m-%d")
-    if baseline_source == "unverified" or base is None:
+    if baseline_source in {"third_party_reference", "third_party_publication"} and base is not None:
+        evidence_label = evidence_name or "第三方来源"
+        date_label = "发布日期" if evidence_kind == "publication_date" else "参考基日"
+        prefix = "参考起点" if evidence_kind == "publication_date" else "参考基日"
+        return IndexHistoryCompleteness(
+            status="BASELINE_REFERENCED",
+            message=(
+                f"{prefix} {base_text}（第三方：{evidence_label}，{date_label}）；"
+                "不用于长周期回测或新开仓。"
+            ),
+            local_first_trade_date=first_text,
+            latest_trade_date=latest_text,
+            history_rows=rows,
+            index_base_date=base_text,
+            baseline_source=baseline_source,
+        )
+    if not has_official_baseline(baseline_source, base):
         return IndexHistoryCompleteness(
             status="BASELINE_UNVERIFIED",
             message=(

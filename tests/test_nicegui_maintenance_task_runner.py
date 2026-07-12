@@ -38,6 +38,18 @@ class _FakeCatalogMaintenanceService:
             ]
         )
 
+    def verify_index_baseline_evidence(self, through):
+        self.calls.append(("baseline_evidence", {"through": through}))
+        return pd.DataFrame(
+            [
+                {
+                    "index_code": "000300",
+                    "evidence_status": "OFFICIAL",
+                    "completeness_status": "COMPLETE",
+                }
+            ]
+        )
+
 
 def test_catalog_maintenance_runner_persists_history_incomplete_result(monkeypatch, tmp_path):
     from etf_trading.nicegui_app import maintenance_tasks
@@ -65,6 +77,35 @@ def test_catalog_maintenance_runner_persists_history_incomplete_result(monkeypat
     assert service.calls == [
         ("history", {"through": "2026-07-10", "index_codes": [], "repair_history": True})
     ]
+
+
+def test_catalog_maintenance_runner_verifies_baseline_evidence_without_history_download(monkeypatch, tmp_path):
+    from etf_trading.nicegui_app import maintenance_tasks
+
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    service = _FakeCatalogMaintenanceService()
+    runner = maintenance_tasks.IndexCatalogMaintenanceRunner(
+        store,
+        ParquetStore(tmp_path / "parquet"),
+        service_factory=lambda: service,
+    )
+    task = store.create_maintenance_task_run("index_baseline_evidence", progress_total=1)
+
+    async def fake_io_bound(callback):
+        return callback()
+
+    monkeypatch.setattr(maintenance_tasks.run, "io_bound", fake_io_bound)
+    asyncio.run(runner._run(task.task_id, "index_baseline_evidence", "2026-07-10"))
+
+    persisted = store.get_maintenance_task_run(task.task_id)
+    assert maintenance_tasks.INDEX_MAINTENANCE_TASK_TYPES["index_baseline_evidence"] == "核验指数历史起点证据"
+    assert persisted is not None
+    assert persisted.state == "success"
+    assert json.loads(persisted.result_json) == [
+        {"index_code": "000300", "evidence_status": "OFFICIAL", "completeness_status": "COMPLETE"}
+    ]
+    assert service.calls == [("baseline_evidence", {"through": "2026-07-10"})]
 
 
 def test_index_history_batch_runner_deduplicates_running_task_and_persists_progress(monkeypatch, tmp_path):

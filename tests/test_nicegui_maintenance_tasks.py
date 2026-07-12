@@ -560,6 +560,28 @@ def test_task_status_from_persisted_running_run_shows_chinese_progress():
     assert status.started_at == datetime(2026, 7, 12, 10, 0, 0)
 
 
+def test_persisted_baseline_evidence_task_uses_the_dedicated_chinese_title():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    run = MaintenanceTaskRun(
+        task_id=16,
+        task_type="index_baseline_evidence",
+        state="success",
+        progress_done=1,
+        progress_total=1,
+        progress_detail="",
+        result_json='[{"index_code":"000300","evidence_status":"OFFICIAL","completeness_status":"COMPLETE"}]',
+        error_message=None,
+        started_at="2026-07-12 10:00:00",
+        finished_at="2026-07-12 10:01:00",
+        updated_at="2026-07-12 10:01:00",
+    )
+
+    status = maintenance._task_status_from_run(run)
+
+    assert status.title == "核验指数历史起点证据"
+
+
 def test_index_history_batch_message_distinguishes_stale_from_success():
     from etf_trading.nicegui_app.pages import maintenance
 

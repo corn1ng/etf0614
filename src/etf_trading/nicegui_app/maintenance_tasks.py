@@ -19,6 +19,7 @@ _ACTIVE_INDEX_TASK_KEYS: set[tuple[str, int]] = set()
 INDEX_MAINTENANCE_TASK_TYPES = {
     "index_catalog_sync": "同步指数目录",
     "index_source_validation": "验证指数数据源",
+    "index_baseline_evidence": "核验指数历史起点证据",
     "index_history_full": "补齐全部指数历史",
     "index_history_repair": "仅补历史不完整",
     "index_history_incremental": "仅更新最新行情",
@@ -85,6 +86,8 @@ class IndexCatalogMaintenanceRunner:
                     return service.sync_index_catalog()
                 if task_type == "index_source_validation":
                     return service.validate_index_sources(through)
+                if task_type == "index_baseline_evidence":
+                    return service.verify_index_baseline_evidence(through)
                 if task_type == "index_history_full":
                     return service.ensure_all_index_history(through, repair_history=True, on_progress=on_progress)
                 if task_type == "index_history_repair":

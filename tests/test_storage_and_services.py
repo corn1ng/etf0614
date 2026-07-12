@@ -3,9 +3,11 @@ import sqlite3
 
 import pandas as pd
 
+import etf_trading.data.initialization as initialization
 from etf_trading.data.index_catalog import BaselineSource, IndexCatalogEntry, SourceKind
 from etf_trading.data.initialization import InitializationService
 from etf_trading.data.provider import DataProvider
+from etf_trading.data.quality import assess_index_history_completeness
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 
 
@@ -156,6 +158,45 @@ def _service_with_catalog(
     return service, store
 
 
+class _FakeEvidenceResolver:
+    def __init__(self, evidence: dict[str, object]) -> None:
+        self.evidence = evidence
+        self.calls: list[tuple[list[str], object]] = []
+
+    def collect(self, entries, as_of):
+        self.calls.append(([entry.index_code for entry in entries], as_of))
+        return pd.DataFrame([self.evidence])
+
+
+def _official_evidence(index_code: str, reference_date: str) -> dict[str, object]:
+    return {
+        "index_code": index_code,
+        "evidence_status": "OFFICIAL",
+        "reference_date": reference_date,
+        "baseline_source": "official_api",
+        "baseline_evidence_kind": "official_base_date",
+        "baseline_evidence_name": "中证指数官方基础信息",
+        "baseline_evidence_url": f"https://example.test/{index_code}",
+        "checked_at": "2026-07-10",
+        "detail": "",
+    }
+
+
+def _service_with_catalog_and_cached_index_prices(tmp_path, index_code: str) -> tuple[InitializationService, SQLiteStore]:
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    parquet_store = ParquetStore(tmp_path / "parquet")
+    provider = _PartialIndexHistoryProvider()
+    service = InitializationService(store, provider=provider, parquet_store=parquet_store)
+    service.sync_index_catalog(
+        [_catalog_entry(index_code, index_base_date=None, baseline_source="unverified")]
+    )
+    parquet_store.write_index_prices(
+        index_code,
+        _prices(index_code, start="2004-12-31", end="2026-07-10"),
+    )
+    return service, store
+
+
 def _fresh_etf_history(code: str) -> pd.DataFrame:
     frame = pd.DataFrame(
         {
@@ -251,6 +292,66 @@ def test_initialization_service_selects_one_sample_per_required_category(tmp_pat
 
     assert samples["category"].tolist() == ["A股宽基", "A股行业", "港股宽基", "港股科技", "港股医药"]
     assert samples[samples["category"] == "港股科技"].iloc[0]["etf_code"] == "513130"
+
+
+def test_assess_history_marks_third_party_reference_without_claiming_complete():
+    assessment = assess_index_history_completeness(
+        _prices("000300", start="2004-12-31", end="2026-07-10"),
+        "2004-12-31",
+        baseline_source="third_party_publication",
+        evidence_name="聚宽",
+        evidence_kind="publication_date",
+    )
+
+    assert assessment.status == "BASELINE_REFERENCED"
+    assert assessment.message == "参考起点 2004-12-31（第三方：聚宽，发布日期）；不用于长周期回测或新开仓。"
+
+
+def test_assess_history_marks_third_party_base_date_as_reference_only():
+    assessment = assess_index_history_completeness(
+        _prices("000300", start="2004-12-31", end="2026-07-10"),
+        "2004-12-31",
+        baseline_source="third_party_reference",
+        evidence_name="独立数据源",
+        evidence_kind="third_party_base_date",
+    )
+
+    assert assessment.status == "BASELINE_REFERENCED"
+    assert "参考基日 2004-12-31" in assessment.message
+    assert "不用于长周期回测或新开仓" in assessment.message
+
+
+def test_verify_baseline_evidence_recomputes_existing_coverage_without_fetching_prices(monkeypatch, tmp_path):
+    service, store = _service_with_catalog_and_cached_index_prices(tmp_path, "000300")
+    resolver = _FakeEvidenceResolver(_official_evidence("000300", "2004-12-31"))
+    writes: list[pd.DataFrame] = []
+    service.evidence_resolver = resolver
+    monkeypatch.setattr(initialization, "write_baseline_evidence", lambda _path, frame: writes.append(frame.copy()))
+    monkeypatch.setattr(
+        service.parquet_store,
+        "write_index_prices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("baseline verification must not write prices")),
+    )
+
+    result = service.verify_index_baseline_evidence("2026-07-10")
+
+    assert resolver.calls == [(["000300"], date(2026, 7, 10))]
+    assert len(writes) == 1
+    assert result.iloc[0]["evidence_status"] == "OFFICIAL"
+    assert result.iloc[0]["baseline_evidence_url"] == "https://example.test/000300"
+    assert store.list_index_history_coverage().iloc[0]["completeness_status"] == "COMPLETE"
+    assert service.provider.index_calls == []
+
+
+def test_verify_baseline_evidence_can_skip_evidence_file_writes(monkeypatch, tmp_path):
+    service, _store = _service_with_catalog_and_cached_index_prices(tmp_path, "000300")
+    writes: list[pd.DataFrame] = []
+    service.evidence_resolver = _FakeEvidenceResolver(_official_evidence("000300", "2004-12-31"))
+    monkeypatch.setattr(initialization, "write_baseline_evidence", lambda _path, frame: writes.append(frame.copy()))
+
+    service.verify_index_baseline_evidence("2026-07-10", write_evidence=False)
+
+    assert writes == []
 
 
 def test_initialization_service_creates_history_jobs_for_all_master_etfs(tmp_path):
