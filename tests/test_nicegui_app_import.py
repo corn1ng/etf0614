@@ -112,6 +112,34 @@ def test_index_trend_summary_upgrades_legacy_coverage_baseline_explanation():
     )
 
 
+def test_index_trend_summary_upgrades_empty_legacy_missing_history_coverage_message():
+    from etf_trading.data.indexes import IndexDefinition
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    class FakeParquetStore:
+        def read_index_prices(self, index_code: str) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    definition = IndexDefinition("000300", "沪深300", "A股", "A股宽基", "000300")
+    for legacy_message in ("", None):
+        coverage = pd.DataFrame(
+            {
+                "index_code": ["000300"],
+                "completeness_status": ["MISSING_HISTORY"],
+                "completeness_message": [legacy_message],
+            }
+        )
+
+        summary = build_index_trend_summary(
+            FakeParquetStore(),
+            definitions=(definition,),
+            coverage=coverage,
+            today="2026-07-10",
+        )
+
+        assert summary.iloc[0]["history_completeness_message"] == "数据源未返回 000300 的历史行情。"
+
+
 def test_nicegui_app_factory_imports_without_running_server():
     from etf_trading.nicegui_app.main import create_app, run
 

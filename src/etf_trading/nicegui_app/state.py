@@ -719,6 +719,10 @@ def build_index_trend_summary(
     rows: list[dict[str, object]] = []
     for definition in definitions:
         coverage_row = coverage_by_code.get(definition.index_code, {})
+        completeness_status = str(coverage_row.get("completeness_status") or "NOT_VALIDATED")
+        completeness_message = coverage_row.get("completeness_message")
+        if completeness_status == "NOT_VALIDATED" and not completeness_message:
+            completeness_message = "尚未校验历史完整性"
         base_date = definition.index_base_date
         base_text = base_date.isoformat() if base_date is not None else ""
         row = {
@@ -728,10 +732,10 @@ def build_index_trend_summary(
             "category": definition.category,
             "pool": definition.pool or "core",
             "index_base_date": base_text,
-            "history_completeness_status": str(coverage_row.get("completeness_status") or "NOT_VALIDATED"),
+            "history_completeness_status": completeness_status,
             "history_completeness_message": upgrade_legacy_index_history_message(
-                str(coverage_row.get("completeness_status") or "NOT_VALIDATED"),
-                coverage_row.get("completeness_message") or "尚未校验历史完整性",
+                completeness_status,
+                completeness_message,
                 first_trade_date=coverage_row.get("local_first_trade_date"),
                 latest_trade_date=coverage_row.get("latest_trade_date"),
                 index_code=definition.index_code,
