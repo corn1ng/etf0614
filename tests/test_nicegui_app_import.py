@@ -55,6 +55,15 @@ def test_market_page_uses_overview_model_without_snapshot_builder():
     assert "load_index_atomic_snapshot_readonly" in source
 
 
+def test_market_overview_renders_snapshot_generation_time_from_readonly_result():
+    from etf_trading.nicegui_app.pages import market
+
+    source = Path("src/etf_trading/nicegui_app/pages/market.py").read_text(encoding="utf-8")
+
+    assert market._overview_generation_time_text(datetime(2026, 7, 13, 9, 5)) == "快照生成时间：2026-07-13 09:05"
+    assert "_render_atomic_overview(overview, result.generated_at)" in source
+
+
 def test_market_detail_rows_hide_normal_computed_status_but_keep_failures():
     from etf_trading.nicegui_app.pages import market
     from etf_trading.nicegui_app.view_models import IndexAtomicDetailItem
@@ -87,6 +96,26 @@ def test_market_trend_helpers_render_boolean_relations_as_directional_text():
     ]
 
 
+def test_market_trend_ladder_rendering_uses_named_normalized_markers():
+    from etf_trading.nicegui_app.pages import market
+    from etf_trading.nicegui_app.view_models import (
+        IndexAtomicOverviewMetric,
+        IndexAtomicTrendMarker,
+        IndexAtomicTrendOverview,
+    )
+
+    metric = IndexAtomicOverviewMetric("收盘价", "100.00", "已计算", "已从本地指数历史计算")
+    trend = IndexAtomicTrendOverview(
+        close=metric,
+        levels=(metric,),
+        relations=(metric,),
+        visible=True,
+        markers=(IndexAtomicTrendMarker("收盘", 0.5), IndexAtomicTrendMarker("MA20", 0.75)),
+    )
+
+    assert market._trend_ladder_marker_rows(trend) == (("收盘", 50.0), ("MA20", 75.0))
+
+
 def test_market_trend_helper_reports_unavailable_relation_reason():
     from etf_trading.nicegui_app.pages import market
     from etf_trading.nicegui_app.view_models import IndexAtomicOverviewMetric, IndexAtomicTrendOverview
@@ -108,6 +137,18 @@ def test_market_trend_helper_reports_unavailable_level_reason_before_relations()
     trend = IndexAtomicTrendOverview(computed, (unavailable_level,), (unavailable_relation,), visible=False)
 
     assert market._trend_unavailable_reason(trend) == "MA20 至少需要 20 个交易日"
+
+
+def test_market_range_rail_labels_both_endpoints_and_distances():
+    from etf_trading.nicegui_app.pages import market
+    from etf_trading.nicegui_app.view_models import IndexAtomicOverviewMetric, IndexAtomicRangeOverview
+
+    computed = IndexAtomicOverviewMetric("", "5.0%", "已计算", "已从本地指数历史计算")
+    range_position = IndexAtomicRangeOverview("20日区间内", computed, computed, 0.5, "")
+
+    assert market._range_rail_labels(range_position) == (
+        "20日低点 / 距低点 5.0%", "20日高点 / 距高点 5.0%",
+    )
 
 
 def test_market_atomic_presentation_uses_chinese_known_and_unknown_fallbacks():

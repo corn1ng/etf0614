@@ -227,7 +227,7 @@ def _open_index_atomic_dialog(result, index_code: str) -> None:
                 quality_tab = ui.tab("数据质量")
             with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                 with ui.tab_panel(overview_tab):
-                    _render_atomic_overview(overview)
+                    _render_atomic_overview(overview, result.generated_at)
                 with ui.tab_panel(all_tab):
                     _render_all_atomic_groups(groups)
                 with ui.tab_panel(quality_tab):
@@ -235,12 +235,13 @@ def _open_index_atomic_dialog(result, index_code: str) -> None:
     dialog.open()
 
 
-def _render_atomic_overview(overview: IndexAtomicOverview | None) -> None:
+def _render_atomic_overview(overview: IndexAtomicOverview | None, generated_at: datetime | None) -> None:
     if overview is None:
         empty_state("暂无状态概览", "当前快照中没有这只指数的原子指标。")
         return
     ui.label("今天的市场状态").classes("index-atomic-overview-title")
     ui.label("先看价格在哪里、发生过什么，再按分组核对全部原子事实。").classes("index-atomic-overview-note")
+    ui.label(_overview_generation_time_text(generated_at)).classes("index-atomic-overview-generation")
     with ui.element("div").classes("index-atomic-overview-grid"):
         _render_trend_card(overview.trend)
         _render_range_card(overview.range_position)
@@ -273,6 +274,10 @@ def _trend_relation_text(relation: IndexAtomicOverviewMetric) -> str:
     return "收盘在 {} {}".format(level_label, direction)
 
 
+def _trend_ladder_marker_rows(trend: IndexAtomicTrendOverview) -> tuple[tuple[str, float], ...]:
+    return tuple((marker.label, marker.position * 100) for marker in trend.markers)
+
+
 def _render_trend_card(trend: IndexAtomicTrendOverview) -> None:
     with ui.element("section").classes("index-atomic-overview-card"):
         ui.label("趋势结构").classes("index-atomic-card-title")
@@ -281,12 +286,16 @@ def _render_trend_card(trend: IndexAtomicTrendOverview) -> None:
             ui.label(trend.close.value).classes("index-atomic-card-value")
             ui.label(unavailable_reason or "数据不足").classes("index-atomic-card-reason")
             return
-        ui.label(trend.close.value).classes("index-atomic-card-value")
+        ui.label("收盘：{}".format(trend.close.value)).classes("index-atomic-card-value")
         with ui.element("div").classes("index-atomic-ma-ladder"):
-            for level, relation in zip(trend.levels, trend.relations, strict=True):
-                with ui.row().classes("index-atomic-ma-row w-full justify-between"):
-                    ui.label("{} {}".format(level.label, level.value))
-                    ui.label(_trend_relation_text(relation)).classes("index-atomic-ma-relation")
+            marker_values = {"收盘": trend.close.value, **{level.label: level.value for level in trend.levels}}
+            for label, bottom in _trend_ladder_marker_rows(trend):
+                with ui.element("div").classes("index-atomic-ma-marker").style("bottom: {}%".format(bottom)):
+                    ui.label(label).classes("index-atomic-ma-marker-label")
+                    ui.label(marker_values[label]).classes("index-atomic-ma-marker-value")
+        with ui.element("div").classes("index-atomic-ma-relations"):
+            for relation in trend.relations:
+                ui.label(_trend_relation_text(relation)).classes("index-atomic-ma-relation")
 
 
 def _render_range_card(range_position) -> None:
@@ -300,9 +309,16 @@ def _render_range_card(range_position) -> None:
             ui.element("span").classes("index-atomic-range-marker").style(
                 "left: {}%".format(range_position.marker * 100)
             )
-        with ui.row().classes("w-full justify-between"):
-            ui.label(range_position.from_low.value)
-            ui.label(range_position.from_high.value)
+        with ui.row().classes("index-atomic-range-labels w-full justify-between"):
+            for label in _range_rail_labels(range_position):
+                ui.label(label)
+
+
+def _range_rail_labels(range_position) -> tuple[str, str]:
+    return (
+        "20日低点 / 距低点 {}".format(range_position.from_low.value),
+        "20日高点 / 距高点 {}".format(range_position.from_high.value),
+    )
 
 
 def _render_events_card(events, empty_text: str) -> None:
@@ -413,6 +429,10 @@ def _snapshot_status_counts(summary: pd.DataFrame) -> str:
 
 def _datetime_text(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M") if value is not None else "暂无"
+
+
+def _overview_generation_time_text(generated_at: datetime | None) -> str:
+    return "快照生成时间：{}".format(_datetime_text(generated_at))
 
 
 def _text(value: object, fallback: str) -> str:

@@ -155,11 +155,20 @@ class IndexAtomicOverviewMetric:
 
 
 @dataclass(frozen=True)
+class IndexAtomicTrendMarker:
+    """A display-only relative height projected from finite stored trend facts."""
+
+    label: str
+    position: float
+
+
+@dataclass(frozen=True)
 class IndexAtomicTrendOverview:
     close: IndexAtomicOverviewMetric
     levels: tuple[IndexAtomicOverviewMetric, ...]
     relations: tuple[IndexAtomicOverviewMetric, ...]
     visible: bool
+    markers: tuple[IndexAtomicTrendMarker, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -776,6 +785,13 @@ def index_atomic_overview(summary: dict[str, object], details: pd.DataFrame, ind
     from_low = _overview_metric(rows.get("range_20_from_low"), "距20日低点")
     high_flag = _overview_metric(rows.get("range_20_high"), "20日收盘新高")
     low_flag = _overview_metric(rows.get("range_20_low"), "20日收盘新低")
+    markers = _trend_ladder_markers(rows)
+    trend_visible = (
+        close.status == "已计算"
+        and all(item.status == "已计算" for item in levels)
+        and all(item.status == "已计算" for item in relations)
+        and bool(markers)
+    )
     headline = _range_headline(high_flag, low_flag, from_high, from_low)
     reason = next((item.reason for item in (from_high, from_low, high_flag, low_flag) if item.status != "已计算"), "")
     marker = _range_marker(rows.get("close"), rows.get("range_20_from_high"), rows.get("range_20_from_low")) if headline != "数据不足" else None
@@ -783,7 +799,7 @@ def index_atomic_overview(summary: dict[str, object], details: pd.DataFrame, ind
         headline = "数据不足"
         reason = "数据不足"
     return IndexAtomicOverview(
-        trend=IndexAtomicTrendOverview(close, levels, relations, close.status == "已计算" and all(item.status == "已计算" for item in levels)),
+        trend=IndexAtomicTrendOverview(close, levels, relations, trend_visible, markers if trend_visible else ()),
         range_position=IndexAtomicRangeOverview(headline, from_high, from_low, marker, reason),
         events=_overview_events(rows),
         events_empty_text="暂无已记录事件",
@@ -793,6 +809,32 @@ def index_atomic_overview(summary: dict[str, object], details: pd.DataFrame, ind
             for group in index_atomic_detail_groups(details, index_code)
             if group.title != "数据质量"
         ),
+    )
+
+
+def _trend_ladder_markers(rows: dict[str, dict[str, object]]) -> tuple[IndexAtomicTrendMarker, ...]:
+    """Normalize stored close and MA facts into transient relative ladder heights."""
+
+    sources = (("收盘", "close"), ("MA20", "ma_20"), ("MA60", "ma_60"), ("MA120", "ma_120"), ("MA250", "ma_250"))
+    values: list[tuple[str, float]] = []
+    for label, metric_key in sources:
+        row = rows.get(metric_key)
+        if row is None or _text(row.get("status")) != "computed":
+            return ()
+        try:
+            value = float(row.get("value"))
+        except (TypeError, ValueError):
+            return ()
+        if not math.isfinite(value):
+            return ()
+        values.append((label, value))
+
+    lower = min(value for _, value in values)
+    upper = max(value for _, value in values)
+    span = upper - lower
+    return tuple(
+        IndexAtomicTrendMarker(label, 0.5 if span == 0 else (value - lower) / span)
+        for label, value in values
     )
 
 

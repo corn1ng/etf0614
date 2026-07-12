@@ -649,10 +649,67 @@ body {
   color: var(--wb-muted);
   font-size: 12px;
 }
+.index-atomic-overview-generation {
+  margin: -6px 0 10px;
+  color: var(--wb-muted);
+  font-size: 12px;
+}
 .index-atomic-ma-ladder {
   position: relative;
-  min-height: 84px;
+  min-height: 124px;
+  padding: 8px 0;
   overflow: hidden;
+}
+.index-atomic-ma-ladder::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: #cbd5e1;
+  content: "";
+}
+.index-atomic-ma-marker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  transform: translateY(50%);
+  color: #334155;
+  font-size: 11px;
+  line-height: 14px;
+}
+.index-atomic-ma-marker::before {
+  position: absolute;
+  z-index: 0;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: #94a3b8;
+  content: "";
+}
+.index-atomic-ma-marker-label,
+.index-atomic-ma-marker-value {
+  background: #ffffff;
+  padding: 0 3px;
+}
+.index-atomic-ma-marker-label { position: relative; z-index: 1; }
+.index-atomic-ma-marker-value { position: relative; z-index: 1; }
+.index-atomic-ma-marker-label { font-weight: 800; }
+.index-atomic-ma-marker-value { font-variant-numeric: tabular-nums; }
+.index-atomic-ma-relations {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+}
+.index-atomic-ma-relation,
+.index-atomic-range-labels {
+  color: #475569;
+  font-size: 11px;
 }
 .index-atomic-range-track {
   position: relative;
@@ -670,6 +727,7 @@ body {
   background: var(--wb-blue);
   transform: translateX(-50%);
 }
+.index-atomic-range-labels { margin-top: 8px; }
 .index-atomic-event-timeline {
   display: grid;
   gap: 8px;

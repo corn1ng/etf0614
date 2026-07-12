@@ -209,6 +209,31 @@ def test_index_atomic_overview_reads_stored_atoms_without_conclusions():
     assert "评分" not in repr(overview) and "买卖" not in repr(overview)
 
 
+def test_index_atomic_overview_normalizes_finite_stored_trend_heights_for_ladder_display():
+    summary = {
+        "index_code": "000300", "snapshot_status": "computed",
+        "history_completeness_status": "COMPLETE", "history_rows": 260,
+        "latest_date": "2026-07-11", "data_source": "akshare_zh_em",
+    }
+    details = pd.DataFrame([
+        _overview_detail("close", 100.0),
+        _overview_detail("ma_20", 110.0), _overview_detail("ma_60", 90.0),
+        _overview_detail("ma_120", 80.0), _overview_detail("ma_250", 120.0),
+        _overview_detail("close_above_ma_20", False), _overview_detail("close_above_ma_60", True),
+        _overview_detail("close_above_ma_120", True), _overview_detail("close_above_ma_250", False),
+    ])
+
+    overview = index_atomic_overview(summary, details, "000300")
+
+    assert overview is not None
+    assert overview.trend.visible is True
+    assert [(marker.label, marker.position) for marker in overview.trend.markers] == [
+        ("收盘", pytest.approx(0.5)), ("MA20", pytest.approx(0.75)),
+        ("MA60", pytest.approx(0.25)), ("MA120", pytest.approx(0.0)),
+        ("MA250", pytest.approx(1.0)),
+    ]
+
+
 def test_index_atomic_overview_hides_unreliable_visuals_and_reports_empty_events():
     summary = {
         "index_code": "000300", "snapshot_status": "stale",
@@ -302,6 +327,7 @@ def test_index_atomic_overview_hides_trend_for_computed_nonfinite_close_or_ma(me
     assert broken_metric.status == "数据不足"
     assert broken_metric.reason == "快照中该原子指标不是有限数值"
     assert overview.trend.visible is False
+    assert overview.trend.markers == ()
 
 
 def test_status_metrics_are_dense_and_human_readable():

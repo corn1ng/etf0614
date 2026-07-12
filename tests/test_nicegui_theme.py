@@ -72,6 +72,16 @@ def test_theme_contains_readable_index_atomic_overview_rules():
     assert "overflow-x: clip;" in WORKBENCH_CSS
 
 
+def test_theme_contains_positioned_index_atomic_ma_ladder_markers():
+    for css_class in [
+        ".index-atomic-ma-ladder", ".index-atomic-ma-marker", ".index-atomic-ma-marker-label",
+        ".index-atomic-ma-marker-value", ".index-atomic-range-labels",
+    ]:
+        assert css_class in WORKBENCH_CSS
+    assert "bottom: 0;" in WORKBENCH_CSS
+    assert ".index-atomic-ma-marker-label { position: relative; z-index: 1; }" in WORKBENCH_CSS
+
+
 def test_task_center_theme_classes_exist():
     for css_class in [
         ".workbench-task-center",

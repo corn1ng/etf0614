@@ -1,5 +1,11 @@
 # Task Memory
 
+## 2026-07-13 - Final-review readability fixes
+
+- TDD evidence: the final-review regression wave first ran with the worktree interpreter and `PYTHONPATH` set to `src`; it failed as expected with 7 missing-marker/helper/CSS failures. After the display-only implementation, the same focused selection passed 7 tests. A follow-up CSS stacking regression first failed for the missing foreground marker label rule and then passed after the rule was added.
+- Verification: focused NiceGUI/index-snapshot regression suite passed 102 tests. The full suite passed 428 tests before the CSS-only stacking follow-up; the final focused and full-suite reruns are recorded in `.superpowers/sdd/final-review-fix-report.md`.
+- Browser QA: no generated atomic snapshot is available in this worktree, so the ready/stale/failed/insufficient overview dialog at 1440px and 390px was not browser-verified or claimed as verified.
+
 ## 2026-07-13 - Refine index atomic detail readability
 
 - Summary: Added scoped responsive presentation for the stored index-atomic overview: four desktop cards, two at 960px, one at 720px, plus compact MA/range/timeline/evidence and expandable-group styling. The page only presents stored snapshot facts; absent atomic items draw neither MA ladders, range markers, nor synthetic events.
