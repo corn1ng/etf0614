@@ -401,3 +401,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - A page refresh may reload a snapshot but must never trigger full atomic recomputation or external fetching.
   - After raw-history or coverage changes, mark the snapshot stale and require an explicit maintenance rebuild rather than silently serving it as current.
   - Preserve a prior successful snapshot on rebuild failure, but show its generated time and strong stale/failure warning.
+
+## 2026-07-12 - Plan index health atomic workbench implementation
+
+- Summary: Converted the approved index-health redesign into a six-task implementation plan. It replaces page-time health rebuilding with a manual persistent atomic-snapshot maintenance task, keeps the market page snapshot-read-only, removes valuation and trend/strategy output, and specifies core/research pool ordering, search, wide tabbed details, and strong data-state warnings.
+- Verification: Reviewed the 326-line plan for six concrete tasks and 29 executable steps; the prohibited-placeholder scan returned no matches, and the plan's whitespace check reported no diff errors.
+- Watch out next time:
+  - Do not reuse `index_health_snapshot*` caches because their schema contains valuation and trend-era fields.
+  - Treat `stale`, `missing`, and `failed` snapshots as persistent, user-visible data-quality states; only the maintenance task may write a replacement snapshot.
+  - Keep atomic facts independent: missing amount invalidates only volume metrics, and a moving-average crossing is never a trading conclusion.
