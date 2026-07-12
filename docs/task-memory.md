@@ -4,6 +4,15 @@ Use this file as the project-level memory for future Codex tasks. Read it at the
 
 Keep entries concise and reusable. Prefer lessons, constraints, verification notes, and project-specific pitfalls over a raw activity log.
 
+## 2026-07-12 - Serialize index atomic snapshot rebuild starts
+
+- Summary: Closed the same-process race between checking for a running atomic rebuild and scheduling a new one. The runner now serializes reconciliation, claim, active-key registration, and scheduling; an injected writer also makes runner-level publication rollback regressions deterministic.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-maintenance-concurrency-full-final` passed (320 tests).
+- Watch out next time:
+  - A persisted "running" query plus a later insert is not an atomic claim; protect their entire same-process transition, including background scheduling.
+  - Register the active task key before scheduling, and remove it plus persist failure if scheduling raises.
+  - Test runner-level publication failure at the final metadata replacement as well as Task 2's lower-level rollback contract.
+
 ## 2026-07-12 - Add durable index atomic snapshot maintenance task
 
 - Summary: Added a persisted, local-only maintenance runner and `数据维护 -> 指数目录与完整性` entry point for rebuilding index atomic indicators. The task records per-index progress, published snapshot metadata, and its result so it restores after a page reload.

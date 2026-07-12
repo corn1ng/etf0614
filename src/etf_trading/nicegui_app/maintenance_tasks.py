@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 import json
+from threading import RLock
 
 import pandas as pd
 from nicegui import background_tasks, run
@@ -26,6 +27,7 @@ INDEX_HISTORY_BATCH_TASK_TYPE = "index_history_batch"
 _ACTIVE_INDEX_TASK_KEYS: set[tuple[str, int]] = set()
 INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE = "index_atomic_snapshot_rebuild"
 _ACTIVE_INDEX_ATOMIC_SNAPSHOT_TASK_KEYS: set[tuple[str, int]] = set()
+_INDEX_ATOMIC_SNAPSHOT_START_LOCK = RLock()
 INDEX_MAINTENANCE_TASK_TYPES = {
     "index_catalog_sync": "同步指数目录",
     "index_source_validation": "验证指数数据源",
@@ -153,49 +155,53 @@ class IndexAtomicSnapshotMaintenanceRunner:
         parquet_store: ParquetStore,
         *,
         build_snapshot: Callable[..., tuple[pd.DataFrame, pd.DataFrame]] = build_index_atomic_snapshot,
+        write_snapshot: Callable[..., None] = write_index_atomic_snapshot,
     ) -> None:
         self.store = store
         self.parquet_store = parquet_store
         self.build_snapshot = build_snapshot
+        self.write_snapshot = write_snapshot
 
     def start(self) -> MaintenanceTaskRun:
-        self.reconcile_interrupted()
-        running = self.store.get_running_maintenance_task_run(INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE)
-        if running is not None:
-            return running
+        with _INDEX_ATOMIC_SNAPSHOT_START_LOCK:
+            self.reconcile_interrupted()
+            running = self.store.get_running_maintenance_task_run(INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE)
+            if running is not None:
+                return running
 
-        try:
-            definitions, _ = index_atomic_snapshot_inputs(self.store)
-            progress_total = len(definitions)
-        except Exception:  # noqa: BLE001 - persist the same local-read failure in the task run
-            progress_total = 0
-        task = self.store.create_maintenance_task_run(
-            INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE,
-            progress_total=progress_total,
-        )
-        key = self._task_key(task.task_id)
-        _ACTIVE_INDEX_ATOMIC_SNAPSHOT_TASK_KEYS.add(key)
-        try:
-            background_tasks.create(self._run(task.task_id), name=f"index-atomic-snapshot-{task.task_id}")
-        except Exception as exc:
-            _ACTIVE_INDEX_ATOMIC_SNAPSHOT_TASK_KEYS.discard(key)
-            self.store.update_maintenance_task_run(
-                task.task_id,
-                state="failed",
-                error_message=f"重建指数原子指标失败：{exc}",
+            try:
+                definitions, _ = index_atomic_snapshot_inputs(self.store)
+                progress_total = len(definitions)
+            except Exception:  # noqa: BLE001 - persist the same local-read failure in the task run
+                progress_total = 0
+            task = self.store.create_maintenance_task_run(
+                INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE,
+                progress_total=progress_total,
             )
-            raise
-        return task
+            key = self._task_key(task.task_id)
+            _ACTIVE_INDEX_ATOMIC_SNAPSHOT_TASK_KEYS.add(key)
+            try:
+                background_tasks.create(self._run(task.task_id), name=f"index-atomic-snapshot-{task.task_id}")
+            except Exception as exc:
+                _ACTIVE_INDEX_ATOMIC_SNAPSHOT_TASK_KEYS.discard(key)
+                self.store.update_maintenance_task_run(
+                    task.task_id,
+                    state="failed",
+                    error_message=f"重建指数原子指标失败：{exc}",
+                )
+                raise
+            return task
 
     def latest(self) -> MaintenanceTaskRun | None:
         self.reconcile_interrupted()
         return self.store.get_latest_maintenance_task_run(INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE)
 
     def reconcile_interrupted(self) -> MaintenanceTaskRun | None:
-        running = self.store.get_running_maintenance_task_run(INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE)
-        if running is None or self._task_key(running.task_id) in _ACTIVE_INDEX_ATOMIC_SNAPSHOT_TASK_KEYS:
-            return None
-        return self.store.mark_maintenance_task_interrupted(running.task_id, "服务器已重启，任务未继续执行")
+        with _INDEX_ATOMIC_SNAPSHOT_START_LOCK:
+            running = self.store.get_running_maintenance_task_run(INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE)
+            if running is None or self._task_key(running.task_id) in _ACTIVE_INDEX_ATOMIC_SNAPSHOT_TASK_KEYS:
+                return None
+            return self.store.mark_maintenance_task_interrupted(running.task_id, "服务器已重启，任务未继续执行")
 
     async def _run(self, task_id: int) -> None:
         try:
@@ -219,7 +225,7 @@ class IndexAtomicSnapshotMaintenanceRunner:
                     on_progress=on_progress,
                 )
                 generated_at = datetime.now()
-                write_index_atomic_snapshot(
+                self.write_snapshot(
                     summary,
                     details,
                     _index_atomic_snapshot_source_signature(self.parquet_store, definitions, coverage),

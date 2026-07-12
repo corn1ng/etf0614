@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+from pathlib import Path
+import threading
 from datetime import datetime
 
 import pandas as pd
@@ -73,7 +75,7 @@ def _failing_atomic_builder():
     return build_snapshot
 
 
-def _atomic_runner(tmp_path, build_snapshot, monkeypatch):
+def _atomic_runner(tmp_path, build_snapshot, monkeypatch, **runner_kwargs):
     from etf_trading.nicegui_app import maintenance_tasks
 
     store = SQLiteStore(tmp_path / "etf.sqlite")
@@ -105,6 +107,7 @@ def _atomic_runner(tmp_path, build_snapshot, monkeypatch):
         store,
         parquet_store,
         build_snapshot=build_snapshot,
+        **runner_kwargs,
     ), store, parquet_store
 
 
@@ -190,6 +193,131 @@ def test_atomic_snapshot_runner_keeps_previous_snapshot_when_rebuild_fails(tmp_p
     assert failed.state == "failed"
     assert failed.error_message == "重建指数原子指标失败：本地 Parquet 损坏"
     assert result.summary.empty is False
+
+
+def test_atomic_snapshot_runner_start_deduplicates_concurrent_calls_per_store(tmp_path, monkeypatch):
+    from etf_trading.nicegui_app import maintenance_tasks
+
+    build_calls = []
+    writer_task_ids = []
+
+    def build_snapshot(parquet_store, definitions, *, coverage=None, on_progress=None):
+        del parquet_store, coverage
+        build_calls.append(tuple(definition.index_code for definition in definitions))
+        for done, definition in enumerate(definitions, start=1):
+            if on_progress is not None:
+                on_progress(type("Progress", (), {"done": done, "total": len(definitions), "index_code": definition.index_code})())
+        return _atomic_summary(), _atomic_details()
+
+    runner, store, parquet_store = _atomic_runner(tmp_path, build_snapshot, monkeypatch)
+    second_runner = maintenance_tasks.IndexAtomicSnapshotMaintenanceRunner(
+        store,
+        parquet_store,
+        build_snapshot=build_snapshot,
+    )
+    monkeypatch.setattr(runner, "reconcile_interrupted", lambda: None)
+    monkeypatch.setattr(second_runner, "reconcile_interrupted", lambda: None)
+
+    original_get_running = store.get_running_maintenance_task_run
+    checked_lock = threading.Lock()
+    checked_count = 0
+    both_checked = threading.Event()
+
+    def race_running_check(task_type):
+        nonlocal checked_count
+        result = original_get_running(task_type)
+        with checked_lock:
+            checked_count += 1
+            if checked_count == 2:
+                both_checked.set()
+        both_checked.wait(timeout=1)
+        return result
+
+    scheduled = []
+    scheduled_lock = threading.Lock()
+
+    def collect_background(awaitable, **kwargs):
+        del kwargs
+        with scheduled_lock:
+            scheduled.append(awaitable)
+
+    original_writer = maintenance_tasks.write_index_atomic_snapshot
+
+    def track_writer(*args, **kwargs):
+        writer_task_ids.append(kwargs["task_result_id"])
+        return original_writer(*args, **kwargs)
+
+    monkeypatch.setattr(store, "get_running_maintenance_task_run", race_running_check)
+    monkeypatch.setattr(maintenance_tasks.background_tasks, "create", collect_background)
+    monkeypatch.setattr(maintenance_tasks, "write_index_atomic_snapshot", track_writer)
+    runner.write_snapshot = track_writer
+    second_runner.write_snapshot = track_writer
+
+    callers_ready = threading.Barrier(2)
+    results = []
+    errors = []
+
+    def start_in_thread(active_runner):
+        try:
+            callers_ready.wait(timeout=1)
+            results.append(active_runner.start())
+        except Exception as exc:  # noqa: BLE001 - propagate thread failures into assertions
+            errors.append(exc)
+
+    first = threading.Thread(target=start_in_thread, args=(runner,))
+    second = threading.Thread(target=start_in_thread, args=(second_runner,))
+    first.start()
+    second.start()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert len(results) == 2
+    for awaitable in scheduled:
+        asyncio.run(awaitable)
+
+    assert [task.task_id for task in results] == [results[0].task_id, results[0].task_id]
+    assert len(scheduled) == 1
+    assert build_calls == [("000300",)]
+    assert writer_task_ids == [results[0].task_id]
+    assert _snapshot_meta(parquet_store)["task_result_id"] == results[0].task_id
+
+
+def test_atomic_snapshot_runner_keeps_previous_snapshot_when_final_publish_fails(tmp_path, monkeypatch):
+    runner, store, parquet_store = _atomic_runner(
+        tmp_path,
+        _successful_atomic_builder(),
+        monkeypatch,
+        write_snapshot=state.write_index_atomic_snapshot,
+    )
+    _write_previous_snapshot(parquet_store)
+    _, _, meta_file = state._index_atomic_snapshot_cache_paths(parquet_store)
+    original_replace = Path.replace
+    failed = False
+
+    def fail_final_meta_publish(path, target):
+        nonlocal failed
+        if not failed and Path(target) == meta_file and ".tmp" in path.name:
+            failed = True
+            raise OSError("final publish failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_final_meta_publish)
+
+    task = runner.start()
+    persisted = _wait_for_terminal_task(store, task.task_id)
+    result = state.load_index_atomic_snapshot_readonly(
+        parquet_store,
+        (_atomic_definition().to_index_definition(),),
+        coverage=_atomic_coverage(),
+    )
+
+    assert persisted.state == "failed"
+    assert persisted.error_message == "重建指数原子指标失败：final publish failed"
+    assert result.summary["index_code"].tolist() == ["000300"]
+    assert _snapshot_meta(parquet_store)["task_result_id"] == 99
 
 
 def test_render_tasks_restores_persisted_atomic_snapshot_result_after_page_refresh(monkeypatch):
