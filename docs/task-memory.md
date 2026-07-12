@@ -4,6 +4,15 @@ Use this file as the project-level memory for future Codex tasks. Read it at the
 
 Keep entries concise and reusable. Prefer lessons, constraints, verification notes, and project-specific pitfalls over a raw activity log.
 
+## 2026-07-12 - Make index atomic snapshots maintenance-only
+
+- Summary: Replaced the NiceGUI index health cache rebuild path with a versioned, three-file index atomic snapshot contract. Pages now only read, report missing/stale/failed state, and retain a temporary legacy-name read-only forwarder until the market page migration.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_index_health_snapshot.py tests\test_nicegui_state_cache.py tests\test_nicegui_app_import.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-state-focused` passed (34 tests).
+- Watch out next time:
+  - Keep every index snapshot build in maintenance; a page-time cache miss must return `missing`, never schedule or run a builder.
+  - Treat the summary, details, and metadata files as one logical version: write all temporary files before replacing any live file, and publish metadata last.
+  - Remove `load_index_health_snapshot_cached` and its no-op invalidator when the market page moves to `load_index_atomic_snapshot_readonly`.
+
 ## Entry Template
 
 ```md

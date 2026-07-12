@@ -797,7 +797,7 @@ def test_atomic_row_click_event_extracts_etf_code():
 
 def test_index_health_page_uses_cached_snapshot(monkeypatch):
     from etf_trading.nicegui_app.pages import market
-    from etf_trading.nicegui_app.state import IndexHealthSnapshotCacheResult
+    from etf_trading.nicegui_app.state import IndexAtomicSnapshotCacheResult
     from etf_trading.nicegui_app.view_models import PlatformSnapshot
 
     calls = []
@@ -920,7 +920,7 @@ def test_index_health_page_uses_cached_snapshot(monkeypatch):
 
     def fake_cached(parquet_store, definitions=None, *, coverage=None, force_refresh=False):
         calls.append(force_refresh)
-        return IndexHealthSnapshotCacheResult(summary=summary, details=details, status="ready", generated_at=datetime(2026, 7, 6, 10, 0, 0))
+        return IndexAtomicSnapshotCacheResult(summary=summary, details=details, status="ready", generated_at=datetime(2026, 7, 6, 10, 0, 0))
 
     monkeypatch.setattr(market, "ui", FakeUi())
     monkeypatch.setattr(market, "load_index_health_snapshot_cached", fake_cached, raising=False)
