@@ -31,6 +31,7 @@ RESULT_COLUMNS = [
     "detail",
 ]
 _WRITABLE_STATUSES = frozenset({"OFFICIAL", "THIRD_PARTY_BASE_DATE", "THIRD_PARTY_PUBLICATION"})
+_OFFICIAL_BASELINE_SOURCES = frozenset({"official_methodology", "official_factsheet", "official_api"})
 
 
 class BaselineEvidenceResolver:
@@ -171,7 +172,7 @@ def write_baseline_evidence(path: str | Path, frame: pd.DataFrame) -> None:
         if not index_code or reference_date is None:
             continue
         checked_at = _iso_date(row.get("checked_at"))
-        evidence[index_code] = {
+        candidate = {
             "reference_date": reference_date,
             "source": str(row.get("baseline_source") or "").strip(),
             "kind": str(row.get("baseline_evidence_kind") or "").strip(),
@@ -180,6 +181,10 @@ def write_baseline_evidence(path: str | Path, frame: pd.DataFrame) -> None:
             "checked_at": checked_at or "",
             "detail": str(row.get("detail") or "").strip(),
         }
+        existing_record = evidence.get(index_code, {})
+        if _is_official_record(existing_record) and not _is_official_record(candidate):
+            continue
+        evidence[index_code] = candidate
     target.parent.mkdir(parents=True, exist_ok=True)
     ordered_evidence = {code: evidence[code] for code in sorted(evidence)}
     target.write_text(
@@ -254,6 +259,10 @@ def _load_evidence_mapping(path: Path) -> dict[str, dict[str, object]]:
         for code, item in mappings.items()
         if _normalise_code(code) and isinstance(item, Mapping)
     }
+
+
+def _is_official_record(record: Mapping[str, object]) -> bool:
+    return str(record.get("source") or "").strip() in _OFFICIAL_BASELINE_SOURCES
 
 
 def _normalise_code(value: object) -> str:

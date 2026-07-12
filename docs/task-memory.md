@@ -427,4 +427,13 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
 - Watch out next time:
   - CSI may return HTTP 403 after a successful batch; keep individual failures unresolved and do not treat a JoinQuant publication date as an official base date.
   - Audit every official record against its code-specific CSI endpoint and every third-party record for `聚宽` publication-date semantics before committing the YAML.
-  - A non-default catalog path must opt in with `evidence_path` before an external baseline overlay is applied.
+- A non-default catalog path must opt in with `evidence_path` before an external baseline overlay is applied.
+
+## 2026-07-12 - Preserve official index baseline evidence
+
+- Summary: Prevented lower-confidence third-party publication records from replacing existing official baseline evidence, then restored CSI official records with a bounded recheck of the 17 downgraded codes.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\baseline-preservation-full` passed with 348 tests. The CSI probe recovered from the prior 403; the targeted 17-code pass restored 15 official records and retained `399001`/`399006` as third-party publications because CSI returned mismatched codes.
+- Watch out next time:
+  - Evidence writes must be monotonic by reliability: `third_party_*` and unresolved outcomes may never overwrite `official_methodology`, `official_factsheet`, or `official_api`.
+  - After a CSI rate limit, recheck only downgraded candidates after a successful single-code probe; do not repeat the complete formal-index batch.
+  - Keep JoinQuant publication dates as explicit third-party references when CSI does not return a code-matching official basic date.

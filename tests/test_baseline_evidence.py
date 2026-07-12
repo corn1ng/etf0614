@@ -327,6 +327,17 @@ def test_write_baseline_evidence_writes_trusted_rows_and_preserves_existing_offi
                 "detail": "代码不一致",
             },
             {
+                "index_code": "000300",
+                "evidence_status": "THIRD_PARTY_PUBLICATION",
+                "reference_date": date(2005, 4, 8),
+                "baseline_source": "third_party_publication",
+                "baseline_evidence_kind": "publication_date",
+                "baseline_evidence_name": "聚宽",
+                "baseline_evidence_url": "https://www.joinquant.com/data/dict/indexData",
+                "checked_at": date(2026, 7, 12),
+                "detail": "第三方仅提供发布日期，不能视为官方基日",
+            },
+            {
                 "index_code": "000905",
                 "evidence_status": "THIRD_PARTY_PUBLICATION",
                 "reference_date": date(2007, 1, 15),
@@ -355,7 +366,15 @@ def test_write_baseline_evidence_writes_trusted_rows_and_preserves_existing_offi
 
     saved = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert list(saved["evidence"]) == ["000300", "000905"]
-    assert saved["evidence"]["000300"]["detail"] == "既有官方记录"
+    assert saved["evidence"]["000300"] == {
+        "reference_date": "2004-12-31",
+        "source": "official_api",
+        "kind": "official_base_date",
+        "source_name": "中证指数官方基础信息",
+        "source_url": "https://example.test/000300",
+        "checked_at": "2026-07-11",
+        "detail": "既有官方记录",
+    }
     assert saved["evidence"]["000905"] == {
         "reference_date": "2007-01-15",
         "source": "third_party_publication",

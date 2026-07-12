@@ -1,12 +1,12 @@
 evidence:
   '000001':
-    reference_date: '1991-07-15'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '1990-12-19'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000001
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   '000015':
     reference_date: '2004-12-31'
     source: official_api
@@ -16,13 +16,13 @@ evidence:
     checked_at: '2026-07-10'
     detail: ''
   '000016':
-    reference_date: '2004-01-02'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2003-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000016
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000029:
     reference_date: '2002-06-28'
     source: official_api
@@ -32,45 +32,45 @@ evidence:
     checked_at: '2026-07-10'
     detail: ''
   '000300':
-    reference_date: '2005-04-08'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000300
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   '000510':
-    reference_date: '2005-01-04'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000510
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000688:
-    reference_date: '2020-07-23'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2019-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000688
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000819:
-    reference_date: '2012-05-09'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000819
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000827:
-    reference_date: '2012-09-25'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2011-12-30'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000827
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000852:
     reference_date: '2004-12-31'
     source: official_api
@@ -88,21 +88,21 @@ evidence:
     checked_at: '2026-07-10'
     detail: ''
   000905:
-    reference_date: '2007-01-15'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000905
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000906:
-    reference_date: '2007-01-15'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000906
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000919:
     reference_date: '2004-12-31'
     source: official_api
@@ -112,53 +112,53 @@ evidence:
     checked_at: '2026-07-10'
     detail: ''
   000922:
-    reference_date: '2008-05-26'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000922
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000928:
-    reference_date: '2009-07-03'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000928
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000932:
-    reference_date: '2009-07-03'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000932
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000933:
-    reference_date: '2009-07-03'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000933
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000934:
-    reference_date: '2009-07-03'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000934
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   000935:
-    reference_date: '2009-07-03'
-    source: third_party_publication
-    kind: publication_date
-    source_name: 聚宽
-    source_url: https://www.joinquant.com/data/dict/indexData
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000935
     checked_at: '2026-07-10'
-    detail: 第三方仅提供发布日期，不能视为官方基日
+    detail: ''
   '399001':
     reference_date: '1995-01-23'
     source: third_party_publication
