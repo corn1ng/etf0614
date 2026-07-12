@@ -419,3 +419,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Maintenance task `result_json` and persisted coverage can predate a wording change; normalize recognized legacy messages before rendering rather than assuming a new data run has occurred.
   - Keep `source_kind` when converting catalog entries to `IndexDefinition`, otherwise old empty-history records lose their concrete Chinese data-source explanation in market snapshots.
   - Only default an empty completeness message to “尚未校验历史完整性” for `NOT_VALIDATED`; empty `MISSING_HISTORY` must still be interpreted as a recoverable legacy state.
+
+## 2026-07-12 - Refresh index baseline evidence
+
+- Summary: Added the formal-index evidence verification CLI, refreshed 78 durable baseline records, and isolated custom catalog fixtures from the global evidence overlay unless they explicitly request one.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\baseline-full` passed with 348 tests. `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe scripts\verify_index_baselines.py --through 2026-07-10 --write-evidence --formal` first completed with OFFICIAL 76, THIRD_PARTY_PUBLICATION 2, UNRESOLVED 102; its immediate repeat completed through CSI 403 throttling with OFFICIAL 0, THIRD_PARTY_PUBLICATION 17, UNRESOLVED 163.
+- Watch out next time:
+  - CSI may return HTTP 403 after a successful batch; keep individual failures unresolved and do not treat a JoinQuant publication date as an official base date.
+  - Audit every official record against its code-specific CSI endpoint and every third-party record for `聚宽` publication-date semantics before committing the YAML.
+  - A non-default catalog path must opt in with `evidence_path` before an external baseline overlay is applied.

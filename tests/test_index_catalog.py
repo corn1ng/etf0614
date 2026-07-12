@@ -13,7 +13,18 @@ def test_default_catalog_has_target_pool_boundaries():
     assert sum(entry.pool == "research" for entry in entries) == 80
     assert sum(entry.pool == "reserve" for entry in entries) == 30
     assert {entry.market for entry in entries} == {"A股", "港股"}
-    assert all(entry.baseline_source in {"official_methodology", "official_factsheet", "unverified"} for entry in entries)
+    assert all(
+        entry.baseline_source
+        in {
+            "official_methodology",
+            "official_factsheet",
+            "official_api",
+            "third_party_reference",
+            "third_party_publication",
+            "unverified",
+        }
+        for entry in entries
+    )
     assert all(
         isinstance(entry.index_base_date, date)
         for entry in entries
@@ -67,10 +78,27 @@ def test_catalog_accepts_unverified_baseline_without_claiming_history_complete(t
         encoding="utf-8",
     )
 
+    overlay = tmp_path / "index_baseline_evidence.yaml"
+    overlay.write_text(
+        "evidence:\n"
+        "  '931574':\n"
+        "    reference_date: '2014-12-31'\n"
+        "    source: official_api\n"
+        "    kind: official_base_date\n"
+        "    source_name: 中证指数官方基础信息\n"
+        "    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931574\n"
+        "    checked_at: '2026-07-10'\n",
+        encoding="utf-8",
+    )
+
     entry = load_index_catalog(path)[0]
 
     assert entry.index_base_date is None
     assert entry.baseline_source == "unverified"
+
+    overlaid_entry = load_index_catalog(path, evidence_path=overlay)[0]
+    assert overlaid_entry.index_base_date == date(2014, 12, 31)
+    assert overlaid_entry.baseline_source == "official_api"
 
 
 def test_catalog_evidence_overlay_updates_only_named_index(tmp_path):

@@ -124,14 +124,19 @@ def default_index_catalog() -> tuple[IndexCatalogEntry, ...]:
 def load_index_catalog(
     path: str | Path = DEFAULT_INDEX_CATALOG_PATH,
     *,
-    evidence_path: str | Path = DEFAULT_BASELINE_EVIDENCE_PATH,
+    evidence_path: str | Path | None = None,
 ) -> tuple[IndexCatalogEntry, ...]:
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    catalog_path = Path(path)
+    raw = yaml.safe_load(catalog_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError("index catalog root must be a mapping")
     entries = tuple(_entry_from_mapping(item) for item in _expand_catalog_mappings(raw))
     _validate_catalog(entries)
-    entries = apply_baseline_evidence(entries, load_baseline_evidence(evidence_path))
+    resolved_evidence_path = evidence_path
+    if resolved_evidence_path is None and catalog_path.resolve() == DEFAULT_INDEX_CATALOG_PATH.resolve():
+        resolved_evidence_path = DEFAULT_BASELINE_EVIDENCE_PATH
+    if resolved_evidence_path is not None:
+        entries = apply_baseline_evidence(entries, load_baseline_evidence(resolved_evidence_path))
     _validate_catalog(entries)
     return entries
 

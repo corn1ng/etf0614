@@ -10,6 +10,35 @@ from etf_trading.data.baseline_evidence import (
     write_baseline_evidence,
 )
 from etf_trading.data.index_catalog import IndexCatalogEntry
+from scripts.verify_index_baselines import main
+
+
+def _official_row(index_code: str, reference_date: str) -> dict[str, str]:
+    return {
+        "index_code": index_code,
+        "evidence_status": "OFFICIAL",
+        "reference_date": reference_date,
+        "baseline_source": "official_api",
+        "baseline_evidence_kind": "official_base_date",
+        "baseline_evidence_name": "中证指数官方基础信息",
+        "baseline_evidence_url": f"https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/{index_code}",
+        "checked_at": "2026-07-10",
+        "detail": "",
+    }
+
+
+def _unresolved_row(index_code: str, detail: str) -> dict[str, str | None]:
+    return {
+        "index_code": index_code,
+        "evidence_status": "UNRESOLVED",
+        "reference_date": None,
+        "baseline_source": "unverified",
+        "baseline_evidence_kind": "unresolved",
+        "baseline_evidence_name": "",
+        "baseline_evidence_url": "",
+        "checked_at": "2026-07-10",
+        "detail": detail,
+    }
 
 
 def _entry(index_code: str, name: str, *, source_kind: str, aliases: tuple[str, ...] = ()) -> IndexCatalogEntry:
@@ -39,6 +68,23 @@ def _fake_http_get(responses: dict[str, object], calls: list[str] | None = None)
         return response
 
     return get
+
+
+def test_verify_index_baselines_cli_writes_only_verified_or_reference_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "etf_trading.data.baseline_evidence.BaselineEvidenceResolver.collect",
+        lambda self, entries, as_of: pd.DataFrame([
+            _official_row("000300", "2004-12-31"),
+            _unresolved_row("801010", "申万官方站点不可访问"),
+        ]),
+    )
+    exit_code = main([
+        "--through", "2026-07-10", "--evidence-path", str(tmp_path / "evidence.yaml"), "--formal",
+    ])
+    saved = yaml.safe_load((tmp_path / "evidence.yaml").read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert "000300" in saved["evidence"]
+    assert "801010" not in saved["evidence"]
 
 
 def test_resolver_prefers_matching_csindex_basic_date_over_third_party_publication():
