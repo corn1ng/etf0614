@@ -156,6 +156,31 @@ def test_table_displays_baseline_reference_evidence_in_chinese():
     assert display[0]["evidence_status"] == "第三方参考起点"
 
 
+def test_table_rows_localize_maintenance_baseline_evidence_result():
+    rows = [
+        {
+            "reference_date": date(2005, 4, 8),
+            "checked_at": date(2026, 7, 12),
+            "evidence_status": "THIRD_PARTY_BASE_DATE",
+            "detail": "第三方仅提供参考基日。",
+        },
+        {
+            "reference_date": date(2007, 1, 15),
+            "checked_at": date(2026, 7, 12),
+            "evidence_status": "REJECTED",
+            "detail": "证据与指数代码不匹配。",
+        },
+    ]
+
+    assert [column["label"] for column in table_columns(rows)] == ["参考日期", "检索日期", "核验结果", "证据说明"]
+    display = table_rows(rows)
+
+    assert display[0]["reference_date"] == "2005-04-08"
+    assert display[0]["checked_at"] == "2026-07-12"
+    assert display[0]["evidence_status"] == "第三方参考基日"
+    assert display[1]["evidence_status"] == "拒绝"
+
+
 def test_render_table_localizes_pagination_labels(monkeypatch):
     captured = {}
 

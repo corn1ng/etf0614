@@ -171,6 +171,92 @@ def test_market_snapshot_downgrades_persisted_complete_coverage_for_third_party_
     assert bool(row["allows_new_position"]) is False
 
 
+def test_market_snapshot_downgrades_persisted_complete_coverage_for_unverified_baseline():
+    from etf_trading.data.indexes import IndexDefinition
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    class FakeParquetStore:
+        def read_index_prices(self, index_code: str) -> pd.DataFrame:
+            dates = pd.bdate_range(end="2026-07-10", periods=300)
+            close = pd.Series(range(300), dtype=float) + 100.0
+            return pd.DataFrame(
+                {
+                    "index_code": index_code,
+                    "trade_date": dates,
+                    "open": close,
+                    "high": close + 1.0,
+                    "low": close - 1.0,
+                    "close": close,
+                    "volume": 1_000,
+                    "amount": 1_000_000,
+                }
+            )
+
+    definition = IndexDefinition("000300", "沪深300", "A股", "A股宽基", "000300")
+    coverage = pd.DataFrame(
+        {
+            "index_code": ["000300"],
+            "completeness_status": ["COMPLETE"],
+            "completeness_message": ["历史从官方基日开始，数据完整。"],
+        }
+    )
+
+    row = build_index_trend_summary(
+        FakeParquetStore(),
+        definitions=(definition,),
+        coverage=coverage,
+        today="2026-07-10",
+    ).iloc[0]
+
+    assert row["data_status"] == "数据可用"
+    assert row["history_completeness_status"] == "BASELINE_UNVERIFIED"
+    assert bool(row["allows_new_position"]) is False
+
+
+def test_market_snapshot_keeps_catalog_baseline_status_when_price_read_fails():
+    from etf_trading.data.indexes import IndexDefinition
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    class UnreadableParquetStore:
+        def read_index_prices(self, index_code: str) -> pd.DataFrame:
+            raise OSError("价格文件不可读")
+
+    definitions = (
+        IndexDefinition(
+            "000300",
+            "沪深300",
+            "A股",
+            "A股宽基",
+            "000300",
+            index_base_date=date(2005, 4, 8),
+            baseline_source="third_party_publication",
+            baseline_evidence_kind="publication_date",
+            baseline_evidence_name="聚宽",
+        ),
+        IndexDefinition("000905", "中证500", "A股", "A股宽基", "000905"),
+    )
+    coverage = pd.DataFrame(
+        {
+            "index_code": ["000300", "000905"],
+            "completeness_status": ["COMPLETE", "COMPLETE"],
+            "completeness_message": ["历史完整。", "历史完整。"],
+        }
+    )
+
+    summary = build_index_trend_summary(
+        UnreadableParquetStore(),
+        definitions=definitions,
+        coverage=coverage,
+        today="2026-07-10",
+    ).set_index("index_code")
+
+    assert summary.loc["000300", "data_status"] == "读取失败"
+    assert summary.loc["000300", "history_completeness_status"] == "BASELINE_REFERENCED"
+    assert bool(summary.loc["000300", "allows_new_position"]) is False
+    assert summary.loc["000905", "history_completeness_status"] == "BASELINE_UNVERIFIED"
+    assert bool(summary.loc["000905", "allows_new_position"]) is False
+
+
 def test_baseline_evidence_task_uses_its_dedicated_summary():
     from etf_trading.nicegui_app.pages import maintenance
 

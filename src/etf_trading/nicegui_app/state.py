@@ -28,6 +28,7 @@ from etf_trading.data.quality import (
     assess_index_history_completeness,
     assess_price_history,
     expected_latest_trade_date,
+    has_official_baseline,
     history_readiness_label,
     index_history_freshness_message,
     read_failed_assessment,
@@ -722,6 +723,13 @@ def build_index_trend_summary(
         coverage_row = coverage_by_code.get(definition.index_code, {})
         completeness_status = str(coverage_row.get("completeness_status") or "NOT_VALIDATED")
         completeness_message = coverage_row.get("completeness_message")
+        catalog_baseline_override = (
+            _catalog_baseline_override(definition)
+            if not coverage_row or completeness_status == "COMPLETE"
+            else None
+        )
+        if catalog_baseline_override is not None:
+            completeness_status, completeness_message = catalog_baseline_override
         if completeness_status == "NOT_VALIDATED" and not completeness_message:
             completeness_message = "尚未校验历史完整性"
         base_date = definition.index_base_date
@@ -793,7 +801,16 @@ def build_index_trend_summary(
                 "trading_day_lag": assessment.trading_day_lag if assessment.trading_day_lag is not None else pd.NA,
             }
         )
-        if not coverage_row or definition.baseline_source in {"third_party_reference", "third_party_publication"}:
+        if catalog_baseline_override is not None:
+            row.update(
+                {
+                    "history_completeness_status": catalog_baseline_override[0],
+                    "history_completeness_message": (
+                        completeness.message if completeness.status == catalog_baseline_override[0] else catalog_baseline_override[1]
+                    ),
+                }
+            )
+        elif not coverage_row:
             row.update(
                 {
                     "history_completeness_status": completeness.status,
@@ -829,6 +846,14 @@ def _index_data_status_message(assessment: HistoryAssessment) -> str:
     if assessment.readiness == HistoryReadiness.STALE:
         return index_history_freshness_message(assessment.latest_trade_date, assessment.expected_trade_date)
     return f"{history_readiness_label(assessment.readiness)}，无法作为趋势或买卖依据。"
+
+
+def _catalog_baseline_override(definition: IndexDefinition) -> tuple[str, str] | None:
+    if definition.baseline_source in {"third_party_reference", "third_party_publication"} and definition.index_base_date is not None:
+        return "BASELINE_REFERENCED", "第三方参考起点，不用于长周期回测或新开仓。"
+    if not has_official_baseline(definition.baseline_source, definition.index_base_date):
+        return "BASELINE_UNVERIFIED", "缺少官方基日，暂时无法判断历史是否从指数起点完整，不作为交易依据。"
+    return None
 
 
 def _coverage_by_index_code(coverage: pd.DataFrame | None) -> dict[str, dict[str, object]]:
