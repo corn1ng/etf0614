@@ -2,6 +2,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 def test_market_page_uses_readonly_atomic_snapshot_and_no_legacy_health_builder():
@@ -652,6 +653,117 @@ def test_nicegui_topbar_separates_page_calculation_from_source_data_status(monke
     assert "NiceGUI" not in labels
 
 
+def test_maintenance_task_routes_use_lightweight_snapshot():
+    from etf_trading.nicegui_app import layout
+
+    assert layout.snapshot_mode_for_route("maintenance", "补齐任务") == "maintenance_tasks"
+    assert layout.snapshot_mode_for_route("maintenance", "日志与设置") == "maintenance_tasks"
+    assert layout.snapshot_mode_for_route("maintenance", None) == "maintenance_tasks"
+    assert layout.snapshot_mode_for_route("maintenance", "数据体检") == "full"
+    assert layout.snapshot_mode_for_route("maintenance", "缺口明细") == "full"
+    assert layout.snapshot_mode_for_route("market", "指数体检") == "atomic_index"
+    assert layout.snapshot_mode_for_route("etf-data", "原子指标") == "maintenance_tasks"
+    assert layout.snapshot_mode_for_route("etf-data", "ETF行情") == "maintenance_tasks"
+    assert layout.snapshot_mode_for_route("etf-data", "搜索加入") == "maintenance_tasks"
+    assert layout.snapshot_mode_for_route("etf-data", "每日计算池") == "maintenance_tasks"
+    assert layout.snapshot_mode_for_route("etf-data", "ETF总览") == "full"
+    assert layout.snapshot_mode_for_route("etf-data", "指数样本池") == "full"
+
+
+def test_every_nicegui_route_declares_snapshot_policy():
+    from etf_trading.nicegui_app import layout
+    from etf_trading.nicegui_app.navigation import NICEGUI_PAGES
+
+    for page in NICEGUI_PAGES:
+        assert layout.snapshot_mode_for_route(page.slug, None) in {"full", "maintenance_tasks", "atomic_index"}
+        for section in page.sections:
+            assert layout.snapshot_mode_for_route(page.slug, section) in {"full", "maintenance_tasks", "atomic_index"}
+
+
+def test_render_shell_uses_lightweight_snapshot_for_maintenance_tasks(monkeypatch):
+    from etf_trading.nicegui_app import layout
+    from etf_trading.nicegui_app import state
+
+    calls = []
+
+    class FakeElement:
+        def classes(self, value):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def row(self):
+            return FakeElement()
+
+        def column(self):
+            return FakeElement()
+
+    monkeypatch.setattr(layout, "ui", FakeUi())
+    monkeypatch.setattr(layout, "apply_theme", lambda: None)
+    monkeypatch.setattr(layout, "_render_sidebar", lambda active_slug: None)
+    monkeypatch.setattr(layout, "_render_topbar", lambda snapshot: None)
+    monkeypatch.setattr(layout, "_render_page_header", lambda page, active_section: None)
+    monkeypatch.setattr(layout, "_render_page", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state, "create_store", lambda: object())
+    monkeypatch.setattr(state, "create_parquet_store", lambda: object())
+    monkeypatch.setattr(state, "load_snapshot_cached", lambda *args, **kwargs: calls.append("full") or object())
+    monkeypatch.setattr(
+        state,
+        "load_maintenance_task_snapshot",
+        lambda *args, **kwargs: calls.append("maintenance_tasks") or object(),
+        raising=False,
+    )
+
+    layout.render_shell("maintenance", "补齐任务")
+
+    assert calls == ["maintenance_tasks"]
+
+
+def test_sidebar_links_maintenance_to_task_page(monkeypatch):
+    from etf_trading.nicegui_app import layout
+
+    links = []
+
+    class FakeElement:
+        def props(self, value):
+            return self
+
+        def classes(self, value):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def column(self):
+            return FakeElement()
+
+        def label(self, text):
+            return FakeElement()
+
+        def link(self, text, target):
+            links.append((text, target))
+            return FakeElement()
+
+    monkeypatch.setattr(layout, "ui", FakeUi())
+
+    layout._render_sidebar("maintenance")
+
+    assert any(
+        target.endswith("/%E8%A1%A5%E9%BD%90%E4%BB%BB%E5%8A%A1")
+        for text, target in links
+        if text == "数据维护"
+    )
+
+
 def test_nicegui_page_header_places_section_tabs_under_title(monkeypatch):
     from etf_trading.nicegui_app import layout
     from etf_trading.nicegui_app.navigation import NicePageSpec
@@ -723,6 +835,75 @@ def test_kline_selector_rows_do_not_split_across_wide_pages():
     assert "justify-between" not in etf_source
     assert ".workbench-chart-selector" in WORKBENCH_CSS
     assert ".workbench-chart-note" in WORKBENCH_CSS
+
+
+def test_etf_chart_page_does_not_render_full_master_as_select_options(monkeypatch):
+    from etf_trading.nicegui_app.pages import etf_data
+    from etf_trading.nicegui_app.view_models import PlatformSnapshot
+
+    events: list[str] = []
+
+    class FakeElement:
+        def __init__(self, value=None):
+            self.value = value
+
+        def classes(self, text):
+            events.append(f"classes:{text}")
+            return self
+
+        def props(self, text):
+            events.append(f"props:{text}")
+            return self
+
+        def clear(self):
+            events.append("clear")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def row(self):
+            return FakeElement()
+
+        def column(self):
+            return FakeElement()
+
+        def input(self, label, value=None):
+            events.append(f"input:{label}:{value}")
+            return FakeElement(value)
+
+        def button(self, text, icon=None, on_click=None):
+            events.append(f"button:{text}:{icon}")
+            return FakeElement()
+
+        def label(self, text):
+            events.append(f"label:{text}")
+            return FakeElement()
+
+        def select(self, *args, **kwargs):
+            pytest.fail("ETF chart page must not render the full ETF master as a select")
+
+    rows = [{"ETF代码": f"{510000 + index:06d}", "ETF名称": f"测试ETF{index}"} for index in range(1500)]
+    snapshot = PlatformSnapshot(
+        master=pd.DataFrame(rows),
+        watchlist=pd.DataFrame(),
+        index_summary=pd.DataFrame(),
+        universe=pd.DataFrame(),
+        gaps=pd.DataFrame(),
+        coverage=pd.DataFrame(),
+        generated_at=pd.Timestamp("2026-07-12").to_pydatetime(),
+    )
+    monkeypatch.setattr(etf_data, "ui", FakeUi())
+    monkeypatch.setattr(etf_data, "etf_choice_options", lambda rows: pytest.fail("full ETF options built"))
+    monkeypatch.setattr(etf_data, "etf_chart_payload", lambda parquet_store, selected: [{"series": []}])
+    monkeypatch.setattr(etf_data, "empty_state", lambda title, detail: events.append(f"empty:{title}:{detail}"))
+
+    etf_data._render_etf_chart(snapshot, object())
+
+    assert any(event.startswith("input:ETF") for event in events)
 
 
 def test_atomic_indicator_page_uses_cached_snapshot(monkeypatch):

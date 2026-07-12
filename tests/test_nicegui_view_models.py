@@ -1,6 +1,7 @@
 from datetime import datetime
 
 import pandas as pd
+import pytest
 
 from etf_trading.nicegui_app.view_models import (
     ATOMIC_HEALTH_COLUMNS,
@@ -19,6 +20,7 @@ from etf_trading.nicegui_app.view_models import (
     category_options,
     code_from_option,
     current_ui_audit_findings,
+    default_etf_input,
     etf_choice_options,
     etf_overview_rows,
     filter_atomic_indicator_frame,
@@ -33,6 +35,7 @@ from etf_trading.nicegui_app.view_models import (
     maintenance_rows,
     market_overview,
     platform_data_status_summary,
+    resolve_etf_code_from_query,
     status_metrics,
 )
 
@@ -369,6 +372,10 @@ def test_choice_options_keep_codes_readable_for_chart_selectors():
     ]
     assert code_from_option("510300 沪深300ETF · A股宽基") == "510300"
     assert code_from_option(None) == ""
+    assert default_etf_input(etf_overview_rows(snapshot)) == "510300 沪深300ETF"
+    assert resolve_etf_code_from_query("证券", etf_overview_rows(snapshot)) == "512880"
+    with pytest.raises(ValueError, match="请输入完整代码"):
+        resolve_etf_code_from_query("ETF", etf_overview_rows(snapshot))
 
 
 def test_index_choice_options_default_to_core_pool_and_can_include_research():

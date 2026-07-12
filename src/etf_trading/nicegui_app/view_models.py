@@ -729,6 +729,47 @@ def etf_choice_options(rows: list[dict[str, object]]) -> list[str]:
     return options
 
 
+def default_etf_input(rows: list[dict[str, object]]) -> str:
+    for row in rows:
+        code = _row_value(row, "ETF代码", "etf_code")
+        if not code:
+            continue
+        name = _row_value(row, "ETF名称", "name")
+        return f"{code} {name}".strip()
+    return ""
+
+
+def resolve_etf_code_from_query(query: str | None, rows: list[dict[str, object]]) -> str:
+    text = str(query or "").strip()
+    if not text:
+        raise ValueError("请输入 ETF 代码或名称")
+
+    normalized = text.lower()
+    first_token = code_from_option(text).lower()
+    fuzzy_matches: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        code = _row_value(row, "ETF代码", "etf_code")
+        if not code:
+            continue
+        code_lower = code.lower()
+        name = _row_value(row, "ETF名称", "name")
+        category = _row_value(row, "分类", "category")
+        if normalized == code_lower or first_token == code_lower:
+            return code
+        searchable = f"{code} {name} {category}".strip().lower()
+        if normalized in searchable and code not in seen:
+            fuzzy_matches.append(code)
+            seen.add(code)
+
+    if len(fuzzy_matches) == 1:
+        return fuzzy_matches[0]
+    if len(fuzzy_matches) > 1:
+        preview = "、".join(fuzzy_matches[:5])
+        raise ValueError(f"匹配到 {len(fuzzy_matches)} 只 ETF，请输入完整代码：{preview}")
+    raise ValueError("ETF 不在主列表，请先初始化 ETF 主列表或输入完整代码")
+
+
 def category_options(rows: list[dict[str, object]]) -> list[str]:
     categories: list[str] = []
     seen: set[str] = set()

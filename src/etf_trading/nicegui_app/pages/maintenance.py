@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 
 import pandas as pd
 from nicegui import run, ui
@@ -29,14 +30,16 @@ from etf_trading.nicegui_app.view_models import (
     PlatformSnapshot,
     code_from_option,
     current_ui_audit_findings,
-    etf_choice_options,
+    default_etf_input,
     etf_overview_rows,
     maintenance_rows,
+    resolve_etf_code_from_query,
 )
 
 SAMPLE_CATEGORIES = ["A股宽基", "A股行业", "港股宽基", "港股科技", "港股医药", "商品", "债券"]
 EtfHistoryProgressView = EtfHistoryProgress
 INDEX_HISTORY_BATCH_TASK_TITLE = "补齐全部指数历史"
+TASK_RESULT_PREVIEW_LIMIT = 50
 INDEX_TASK_TITLES = {
     "index_history_batch": INDEX_HISTORY_BATCH_TASK_TITLE,
     INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE: "重建指数原子指标",
@@ -149,10 +152,12 @@ def _upgrade_legacy_index_history_result(result: object) -> object:
 
 
 def _default_index_source_kind(index_code: str) -> str | None:
-    for entry in default_index_catalog():
-        if entry.index_code == index_code:
-            return entry.source_kind
-    return None
+    return _default_index_source_kind_by_code().get(index_code)
+
+
+@lru_cache(maxsize=1)
+def _default_index_source_kind_by_code() -> dict[str, str | None]:
+    return {entry.index_code: entry.source_kind for entry in default_index_catalog()}
 
 
 def _persisted_message_text(value: object) -> str:
@@ -396,15 +401,15 @@ def _render_master_tasks(store, parquet_store, task_center, task_status: Mainten
 
 
 def _render_etf_history_tasks(snapshot: PlatformSnapshot, store, parquet_store, task_center, task_status: MaintenanceTaskStatus) -> None:
-    options = etf_choice_options(etf_overview_rows(snapshot))
+    rows = etf_overview_rows(snapshot)
     start = (date.today() - timedelta(days=365 * 5)).isoformat()
     end = date.today().isoformat()
     with ui.expansion("ETF历史", icon="history").classes("workbench-task-panel w-full"):
-        if not options:
+        if not rows:
             empty_state("暂无ETF主列表", "请先初始化 ETF 主列表。")
             return
         with ui.row().classes("workbench-toolbar w-full"):
-            selected = ui.select(options, value=options[0], label="ETF").props("dense outlined").classes("w-96")
+            selected = ui.input("ETF代码 / 名称", value=default_etf_input(rows)).props("dense outlined clearable").classes("w-80")
             start_input = ui.input("开始日期", value=start).props("dense outlined type=date").classes("w-44")
             end_input = ui.input("结束日期", value=end).props("dense outlined type=date").classes("w-44")
             fetch_button = ui.button(
@@ -416,7 +421,7 @@ def _render_etf_history_tasks(snapshot: PlatformSnapshot, store, parquet_store, 
                     task_status,
                     "拉取ETF历史行情",
                     lambda: _service_with_provider(store, parquet_store).fetch_and_store_history(
-                        code_from_option(selected.value),
+                        resolve_etf_code_from_query(str(selected.value or ""), rows),
                         str(start_input.value or start),
                         str(end_input.value or end),
                     ),
@@ -752,7 +757,12 @@ def _render_task_result(result) -> None:
     else:
         rows = [{"结果": result}]
     if rows:
-        render_table(rows, pagination=10, ui_module=ui).classes("workbench-data-table w-full")
+        preview_rows = rows[:TASK_RESULT_PREVIEW_LIMIT]
+        if len(rows) > TASK_RESULT_PREVIEW_LIMIT:
+            ui.label(f"结果共 {len(rows)} 条，仅展示前 {TASK_RESULT_PREVIEW_LIMIT} 条；完整结果已保存到任务日志。").classes(
+                "text-xs text-slate-500"
+            )
+        render_table(preview_rows, pagination=10, ui_module=ui).classes("workbench-data-table w-full")
 
 
 def _render_rows(rows: list[dict[str, object]], empty_title: str, empty_detail: str) -> None:

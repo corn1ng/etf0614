@@ -1,5 +1,13 @@
 # Task Memory
 
+## 2026-07-12 - Simplify the contributor guide
+
+- Summary: Replaced `AGENTS.md` with a minimal repository-specific guide covering layout, commands, style, tests, Task Memory, and review hygiene; linked extended procedures to existing documentation.
+- Verification: `python -m pytest -q` passed with 410 tests; Markdown word-count, required-content, placeholder, and whitespace checks passed.
+- Watch out next time:
+  - Keep detailed workflows in `README.md` or focused `docs/` files instead of expanding the root contributor guide.
+  - Update both primary NiceGUI and fallback Streamlit commands when application entry points change.
+
 ## 2026-07-12 - Design the minimal contributor guide
 
 - Summary: Defined a 200–250 word `AGENTS.md` that keeps repository-specific commands and Task Memory requirements while linking longer explanations to existing documentation.
@@ -548,3 +556,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Any atomic-summary schema change needs the index-atomic cache schema version, boolean-safe Parquet serialization, and an old-schema stale-cache regression in the same change.
   - Filter the selected visible pool before searching only code/name, then sort solely and stably by `catalog_order`; reserve rows stay hidden.
   - Detail groups format stored values and statuses only. Do not add calculations, valuation, trend tiers, scoring, ranking, position permission, strategies, or transaction conclusions.
+
+## 2026-07-12 - Keep NiceGUI maintenance routes lightweight
+
+- Summary: Routed NiceGUI pages through explicit snapshot policies so maintenance task/log pages, index health, and lightweight ETF data sections no longer load the full platform-health snapshot on open. Added a SQLite-only maintenance snapshot, redirected the sidebar maintenance entry to 补齐任务, replaced full-master ETF select boxes with code/name inputs on heavy entry points, capped maintenance task-result previews, and cached default index source-kind lookup so legacy task-result display no longer reparses the index catalog once per row.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_nicegui_app_import.py tests\test_nicegui_state_cache.py tests\test_nicegui_maintenance_tasks.py tests\test_nicegui_view_models.py tests\test_nicegui_table_display.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\nicegui-route-snapshot-focused-2` passed with 132 tests. Full `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\nicegui-route-snapshot-full-3` passed with 410 tests. Real HTTP checks on the running service returned 补齐任务 in 0.239s/0.274s, 指数体检 in 0.126s, and ETF行情 in 0.333s on `http://127.0.0.1:56587/`.
+- Watch out next time:
+  - Do not call `load_snapshot_cached()` from generic shell rendering before deciding which page section is active; page routes must declare whether they need full, maintenance-only, or atomic-index data.
+  - Do not render full ETF/master lists as select options on first paint; use searchable inputs or bounded filtered results.
+  - Legacy maintenance task results can be large and old; display-time upgrades must cache static catalog data and preview rows instead of reparsing or rendering everything.

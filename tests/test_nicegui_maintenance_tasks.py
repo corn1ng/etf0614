@@ -719,8 +719,7 @@ def test_etf_history_tasks_include_resumable_all_etf_button(monkeypatch):
         return result
 
     monkeypatch.setattr(maintenance, "ui", FakeUi())
-    monkeypatch.setattr(maintenance, "etf_overview_rows", lambda snapshot: [])
-    monkeypatch.setattr(maintenance, "etf_choice_options", lambda rows: ["510300 Fresh ETF"])
+    monkeypatch.setattr(maintenance, "etf_overview_rows", lambda snapshot: [{"ETF代码": "510300", "ETF名称": "Fresh ETF"}])
     monkeypatch.setattr(maintenance, "_service_with_provider", lambda store, parquet_store: fake_service)
     monkeypatch.setattr(maintenance, "_run_task", fake_run_task)
 
@@ -736,6 +735,90 @@ def test_etf_history_tasks_include_resumable_all_etf_button(monkeypatch):
     args, kwargs = fake_service.calls[0]
     assert kwargs["refresh_master"] is True
     assert kwargs["sleep_seconds"] == 0.15
+
+
+def test_etf_history_tasks_do_not_render_full_master_as_select_options(monkeypatch):
+    from etf_trading.nicegui_app.pages import maintenance
+
+    events: list[str] = []
+
+    class FakeElement:
+        def __init__(self, value=None):
+            self.value = value
+
+        def classes(self, text):
+            events.append(f"classes:{text}")
+            return self
+
+        def props(self, text):
+            events.append(f"props:{text}")
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def expansion(self, title, icon=None):
+            events.append(f"expansion:{title}:{icon}")
+            return FakeElement()
+
+        def row(self):
+            return FakeElement()
+
+        def input(self, label, value=None):
+            events.append(f"input:{label}:{value}")
+            return FakeElement(value)
+
+        def select(self, *args, **kwargs):
+            pytest.fail("ETF history tasks must not render the full ETF master as a select")
+
+        def button(self, text, icon=None, on_click=None):
+            events.append(f"button:{text}:{icon}")
+            return FakeElement()
+
+        def label(self, text):
+            events.append(f"label:{text}")
+            return FakeElement()
+
+    rows = [{"ETF代码": f"{510000 + index:06d}", "ETF名称": f"测试ETF{index}"} for index in range(1500)]
+    monkeypatch.setattr(maintenance, "ui", FakeUi())
+    monkeypatch.setattr(maintenance, "etf_overview_rows", lambda snapshot: rows)
+
+    maintenance._render_etf_history_tasks(object(), object(), object(), FakeElement(), maintenance.MaintenanceTaskStatus())
+
+    assert any(event.startswith("input:ETF") for event in events)
+
+
+def test_task_result_preview_is_capped_on_maintenance_page(monkeypatch):
+    from etf_trading.nicegui_app.pages import maintenance
+
+    captured_rows: list[list[dict[str, object]]] = []
+    labels: list[str] = []
+
+    class FakeElement:
+        def classes(self, text):
+            return self
+
+    class FakeUi:
+        def label(self, text):
+            labels.append(str(text))
+            return FakeElement()
+
+    def fake_render_table(rows, **kwargs):
+        del kwargs
+        captured_rows.append(rows)
+        return FakeElement()
+
+    monkeypatch.setattr(maintenance, "ui", FakeUi())
+    monkeypatch.setattr(maintenance, "render_table", fake_render_table)
+
+    maintenance._render_task_result([{"序号": index} for index in range(80)])
+
+    assert len(captured_rows[0]) == maintenance.TASK_RESULT_PREVIEW_LIMIT
+    assert any("仅展示前" in label for label in labels)
 
 
 def test_maintenance_task_center_updates_before_io_bound_work(monkeypatch):
@@ -1140,6 +1223,49 @@ def test_persisted_legacy_index_history_result_upgrades_baseline_explanation():
         "已有 1990-12-19 至 2026-07-10 的行情，但缺少官方基日；"
         "暂时无法判断是否从指数起点完整，不作为交易依据。"
     )
+
+
+def test_legacy_index_history_upgrade_loads_default_catalog_once(monkeypatch):
+    from etf_trading.nicegui_app.pages import maintenance
+
+    calls = []
+
+    def fake_default_index_catalog():
+        calls.append("load")
+        return (
+            IndexCatalogEntry(
+                index_code="000300",
+                name="沪深300",
+                market="A股",
+                category_level_1="A股",
+                category_level_2="宽基",
+                index_type="宽基",
+                pool="core",
+                index_base_date="2004-12-31",
+                baseline_source="official",
+                source_kind="csi",
+                provider_symbol="000300",
+            ),
+        )
+
+    cache_factory = getattr(maintenance, "_default_index_source_kind_by_code", None)
+    if cache_factory is not None:
+        cache_factory.cache_clear()
+    monkeypatch.setattr(maintenance, "default_index_catalog", fake_default_index_catalog)
+
+    try:
+        maintenance._upgrade_legacy_index_history_result(
+            [
+                {"index_code": "000300", "status": "UPDATED", "completeness_status": "COMPLETE"},
+                {"index_code": "000300", "status": "SKIPPED", "completeness_status": "COMPLETE"},
+                {"index_code": "000300", "status": "STALE", "completeness_status": "BASELINE_UNVERIFIED"},
+            ]
+        )
+
+        assert calls == ["load"]
+    finally:
+        if cache_factory is not None:
+            cache_factory.cache_clear()
 
 
 def test_persisted_legacy_stale_result_upgrades_technical_gap_message():

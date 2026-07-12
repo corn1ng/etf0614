@@ -23,6 +23,7 @@ from etf_trading.nicegui_app.view_models import (
     atomic_data_health_summary,
     category_options,
     code_from_option,
+    default_etf_input,
     ATOMIC_FEATURE_STATUS_LABELS,
     ATOMIC_HISTORY_STATUS_LABELS,
     current_ui_audit_findings,
@@ -30,6 +31,7 @@ from etf_trading.nicegui_app.view_models import (
     etf_choice_options,
     etf_overview_rows,
     filter_etf_rows,
+    resolve_etf_code_from_query,
 )
 from etf_trading.universe.classification import CATEGORIES
 
@@ -384,17 +386,18 @@ def _render_search(snapshot: PlatformSnapshot, store) -> None:
 
 def _render_etf_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
     rows = etf_overview_rows(snapshot)
-    options = etf_choice_options(rows)
-    if not options or parquet_store is None:
+    default_query = default_etf_input(rows)
+    if not default_query or parquet_store is None:
         empty_state("暂无ETF K线", "先初始化ETF主列表并补齐历史。")
         return
 
-    def draw_chart(option: str | None) -> None:
-        selected = code_from_option(option)
+    def draw_chart(query: str | None) -> None:
         chart_area.clear()
         with chart_area:
-            if not selected:
-                empty_state("暂无ETF K线", "请选择一个 ETF。")
+            try:
+                selected = resolve_etf_code_from_query(query, rows)
+            except ValueError as exc:
+                empty_state("暂无ETF K线", str(exc))
                 return
 
             payload = etf_chart_payload(parquet_store, selected)
@@ -405,15 +408,11 @@ def _render_etf_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
             render_ranged_lightweight_chart(payload, element_id=f"etf-chart-{selected}", title=f"ETF：{selected}")
 
     with ui.row().classes("workbench-chart-selector w-full"):
-        ui.select(
-            options,
-            value=options[0],
-            label="选择ETF",
-            on_change=lambda event: draw_chart(event.value),
-        ).props("dense outlined").classes("w-96")
+        selected = ui.input("ETF代码 / 名称", value=default_query).props("dense outlined clearable").classes("w-80")
+        ui.button("查看K线", icon="search", on_click=lambda: draw_chart(str(selected.value or ""))).props("dense outline")
         ui.label("这里只看 ETF 交易载体行情，指数状态在市场地图查看。").classes("workbench-chart-note")
     chart_area = ui.column().classes("w-full gap-2")
-    draw_chart(options[0])
+    draw_chart(default_query)
 
 
 def _save_watchlist(store, etf_code: str, enabled: bool, allow_buy: bool, category: str) -> None:

@@ -131,6 +131,38 @@ def load_snapshot(store: SQLiteStore, parquet_store: ParquetStore) -> PlatformSn
     )
 
 
+def load_maintenance_task_snapshot(store: SQLiteStore) -> PlatformSnapshot:
+    """Load only cheap SQLite-backed data needed by maintenance task pages."""
+
+    store.initialize_schema()
+    raw_master = store.list_etf_master()
+    watchlist = store.list_watchlist()
+    coverage = store.list_index_history_coverage()
+    return PlatformSnapshot(
+        master=raw_master,
+        watchlist=watchlist,
+        index_summary=_lightweight_index_summary(coverage),
+        universe=pd.DataFrame(),
+        gaps=pd.DataFrame(),
+        coverage=pd.DataFrame(),
+        generated_at=datetime.now(),
+    )
+
+
+def _lightweight_index_summary(coverage: pd.DataFrame) -> pd.DataFrame:
+    if coverage.empty or "index_code" not in coverage:
+        return pd.DataFrame(columns=["index_code", "latest_date", "data_status"])
+
+    result = pd.DataFrame({"index_code": coverage["index_code"].fillna("").astype(str)})
+    latest = coverage["latest_trade_date"] if "latest_trade_date" in coverage else pd.Series([""] * len(coverage))
+    result["latest_date"] = latest.fillna("").astype(str).to_numpy()
+    completeness = (
+        coverage["completeness_status"] if "completeness_status" in coverage else pd.Series([""] * len(coverage))
+    ).fillna("").astype(str).str.upper()
+    result["data_status"] = completeness.map(lambda value: "数据可用" if value == "COMPLETE" else "历史待补").to_numpy()
+    return result
+
+
 def _snapshot_catalog_entries(store: SQLiteStore) -> tuple[IndexCatalogEntry, ...]:
     catalog = store.list_index_catalog()
     if catalog.empty:

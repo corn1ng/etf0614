@@ -237,6 +237,42 @@ def test_load_snapshot_cached_refreshes_after_ttl(monkeypatch):
     assert calls == ["called", "called"]
 
 
+def test_maintenance_task_snapshot_does_not_build_platform_health(tmp_path, monkeypatch):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    store.upsert_etf_master(
+        pd.DataFrame(
+            [
+                {
+                    "etf_code": "510300",
+                    "name": "沪深300ETF",
+                    "exchange": "SSE",
+                    "category": "A股宽基",
+                    "tracking_index": "000300",
+                    "is_active": 1,
+                }
+            ]
+        )
+    )
+
+    for name in (
+        "build_index_trend_summary",
+        "build_index_etf_universe",
+        "build_etf_data_overview",
+        "build_data_gap_detail",
+        "build_data_coverage_summary",
+    ):
+        monkeypatch.setattr(state, name, lambda *args, **kwargs: pytest.fail(f"{name} should not run"))
+
+    snapshot = state.load_maintenance_task_snapshot(store)
+
+    assert snapshot.master["etf_code"].tolist() == ["510300"]
+    assert snapshot.watchlist.empty
+    assert snapshot.universe.empty
+    assert snapshot.gaps.empty
+    assert snapshot.coverage.empty
+
+
 def test_load_snapshot_limits_tradeable_universe_and_mapping_to_sqlite_core_catalog(tmp_path, monkeypatch):
     store = SQLiteStore(tmp_path / "etf.sqlite")
     parquet_store = ParquetStore(tmp_path / "parquet")
