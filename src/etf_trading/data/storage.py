@@ -118,6 +118,10 @@ class SQLiteStore:
                     source_kind TEXT NOT NULL,
                     provider_symbol TEXT NOT NULL,
                     aliases_json TEXT NOT NULL DEFAULT '[]',
+                    baseline_evidence_kind TEXT NOT NULL DEFAULT 'unresolved',
+                    baseline_evidence_name TEXT NOT NULL DEFAULT '',
+                    baseline_evidence_url TEXT NOT NULL DEFAULT '',
+                    baseline_checked_at TEXT,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -175,6 +179,16 @@ class SQLiteStore:
                 );
                 """
             )
+            existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(index_catalog)")}
+            evidence_columns = {
+                "baseline_evidence_kind": "TEXT NOT NULL DEFAULT 'unresolved'",
+                "baseline_evidence_name": "TEXT NOT NULL DEFAULT ''",
+                "baseline_evidence_url": "TEXT NOT NULL DEFAULT ''",
+                "baseline_checked_at": "TEXT",
+            }
+            for column, definition in evidence_columns.items():
+                if column not in existing_columns:
+                    conn.execute(f"ALTER TABLE index_catalog ADD COLUMN {column} {definition}")
 
     def upsert_etf_master(self, frame: pd.DataFrame) -> None:
         if frame.empty:
@@ -217,6 +231,7 @@ class SQLiteStore:
         columns = [
             "index_code", "name", "market", "category_level_1", "category_level_2", "index_type", "pool",
             "index_base_date", "baseline_source", "source_kind", "provider_symbol", "aliases_json",
+            "baseline_evidence_kind", "baseline_evidence_name", "baseline_evidence_url", "baseline_checked_at",
         ]
         rows = [
             (
@@ -232,6 +247,10 @@ class SQLiteStore:
                 entry.source_kind,
                 entry.provider_symbol,
                 json.dumps(entry.aliases, ensure_ascii=False),
+                entry.baseline_evidence_kind,
+                entry.baseline_evidence_name,
+                entry.baseline_evidence_url,
+                entry.baseline_checked_at.isoformat() if entry.baseline_checked_at else None,
             )
             for entry in entries
         ]

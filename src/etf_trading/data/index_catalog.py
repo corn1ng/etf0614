@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 import json
 from pathlib import Path
@@ -16,9 +16,23 @@ if TYPE_CHECKING:
 
 
 Pool = Literal["core", "research", "reserve"]
-BaselineSource = Literal["official_methodology", "official_factsheet", "unverified"]
+BaselineSource = Literal[
+    "official_methodology",
+    "official_factsheet",
+    "official_api",
+    "third_party_reference",
+    "third_party_publication",
+    "unverified",
+]
+BaselineEvidenceKind = Literal[
+    "official_base_date",
+    "third_party_base_date",
+    "publication_date",
+    "unresolved",
+]
 SourceKind = Literal["csi", "shenwan", "hk"]
 DEFAULT_INDEX_CATALOG_PATH = Path(__file__).resolve().parents[3] / "configs" / "index_universe.yaml"
+DEFAULT_BASELINE_EVIDENCE_PATH = Path(__file__).resolve().parents[3] / "configs" / "index_baseline_evidence.yaml"
 _LEGACY_CATEGORIES = {
     "000300": "A股宽基", "000905": "A股宽基", "000852": "A股宽基", "932000": "A股宽基",
     "000510": "A股宽基", "930050": "A股宽基", "000903": "A股宽基", "000906": "A股宽基",
@@ -37,6 +51,18 @@ _LEGACY_CATEGORIES = {
 
 
 @dataclass(frozen=True)
+class BaselineEvidence:
+    index_code: str
+    reference_date: date | None
+    source: BaselineSource
+    kind: BaselineEvidenceKind
+    source_name: str
+    source_url: str
+    checked_at: date | None
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class IndexCatalogEntry:
     index_code: str
     name: str
@@ -50,6 +76,10 @@ class IndexCatalogEntry:
     source_kind: SourceKind
     provider_symbol: str
     aliases: tuple[str, ...] = ()
+    baseline_evidence_kind: BaselineEvidenceKind = "unresolved"
+    baseline_evidence_name: str = ""
+    baseline_evidence_url: str = ""
+    baseline_checked_at: date | None = None
 
     def to_index_definition(self) -> "IndexDefinition":
         from etf_trading.data.indexes import IndexDefinition
@@ -64,20 +94,86 @@ class IndexCatalogEntry:
             self.index_base_date,
             self.baseline_source,
             self.source_kind,
+            self.baseline_evidence_kind,
+            self.baseline_evidence_name,
+            self.baseline_evidence_url,
+            self.baseline_checked_at,
         )
 
 
 def default_index_catalog() -> tuple[IndexCatalogEntry, ...]:
-    return load_index_catalog(DEFAULT_INDEX_CATALOG_PATH)
+    return load_index_catalog()
 
 
-def load_index_catalog(path: str | Path) -> tuple[IndexCatalogEntry, ...]:
+def load_index_catalog(
+    path: str | Path = DEFAULT_INDEX_CATALOG_PATH,
+    *,
+    evidence_path: str | Path = DEFAULT_BASELINE_EVIDENCE_PATH,
+) -> tuple[IndexCatalogEntry, ...]:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError("index catalog root must be a mapping")
     entries = tuple(_entry_from_mapping(item) for item in _expand_catalog_mappings(raw))
     _validate_catalog(entries)
+    entries = apply_baseline_evidence(entries, load_baseline_evidence(evidence_path))
+    _validate_catalog(entries)
     return entries
+
+
+def load_baseline_evidence(path: str | Path) -> tuple[BaselineEvidence, ...]:
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("baseline evidence root must be a mapping")
+    mappings = raw.get("evidence", {})
+    if not isinstance(mappings, dict):
+        raise ValueError("baseline evidence must be a mapping")
+
+    evidence: list[BaselineEvidence] = []
+    for code, item in mappings.items():
+        if not isinstance(item, dict):
+            raise ValueError("each baseline evidence entry must be a mapping")
+        index_code = str(code).strip()
+        if not index_code:
+            raise ValueError("baseline evidence requires index_code")
+        entry = BaselineEvidence(
+            index_code=index_code,
+            reference_date=_parse_date(item.get("reference_date")),
+            source=str(item.get("source") or "unverified").strip(),  # type: ignore[arg-type]
+            kind=str(item.get("kind") or "unresolved").strip(),  # type: ignore[arg-type]
+            source_name=str(item.get("source_name") or "").strip(),
+            source_url=str(item.get("source_url") or "").strip(),
+            checked_at=_parse_date(item.get("checked_at")),
+            detail=str(item.get("detail") or "").strip(),
+        )
+        _validate_baseline_metadata(
+            entry.index_code,
+            entry.reference_date,
+            entry.source,
+            entry.kind,
+        )
+        evidence.append(entry)
+    return tuple(evidence)
+
+
+def apply_baseline_evidence(
+    entries: Sequence[IndexCatalogEntry],
+    evidence: Sequence[BaselineEvidence],
+) -> tuple[IndexCatalogEntry, ...]:
+    by_code = {item.index_code: item for item in evidence}
+    return tuple(
+        replace(
+            entry,
+            index_base_date=item.reference_date,
+            baseline_source=item.source,
+            baseline_evidence_kind=item.kind,
+            baseline_evidence_name=item.source_name,
+            baseline_evidence_url=item.source_url,
+            baseline_checked_at=item.checked_at,
+        )
+        if (item := by_code.get(entry.index_code)) is not None
+        else entry
+        for entry in entries
+    )
 
 
 def catalog_definitions(
@@ -101,6 +197,8 @@ def catalog_entries_from_frame(frame: "pd.DataFrame") -> tuple[IndexCatalogEntry
     for row in frame.itertuples(index=False):
         base_value = getattr(row, "index_base_date", None)
         base_date = None if base_value is None or pd.isna(base_value) else pd.Timestamp(base_value).date()
+        checked_value = getattr(row, "baseline_checked_at", None)
+        checked_at = None if checked_value is None or pd.isna(checked_value) else pd.Timestamp(checked_value).date()
         try:
             aliases = tuple(str(value) for value in json.loads(getattr(row, "aliases_json", "[]") or "[]"))
         except (TypeError, json.JSONDecodeError):
@@ -119,6 +217,10 @@ def catalog_entries_from_frame(frame: "pd.DataFrame") -> tuple[IndexCatalogEntry
                 source_kind=str(row.source_kind),  # type: ignore[arg-type]
                 provider_symbol=str(row.provider_symbol),
                 aliases=aliases,
+                baseline_evidence_kind=str(getattr(row, "baseline_evidence_kind", "unresolved") or "unresolved"),  # type: ignore[arg-type]
+                baseline_evidence_name=str(getattr(row, "baseline_evidence_name", "") or ""),
+                baseline_evidence_url=str(getattr(row, "baseline_evidence_url", "") or ""),
+                baseline_checked_at=checked_at,
             )
         )
     return tuple(entries)
@@ -186,10 +288,37 @@ def _validate_catalog(entries: Sequence[IndexCatalogEntry]) -> None:
             raise ValueError(f"unsupported pool: {entry.pool}")
         if entry.source_kind not in {"csi", "shenwan", "hk"}:
             raise ValueError(f"unsupported source_kind: {entry.source_kind}")
-        if entry.baseline_source not in {"official_methodology", "official_factsheet", "unverified"}:
-            raise ValueError(f"unsupported baseline_source: {entry.baseline_source}")
-        if entry.baseline_source != "unverified" and entry.index_base_date is None:
-            raise ValueError(f"official baseline requires index_base_date: {entry.index_code}")
+        _validate_baseline_metadata(
+            entry.index_code,
+            entry.index_base_date,
+            entry.baseline_source,
+            entry.baseline_evidence_kind,
+        )
+
+
+def _validate_baseline_metadata(
+    index_code: str,
+    reference_date: date | None,
+    source: BaselineSource,
+    kind: BaselineEvidenceKind,
+) -> None:
+    if source not in {
+        "official_methodology",
+        "official_factsheet",
+        "official_api",
+        "third_party_reference",
+        "third_party_publication",
+        "unverified",
+    }:
+        raise ValueError(f"unsupported baseline_source: {source}")
+    if kind not in {"official_base_date", "third_party_base_date", "publication_date", "unresolved"}:
+        raise ValueError(f"unsupported baseline evidence kind: {kind}")
+    if source != "unverified" and reference_date is None:
+        raise ValueError(f"verified baseline requires index_base_date: {index_code}")
+    if kind == "publication_date" and source != "third_party_publication":
+        raise ValueError(f"publication_date requires third_party_publication: {index_code}")
+    if kind == "official_base_date" and not source.startswith("official_"):
+        raise ValueError(f"official_base_date requires official source: {index_code}")
 
 
 def _required_text(item: dict[str, object], key: str) -> str:

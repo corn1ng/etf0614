@@ -24,6 +24,10 @@ class IndexDefinition:
     index_base_date: date | None = None
     baseline_source: str = "unverified"
     source_kind: str | None = None
+    baseline_evidence_kind: str = "unresolved"
+    baseline_evidence_name: str = ""
+    baseline_evidence_url: str = ""
+    baseline_checked_at: date | None = None
 
 
 DEFAULT_INDEXES: tuple[IndexDefinition, ...] = catalog_definitions(default_index_catalog())

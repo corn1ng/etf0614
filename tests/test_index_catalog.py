@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from etf_trading.data.index_catalog import default_index_catalog, load_index_catalog
+from etf_trading.data.index_catalog import default_index_catalog, load_baseline_evidence, load_index_catalog
 
 
 def test_default_catalog_has_target_pool_boundaries():
@@ -71,3 +71,50 @@ def test_catalog_accepts_unverified_baseline_without_claiming_history_complete(t
 
     assert entry.index_base_date is None
     assert entry.baseline_source == "unverified"
+
+
+def test_catalog_evidence_overlay_updates_only_named_index(tmp_path):
+    overlay = tmp_path / "index_baseline_evidence.yaml"
+    overlay.write_text(
+        "evidence:\n"
+        "  '000300':\n"
+        "    reference_date: '2004-12-31'\n"
+        "    source: official_api\n"
+        "    kind: official_base_date\n"
+        "    source_name: 中证指数官方基础信息\n"
+        "    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000300\n"
+        "    checked_at: '2026-07-12'\n",
+        encoding="utf-8",
+    )
+
+    entries = load_index_catalog(evidence_path=overlay)
+    by_code = {entry.index_code: entry for entry in entries}
+
+    assert by_code["000300"].index_base_date == date(2004, 12, 31)
+    assert by_code["000300"].baseline_source == "official_api"
+    assert by_code["000300"].baseline_evidence_kind == "official_base_date"
+    assert by_code["000905"].baseline_source == "unverified"
+
+
+@pytest.mark.parametrize(
+    ("source", "kind", "reference_date"),
+    [
+        ("official_api", "unresolved", None),
+        ("official_api", "publication_date", "2004-12-31"),
+        ("third_party_reference", "official_base_date", "2004-12-31"),
+    ],
+)
+def test_baseline_evidence_rejects_incompatible_source_kind_or_missing_date(tmp_path, source, kind, reference_date):
+    evidence = tmp_path / "index_baseline_evidence.yaml"
+    reference_line = f"    reference_date: '{reference_date}'\n" if reference_date else ""
+    evidence.write_text(
+        "evidence:\n"
+        "  '000300':\n"
+        f"{reference_line}"
+        f"    source: {source}\n"
+        f"    kind: {kind}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        load_baseline_evidence(evidence)

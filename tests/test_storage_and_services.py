@@ -1,4 +1,5 @@
 from datetime import date
+import sqlite3
 
 import pandas as pd
 
@@ -120,6 +121,10 @@ def _catalog_entry(
     source_kind: SourceKind = "csi",
     index_base_date: date | None = date(2005, 1, 4),
     baseline_source: BaselineSource = "official_methodology",
+    baseline_evidence_kind: str = "official_base_date",
+    baseline_evidence_name: str = "",
+    baseline_evidence_url: str = "",
+    baseline_checked_at: date | None = None,
 ) -> IndexCatalogEntry:
     return IndexCatalogEntry(
         index_code=index_code,
@@ -133,6 +138,10 @@ def _catalog_entry(
         baseline_source=baseline_source,
         source_kind=source_kind,
         provider_symbol=index_code,
+        baseline_evidence_kind=baseline_evidence_kind,
+        baseline_evidence_name=baseline_evidence_name,
+        baseline_evidence_url=baseline_evidence_url,
+        baseline_checked_at=baseline_checked_at,
     )
 
 
@@ -457,6 +466,61 @@ def test_sqlite_store_persists_catalog_coverage_and_etf_mappings(tmp_path):
     assert catalog.iloc[0]["baseline_source"] == "unverified"
     assert coverage.iloc[0]["completeness_status"] == "BASELINE_UNVERIFIED"
     assert mappings.iloc[0]["is_tradable"] == 1
+
+
+def test_sqlite_catalog_round_trips_third_party_publication_evidence(tmp_path):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    entry = _catalog_entry(
+        "000300",
+        index_base_date=date(2005, 4, 8),
+        baseline_source="third_party_publication",
+        baseline_evidence_kind="publication_date",
+        baseline_evidence_name="聚宽",
+        baseline_evidence_url="https://www.joinquant.com/data/dict/indexData",
+        baseline_checked_at=date(2026, 7, 12),
+    )
+
+    store.initialize_schema()
+    store.upsert_index_catalog([entry])
+    row = store.list_index_catalog(include_reserve=True).iloc[0]
+
+    assert row["baseline_evidence_kind"] == "publication_date"
+    assert row["baseline_evidence_name"] == "聚宽"
+
+
+def test_sqlite_catalog_migrates_existing_schema_with_evidence_columns(tmp_path):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE index_catalog (
+                index_code TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                market TEXT NOT NULL,
+                category_level_1 TEXT NOT NULL,
+                category_level_2 TEXT NOT NULL,
+                index_type TEXT NOT NULL,
+                pool TEXT NOT NULL,
+                index_base_date TEXT,
+                baseline_source TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                provider_symbol TEXT NOT NULL,
+                aliases_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+    store.initialize_schema()
+    with store.connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(index_catalog)")}
+
+    assert {
+        "baseline_evidence_kind",
+        "baseline_evidence_name",
+        "baseline_evidence_url",
+        "baseline_checked_at",
+    } <= columns
 
 
 class _PartialIndexHistoryProvider(_FakeEtfBatchProvider):
