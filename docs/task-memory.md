@@ -1,5 +1,13 @@
 # Task Memory
 
+## 2026-07-12 - Design the minimal contributor guide
+
+- Summary: Defined a 200–250 word `AGENTS.md` that keeps repository-specific commands and Task Memory requirements while linking longer explanations to existing documentation.
+- Verification: Documentation-only change; checked the design for concrete sections, repository paths, commands, and external-document boundaries.
+- Watch out next time:
+  - Keep `AGENTS.md` optimized for daily contribution; put detailed procedures in `README.md` or focused files under `docs/`.
+  - Preserve the Task Memory link and update requirement even when shortening the guide.
+
 Use this file as the project-level memory for future Codex tasks. Read it at the start of substantive work and update it after every task that changes files or project behavior.
 
 Keep entries concise and reusable. Prefer lessons, constraints, verification notes, and project-specific pitfalls over a raw activity log.
