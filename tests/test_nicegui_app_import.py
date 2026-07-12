@@ -918,7 +918,7 @@ def test_index_health_page_uses_cached_snapshot(monkeypatch):
         }
     )
 
-    def fake_cached(parquet_store, definitions=None, *, force_refresh=False):
+    def fake_cached(parquet_store, definitions=None, *, coverage=None, force_refresh=False):
         calls.append(force_refresh)
         return IndexHealthSnapshotCacheResult(summary=summary, details=details, status="ready", generated_at=datetime(2026, 7, 6, 10, 0, 0))
 

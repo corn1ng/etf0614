@@ -61,6 +61,10 @@ INDEX_HEALTH_SUMMARY_COLUMNS = (
     "index_code",
     "index_name",
     "category",
+    "pool",
+    "index_base_date",
+    "history_completeness_status",
+    "history_completeness_message",
     "latest_date",
     "history_rows",
     "large_trend",
@@ -228,15 +232,33 @@ def index_data_status_notice(snapshot: PlatformSnapshot) -> str:
 def market_overview(snapshot: PlatformSnapshot) -> dict[str, object]:
     frame = snapshot.index_summary.copy()
     if frame.empty:
-        return {"total_indexes": 0, "allowed_indexes": 0, "categories": []}
+        return {
+            "total_indexes": 0,
+            "allowed_indexes": 0,
+            "core_indexes": 0,
+            "research_indexes": 0,
+            "incomplete_history_indexes": 0,
+            "categories": [],
+        }
 
     allowed = _allowed_series(frame)
+    pools = _string_series(frame, "pool")
+    completeness = _string_series(frame, "history_completeness_status")
     categories = []
     if "category" in frame:
         grouped = frame.assign(_allowed=allowed).groupby("category", dropna=False)
         for category, group in grouped:
             categories.append({"category": str(category), "total": int(len(group)), "allowed": int(group["_allowed"].sum())})
-    return {"total_indexes": int(len(frame)), "allowed_indexes": int(allowed.sum()), "categories": categories}
+    return {
+        "total_indexes": int(len(frame)),
+        "allowed_indexes": int(allowed.sum()),
+        "core_indexes": int((pools == "core").sum()),
+        "research_indexes": int((pools == "research").sum()),
+        "incomplete_history_indexes": int(
+            completeness.isin(["INCOMPLETE", "MISSING_HISTORY", "BASELINE_UNVERIFIED", "READ_FAILED", "NOT_VALIDATED"]).sum()
+        ),
+        "categories": categories,
+    }
 
 
 def etf_overview_rows(snapshot: PlatformSnapshot) -> list[dict[str, object]]:

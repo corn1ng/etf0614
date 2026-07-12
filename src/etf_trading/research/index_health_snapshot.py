@@ -17,6 +17,10 @@ INDEX_HEALTH_SUMMARY_COLUMNS = [
     "index_name",
     "market",
     "category",
+    "pool",
+    "index_base_date",
+    "history_completeness_status",
+    "history_completeness_message",
     "latest_date",
     "history_rows",
     "large_trend",
@@ -67,6 +71,7 @@ def build_index_health_snapshot(
     parquet_store,
     definitions: Sequence[IndexDefinition] = DEFAULT_INDEXES,
     *,
+    coverage: pd.DataFrame | None = None,
     as_of_date: pd.Timestamp | str | None = None,
     min_price_history_rows: int = 252,
     min_valuation_history_rows: int = 756,
@@ -76,6 +81,7 @@ def build_index_health_snapshot(
     summary_rows: list[dict[str, object]] = []
     detail_rows: list[dict[str, object]] = []
     max_date = pd.Timestamp(as_of_date) if as_of_date is not None else None
+    coverage_by_code = _coverage_by_index_code(coverage)
 
     for definition in definitions:
         prices, price_error = _read_frame(lambda: parquet_store.read_index_prices(definition.index_code))
@@ -90,9 +96,10 @@ def build_index_health_snapshot(
             max_date,
         )
 
-        row = _identity_row(definition)
+        row = _identity_row(definition, coverage_by_code.get(definition.index_code, {}))
         row.update(trend_summary)
         row.update(valuation_summary)
+        row["allows_new_position"] = _allows_new_position(row, definition)
         summary_rows.append(row)
         detail_rows.extend(trend_details)
         detail_rows.extend(valuation_details)
@@ -110,13 +117,41 @@ def _read_frame(loader) -> tuple[pd.DataFrame, str]:
     return frame, ""
 
 
-def _identity_row(definition: IndexDefinition) -> dict[str, object]:
+def _identity_row(definition: IndexDefinition, coverage: dict[str, object]) -> dict[str, object]:
+    base_date = definition.index_base_date.isoformat() if definition.index_base_date is not None else ""
     return {
         "index_code": definition.index_code,
         "index_name": definition.name,
         "market": definition.market,
         "category": definition.category,
+        "pool": definition.pool or "core",
+        "index_base_date": base_date,
+        "history_completeness_status": str(coverage.get("completeness_status") or "NOT_VALIDATED"),
+        "history_completeness_message": str(coverage.get("completeness_message") or "尚未校验历史完整性"),
     }
+
+
+def _coverage_by_index_code(coverage: pd.DataFrame | None) -> dict[str, dict[str, object]]:
+    if coverage is None or coverage.empty or "index_code" not in coverage:
+        return {}
+    result: dict[str, dict[str, object]] = {}
+    for row in coverage.fillna("").to_dict("records"):
+        code = str(row.get("index_code") or "").strip()
+        if code:
+            result[code] = row
+    return result
+
+
+def _allows_new_position(row: dict[str, object], definition: IndexDefinition) -> bool:
+    if not bool(row.get("allows_new_position", False)):
+        return False
+    if definition.pool is None:
+        return True
+    return bool(
+        definition.pool == "core"
+        and row.get("history_completeness_status") == "COMPLETE"
+        and row.get("trend_health_status") == "normal"
+    )
 
 
 def _trend_diagnostics(

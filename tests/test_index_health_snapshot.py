@@ -1,8 +1,10 @@
 import numpy as np
 import pandas as pd
+from datetime import date
 
 from etf_trading.data.indexes import IndexDefinition
 from etf_trading.data.index_valuations import finalize_index_valuation_frame
+from etf_trading.nicegui_app.state import build_index_trend_summary
 from etf_trading.data.storage import ParquetStore
 from etf_trading.research.index_health_snapshot import build_index_health_snapshot
 
@@ -73,3 +75,61 @@ def test_index_health_snapshot_keeps_missing_valuation_explicit(tmp_path):
     assert set(valuation_rows["metric_name"]) == {"pe_ttm", "pb", "erp"}
     assert set(valuation_rows["status"]) == {"missing_valuation"}
     assert all("没有本地估值历史" in str(reason) for reason in valuation_rows["reason"])
+
+
+def test_index_trend_summary_includes_catalog_pool_and_history_completeness(tmp_path):
+    store = ParquetStore(tmp_path)
+    store.write_index_prices("801010", _prices("801010", rows=320))
+    definitions = (
+        IndexDefinition(
+            "801010",
+            "农林牧渔",
+            "A股",
+            "申万一级行业",
+            "801010",
+            pool="research",
+            index_base_date=date(1999, 12, 30),
+            baseline_source="official_methodology",
+        ),
+    )
+    coverage = pd.DataFrame(
+        [
+            {
+                "index_code": "801010",
+                "completeness_status": "INCOMPLETE",
+                "completeness_message": "应从 1999-12-30 开始，本地仅从 2005-01-04 开始",
+            }
+        ]
+    )
+
+    summary = build_index_trend_summary(store, definitions=definitions, coverage=coverage)
+
+    assert summary.iloc[0]["pool"] == "research"
+    assert summary.iloc[0]["history_completeness_status"] == "INCOMPLETE"
+    assert bool(summary.iloc[0]["allows_new_position"]) is False
+
+
+def test_index_health_snapshot_propagates_catalog_coverage_and_blocks_research_pool(tmp_path):
+    store = ParquetStore(tmp_path)
+    store.write_index_prices("801010", _prices("801010", rows=320))
+    definitions = (
+        IndexDefinition(
+            "801010",
+            "农林牧渔",
+            "A股",
+            "申万一级行业",
+            "801010",
+            pool="research",
+            index_base_date=date(1999, 12, 30),
+            baseline_source="official_methodology",
+        ),
+    )
+    coverage = pd.DataFrame(
+        [{"index_code": "801010", "completeness_status": "INCOMPLETE", "completeness_message": "历史不完整"}]
+    )
+
+    summary, _ = build_index_health_snapshot(store, definitions=definitions, coverage=coverage)
+
+    assert summary.iloc[0]["pool"] == "research"
+    assert summary.iloc[0]["history_completeness_status"] == "INCOMPLETE"
+    assert bool(summary.iloc[0]["allows_new_position"]) is False

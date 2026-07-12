@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pandas as pd
 from nicegui import ui
 
+from etf_trading.data.indexes import IndexDefinition
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.charts import render_ranged_lightweight_chart
 from etf_trading.nicegui_app.components.tables import render_table
@@ -43,6 +45,9 @@ def _render_overview(snapshot: PlatformSnapshot) -> None:
     overview = market_overview(snapshot)
     with ui.row().classes("w-full gap-2"):
         _metric("指数总数", overview["total_indexes"], "全市场观察池")
+        _metric("核心池", overview["core_indexes"], "可进入策略前置核验")
+        _metric("研究池", overview["research_indexes"], "仅供观察研究")
+        _metric("历史待补/待核验", overview["incomplete_history_indexes"], "不作为买卖依据")
         _metric("可参与指数", overview["allowed_indexes"], "趋势允许")
         _metric("覆盖分类", len(overview["categories"]), "市场分组")
 
@@ -72,7 +77,8 @@ def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
         return
 
     try:
-        cache_result = load_index_health_snapshot_cached(parquet_store)
+        definitions, coverage = _index_health_inputs(snapshot)
+        cache_result = load_index_health_snapshot_cached(parquet_store, definitions, coverage=coverage)
         holder = {"summary": cache_result.summary, "details": cache_result.details, "result": cache_result}
     except Exception as exc:  # noqa: BLE001 - diagnostics should surface snapshot failures
         empty_state("指数体检快照生成失败", str(exc))
@@ -200,7 +206,12 @@ def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
             should_force_refresh = holder["result"].status == "ready"
             if should_force_refresh:
                 invalidate_index_health_snapshot_cache(parquet_store)
-            cache_result = load_index_health_snapshot_cached(parquet_store, force_refresh=should_force_refresh)
+            cache_result = load_index_health_snapshot_cached(
+                parquet_store,
+                definitions,
+                coverage=coverage,
+                force_refresh=should_force_refresh,
+            )
             holder["summary"] = cache_result.summary
             holder["details"] = cache_result.details
             holder["result"] = cache_result
@@ -227,6 +238,46 @@ def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
     render_metrics()
     refresh_table()
     _render_audit("market")
+
+
+def _index_health_inputs(snapshot: PlatformSnapshot) -> tuple[tuple[IndexDefinition, ...], pd.DataFrame]:
+    summary = snapshot.index_summary.copy()
+    if summary.empty or "index_code" not in summary:
+        return (), pd.DataFrame()
+    definitions: list[IndexDefinition] = []
+    for row in summary.fillna("").to_dict("records"):
+        code = str(row.get("index_code") or "").strip()
+        if not code:
+            continue
+        base_date = pd.to_datetime(row.get("index_base_date"), errors="coerce")
+        definitions.append(
+            IndexDefinition(
+                code,
+                str(row.get("index_name") or code),
+                str(row.get("market") or ""),
+                str(row.get("category") or ""),
+                code,
+                pool=str(row.get("pool") or "core"),
+                index_base_date=None if pd.isna(base_date) else pd.Timestamp(base_date).date(),
+            )
+        )
+    coverage_columns = [
+        column
+        for column in (
+            "index_code",
+            "index_base_date",
+            "history_completeness_status",
+            "history_completeness_message",
+        )
+        if column in summary
+    ]
+    coverage = summary[coverage_columns].rename(
+        columns={
+            "history_completeness_status": "completeness_status",
+            "history_completeness_message": "completeness_message",
+        }
+    )
+    return tuple(definitions), coverage
 
 
 def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:

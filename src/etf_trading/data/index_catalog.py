@@ -60,6 +60,9 @@ class IndexCatalogEntry:
             self.market,
             _display_category(self),
             self.provider_symbol,
+            self.pool,
+            self.index_base_date,
+            self.baseline_source,
         )
 
 

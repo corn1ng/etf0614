@@ -55,7 +55,7 @@ _ATOMIC_SNAPSHOT_CACHE: dict[str, tuple[str, pd.DataFrame, datetime | None]] = {
 _ATOMIC_SNAPSHOT_ERRORS: dict[str, str] = {}
 _ATOMIC_SNAPSHOT_CACHE_LOCK = RLock()
 ATOMIC_SNAPSHOT_BUILD_MARKER_MAX_AGE_SECONDS = 600.0
-INDEX_HEALTH_SNAPSHOT_CACHE_SCHEMA_VERSION = 1
+INDEX_HEALTH_SNAPSHOT_CACHE_SCHEMA_VERSION = 2
 _INDEX_HEALTH_SNAPSHOT_CACHE: dict[str, tuple[str, pd.DataFrame, pd.DataFrame, datetime | None]] = {}
 _INDEX_HEALTH_SNAPSHOT_CACHE_LOCK = RLock()
 
@@ -91,12 +91,18 @@ def load_snapshot(store: SQLiteStore, parquet_store: ParquetStore) -> PlatformSn
     watchlist = store.list_watchlist()
     catalog_entries = _snapshot_catalog_entries(store)
     core_entries = tuple(entry for entry in catalog_entries if entry.pool == "core")
-    index_summary = build_index_trend_summary(parquet_store, catalog_definitions(catalog_entries))
+    history_coverage = store.list_index_history_coverage()
+    index_summary = build_index_trend_summary(
+        parquet_store,
+        catalog_definitions(catalog_entries),
+        coverage=history_coverage,
+    )
     universe = build_index_etf_universe(raw_master, parquet_store, entries=core_entries)
     store.replace_index_etf_mappings(
         universe,
         index_codes=[entry.index_code for entry in core_entries],
     )
+    index_summary = _attach_index_etf_mapping_count(index_summary, universe)
     etf_overview = build_etf_data_overview(raw_master, watchlist, parquet_store, universe)
     gaps = build_data_gap_detail(raw_master, watchlist, index_summary, universe, parquet_store)
     coverage = build_data_coverage_summary(gaps, raw_master, watchlist, index_summary, universe)
@@ -118,6 +124,19 @@ def _snapshot_catalog_entries(store: SQLiteStore) -> tuple[IndexCatalogEntry, ..
         store.upsert_index_catalog(entries)
         return tuple(entry for entry in entries if entry.pool != "reserve")
     return catalog_entries_from_frame(catalog)
+
+
+def _attach_index_etf_mapping_count(index_summary: pd.DataFrame, universe: pd.DataFrame) -> pd.DataFrame:
+    result = index_summary.copy()
+    if result.empty:
+        result["etf_mapping_count"] = pd.Series(dtype=int)
+        return result
+    if universe.empty or "index_code" not in universe:
+        result["etf_mapping_count"] = 0
+        return result
+    counts = universe.groupby("index_code")["etf_code"].nunique()
+    result["etf_mapping_count"] = result["index_code"].astype(str).map(counts).fillna(0).astype(int)
+    return result
 
 
 def load_snapshot_cached(
@@ -214,9 +233,10 @@ def load_index_health_snapshot_cached(
     parquet_store: ParquetStore,
     definitions: tuple[IndexDefinition, ...] = DEFAULT_INDEXES,
     *,
+    coverage: pd.DataFrame | None = None,
     force_refresh: bool = False,
 ) -> IndexHealthSnapshotCacheResult:
-    source_signature = _index_health_snapshot_source_signature(parquet_store, definitions)
+    source_signature = _index_health_snapshot_source_signature(parquet_store, definitions, coverage)
     cache_key = _index_health_snapshot_cache_key(parquet_store)
 
     if not force_refresh:
@@ -241,7 +261,7 @@ def load_index_health_snapshot_cached(
             return IndexHealthSnapshotCacheResult(summary=summary.copy(), details=details.copy(), status="ready", generated_at=generated_at)
 
     try:
-        summary, details = build_index_health_snapshot(parquet_store, definitions=definitions)
+        summary, details = build_index_health_snapshot(parquet_store, definitions=definitions, coverage=coverage)
         generated_at = datetime.now()
         _write_index_health_snapshot_disk_cache(summary, details, source_signature, generated_at, parquet_store)
         with _INDEX_HEALTH_SNAPSHOT_CACHE_LOCK:
@@ -332,11 +352,20 @@ def _atomic_snapshot_source_signature(master: pd.DataFrame, parquet_store: Parqu
     return digest.hexdigest()
 
 
-def _index_health_snapshot_source_signature(parquet_store: ParquetStore, definitions: tuple[IndexDefinition, ...]) -> str:
+def _index_health_snapshot_source_signature(
+    parquet_store: ParquetStore,
+    definitions: tuple[IndexDefinition, ...],
+    coverage: pd.DataFrame | None = None,
+) -> str:
     digest = hashlib.sha256()
     root = Path(getattr(parquet_store, "root", "data/parquet")).resolve()
     codes = [definition.index_code for definition in definitions]
-    digest.update("|".join(codes).encode())
+    definition_signature = "|".join(
+        f"{definition.index_code}:{definition.pool}:{definition.index_base_date}:{definition.baseline_source}"
+        for definition in definitions
+    )
+    digest.update(definition_signature.encode())
+    digest.update(_index_coverage_signature_bytes(coverage))
     for folder in ("indexes", "index_valuations"):
         existing_count = 0
         missing_count = 0
@@ -356,6 +385,27 @@ def _index_health_snapshot_source_signature(parquet_store: ParquetStore, definit
             max_mtime_ns = max(max_mtime_ns, stat.st_mtime_ns)
         digest.update(f"|{folder}={existing_count}|missing={missing_count}|size={total_size}|mtime_sum={total_mtime_ns}|mtime_max={max_mtime_ns}".encode())
     return digest.hexdigest()
+
+
+def _index_coverage_signature_bytes(coverage: pd.DataFrame | None) -> bytes:
+    if coverage is None or coverage.empty or "index_code" not in coverage:
+        return b"|coverage=empty"
+    columns = [
+        column
+        for column in (
+            "index_code",
+            "completeness_status",
+            "completeness_message",
+            "index_base_date",
+            "baseline_source",
+            "validated_at",
+        )
+        if column in coverage
+    ]
+    if not columns:
+        return b"|coverage=no-columns"
+    normalized = coverage[columns].fillna("").astype(str).sort_values("index_code")
+    return ("|coverage=" + normalized.to_csv(index=False)).encode()
 
 
 def _atomic_master_signature_bytes(master: pd.DataFrame) -> bytes:
@@ -594,6 +644,10 @@ _INDEX_HEALTH_SUMMARY_TEXT_COLUMNS = {
     "index_name",
     "market",
     "category",
+    "pool",
+    "index_base_date",
+    "history_completeness_status",
+    "history_completeness_message",
     "latest_date",
     "large_trend",
     "medium_trend",
@@ -650,18 +704,27 @@ def build_index_trend_summary(
     parquet_store: ParquetStore,
     definitions: tuple[IndexDefinition, ...] = DEFAULT_INDEXES,
     *,
+    coverage: pd.DataFrame | None = None,
     today: date | pd.Timestamp | None = None,
     holidays: tuple[date | pd.Timestamp | str, ...] = (),
 ) -> pd.DataFrame:
     classifier = TrendRegimeClassifier()
     expected = expected_latest_trade_date(today, holidays)
+    coverage_by_code = _coverage_by_index_code(coverage)
     rows: list[dict[str, object]] = []
     for definition in definitions:
+        coverage_row = coverage_by_code.get(definition.index_code, {})
+        base_date = definition.index_base_date
+        base_text = base_date.isoformat() if base_date is not None else ""
         row = {
             "index_code": definition.index_code,
             "index_name": definition.name,
             "market": definition.market,
             "category": definition.category,
+            "pool": definition.pool or "core",
+            "index_base_date": base_text,
+            "history_completeness_status": str(coverage_row.get("completeness_status") or "NOT_VALIDATED"),
+            "history_completeness_message": str(coverage_row.get("completeness_message") or "尚未校验历史完整性"),
             "large_trend": "UNKNOWN",
             "medium_trend": "UNKNOWN",
             "small_trend": "UNKNOWN",
@@ -712,11 +775,34 @@ def build_index_trend_summary(
                 "large_trend": regime.large_trend,
                 "medium_trend": regime.medium_trend,
                 "small_trend": regime.small_trend,
-                "allows_new_position": bool(regime.allows_new_position),
+                "allows_new_position": _allows_new_index_position(row, definition, regime.allows_new_position),
             }
         )
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _coverage_by_index_code(coverage: pd.DataFrame | None) -> dict[str, dict[str, object]]:
+    if coverage is None or coverage.empty or "index_code" not in coverage:
+        return {}
+    result: dict[str, dict[str, object]] = {}
+    for row in coverage.fillna("").to_dict("records"):
+        code = str(row.get("index_code") or "").strip()
+        if code:
+            result[code] = row
+    return result
+
+
+def _allows_new_index_position(row: dict[str, object], definition: IndexDefinition, regime_allows: object) -> bool:
+    if not bool(regime_allows):
+        return False
+    if definition.pool is None:
+        return True
+    return bool(
+        definition.pool == "core"
+        and row.get("history_completeness_status") == "COMPLETE"
+        and row.get("data_status") == "数据可用"
+    )
 
 
 def index_chart_payload(parquet_store: ParquetStore, index_code: str) -> list[dict]:

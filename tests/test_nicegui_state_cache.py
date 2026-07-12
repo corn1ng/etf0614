@@ -229,12 +229,17 @@ def test_load_index_health_snapshot_cached_writes_and_reuses_disk_cache(tmp_path
     details = pd.DataFrame({"index_code": ["000300"], "detail_kind": ["valuation"], "metric_name": ["pe_ttm"]})
     calls: list[str] = []
 
-    def fake_builder(parquet_store, definitions=None):
+    def fake_builder(parquet_store, definitions=None, coverage=None):
         calls.append("build")
         return summary, details
 
     monkeypatch.setattr(state, "build_index_health_snapshot", fake_builder, raising=False)
-    monkeypatch.setattr(state, "_index_health_snapshot_source_signature", lambda parquet_store, definitions: "current", raising=False)
+    monkeypatch.setattr(
+        state,
+        "_index_health_snapshot_source_signature",
+        lambda parquet_store, definitions, coverage=None: "current",
+        raising=False,
+    )
     state.invalidate_index_health_snapshot_cache()
 
     parquet_store = FakeParquetStore(str(tmp_path / "parquet"))
@@ -263,8 +268,18 @@ def test_load_index_health_snapshot_cached_persists_mixed_detail_values(tmp_path
         }
     )
 
-    monkeypatch.setattr(state, "build_index_health_snapshot", lambda parquet_store, definitions=None: (summary, details), raising=False)
-    monkeypatch.setattr(state, "_index_health_snapshot_source_signature", lambda parquet_store, definitions: "mixed-values", raising=False)
+    monkeypatch.setattr(
+        state,
+        "build_index_health_snapshot",
+        lambda parquet_store, definitions=None, coverage=None: (summary, details),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        state,
+        "_index_health_snapshot_source_signature",
+        lambda parquet_store, definitions, coverage=None: "mixed-values",
+        raising=False,
+    )
     state.invalidate_index_health_snapshot_cache()
 
     parquet_store = FakeParquetStore(str(tmp_path / "parquet"))

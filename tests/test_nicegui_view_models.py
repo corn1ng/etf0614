@@ -168,6 +168,33 @@ def test_market_overview_groups_index_state():
     assert overview["categories"] == [{"category": "A股宽基", "total": 2, "allowed": 1}]
 
 
+def test_market_overview_counts_core_research_and_incomplete_history_separately():
+    snapshot = _snapshot()
+    snapshot = PlatformSnapshot(
+        master=snapshot.master,
+        watchlist=snapshot.watchlist,
+        index_summary=pd.DataFrame(
+            {
+                "index_code": ["000300", "801010", "801020"],
+                "category": ["A股宽基", "A股行业", "A股行业"],
+                "pool": ["core", "research", "research"],
+                "history_completeness_status": ["COMPLETE", "INCOMPLETE", "BASELINE_UNVERIFIED"],
+                "allows_new_position": [True, False, False],
+            }
+        ),
+        universe=snapshot.universe,
+        gaps=snapshot.gaps,
+        coverage=snapshot.coverage,
+        generated_at=snapshot.generated_at,
+    )
+
+    overview = market_overview(snapshot)
+
+    assert overview["core_indexes"] == 1
+    assert overview["research_indexes"] == 2
+    assert overview["incomplete_history_indexes"] == 2
+
+
 def test_index_health_view_models_filter_summary_and_details():
     summary = _index_health_summary_frame()
     rows = index_health_rows(

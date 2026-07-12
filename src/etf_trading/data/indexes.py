@@ -20,6 +20,9 @@ class IndexDefinition:
     market: str
     category: str
     provider_symbol: str
+    pool: str | None = None
+    index_base_date: date | None = None
+    baseline_source: str = "unverified"
 
 
 DEFAULT_INDEXES: tuple[IndexDefinition, ...] = catalog_definitions(default_index_catalog())
