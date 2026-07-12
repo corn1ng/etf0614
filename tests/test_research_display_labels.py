@@ -1,7 +1,10 @@
 import pandas as pd
+from datetime import date
+
 import pytest
 
 from etf_trading.data.indexes import IndexDefinition
+from etf_trading.data.quality import expected_latest_trade_date
 from etf_trading.data.storage import ParquetStore
 from etf_trading.ui.app import (
     WORKFLOW_TABS,
@@ -175,7 +178,7 @@ def test_index_trend_filter_keeps_only_etfs_in_trending_categories():
 
 def test_build_index_trend_summary_classifies_latest_index_regime(tmp_path):
     store = ParquetStore(tmp_path)
-    dates = pd.bdate_range("2020-01-01", periods=900)
+    dates = pd.bdate_range(end=expected_latest_trade_date(), periods=900)
     close = pd.Series(range(1000, 1900), dtype=float) / 1000
     store.write_index_prices(
         "000300",
@@ -195,12 +198,99 @@ def test_build_index_trend_summary_classifies_latest_index_regime(tmp_path):
 
     summary = _build_index_trend_summary(
         store,
-        definitions=(IndexDefinition("000300", "沪深300", "A股", "A股宽基", "000300"),),
+        definitions=(
+            IndexDefinition(
+                "000300",
+                "沪深300",
+                "A股",
+                "A股宽基",
+                "000300",
+                pool="core",
+                index_base_date=dates[0].date(),
+                baseline_source="official_api",
+                baseline_evidence_kind="official_base_date",
+            ),
+        ),
     )
 
     assert summary.iloc[0]["index_name"] == "沪深300"
     assert summary.iloc[0]["latest_date"] == dates[-1].strftime("%Y-%m-%d")
     assert bool(summary.iloc[0]["allows_new_position"]) is True
+
+
+def test_build_index_trend_summary_requires_official_complete_evidence_for_entry_categories(tmp_path):
+    store = ParquetStore(tmp_path)
+    dates = pd.bdate_range("1991-01-01", expected_latest_trade_date())
+    close = pd.Series(range(len(dates)), dtype=float) / 1000 + 1
+    definitions = (
+        IndexDefinition(
+            "000300",
+            "沪深300",
+            "A股",
+            "官方完整",
+            "000300",
+            pool="core",
+            index_base_date=date(2004, 12, 31),
+            baseline_source="official_api",
+            baseline_evidence_kind="official_base_date",
+        ),
+        IndexDefinition(
+            "399001",
+            "深证成指",
+            "A股",
+            "第三方发布日期一",
+            "399001",
+            pool="core",
+            index_base_date=date(1991, 4, 3),
+            baseline_source="third_party_publication",
+            baseline_evidence_kind="publication_date",
+        ),
+        IndexDefinition(
+            "399006",
+            "创业板指",
+            "A股",
+            "第三方发布日期二",
+            "399006",
+            pool="core",
+            index_base_date=date(2010, 6, 1),
+            baseline_source="third_party_publication",
+            baseline_evidence_kind="publication_date",
+        ),
+        IndexDefinition(
+            "UNVERIFIED",
+            "待核验指数",
+            "A股",
+            "待核验分类",
+            "UNVERIFIED",
+            pool="core",
+        ),
+    )
+    for definition in definitions:
+        store.write_index_prices(
+            definition.index_code,
+            pd.DataFrame(
+                {
+                    "index_code": definition.index_code,
+                    "trade_date": dates,
+                    "open": close * 0.99,
+                    "high": close * 1.01,
+                    "low": close * 0.98,
+                    "close": close,
+                    "volume": 1000,
+                    "amount": 2000,
+                }
+            ),
+        )
+
+    summary = _build_index_trend_summary(store, definitions=definitions)
+
+    assert summary.set_index("index_code")["allows_new_position"].to_dict() == {
+        "000300": True,
+        "399001": False,
+        "399006": False,
+        "UNVERIFIED": False,
+    }
+    assert _eligible_index_categories(summary) == ["官方完整"]
 
 
 def test_index_trend_display_uses_chinese_index_names_and_headers():

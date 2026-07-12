@@ -1,6 +1,7 @@
 from datetime import date
 
 import pandas as pd
+import pytest
 import yaml
 
 import etf_trading.data.baseline_evidence as baseline_evidence
@@ -85,6 +86,26 @@ def test_verify_index_baselines_cli_writes_only_verified_or_reference_rows(tmp_p
     assert exit_code == 0
     assert "000300" in saved["evidence"]
     assert "801010" not in saved["evidence"]
+
+
+def test_verify_index_baselines_cli_help_is_chinese(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--help"])
+
+    output = capsys.readouterr().out
+    assert exc_info.value.code == 0
+    assert "核验正式指数的历史起点证据。" in output
+    assert "用于证据核验的日期，格式为 YYYY-MM-DD。" in output
+    assert "Verify history-baseline evidence for formal indexes." not in output
+
+
+def test_verify_index_baselines_cli_rejects_invalid_date_in_chinese(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--formal", "--through", "2026-13-40"])
+
+    error = capsys.readouterr().err
+    assert exc_info.value.code == 2
+    assert "错误：--through 必须为 YYYY-MM-DD 格式的日期" in error
 
 
 def test_resolver_prefers_matching_csindex_basic_date_over_third_party_publication():

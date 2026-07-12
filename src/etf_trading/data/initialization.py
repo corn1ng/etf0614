@@ -22,6 +22,7 @@ from etf_trading.data.quality import (
     IndexHistoryCompleteness,
     assess_index_history_completeness,
     expected_latest_trade_date,
+    has_official_baseline,
     index_history_freshness_message,
 )
 from etf_trading.data.storage import ParquetStore, SQLiteStore
@@ -555,11 +556,18 @@ def _entry_with_resolved_evidence(entry: IndexCatalogEntry, evidence: pd.DataFra
     reference_date = pd.to_datetime(row.get("reference_date"), errors="coerce")
     if status not in {"OFFICIAL", "THIRD_PARTY_BASE_DATE", "THIRD_PARTY_PUBLICATION"} or pd.isna(reference_date):
         return entry
+    candidate_source = str(row.get("baseline_source") or "").strip()
+    candidate_date = pd.Timestamp(reference_date).date()
+    if has_official_baseline(entry.baseline_source, entry.index_base_date) and not has_official_baseline(
+        candidate_source,
+        candidate_date,
+    ):
+        return entry
     checked_at = pd.to_datetime(row.get("checked_at"), errors="coerce")
     return replace(
         entry,
-        index_base_date=pd.Timestamp(reference_date).date(),
-        baseline_source=str(row.get("baseline_source") or entry.baseline_source),  # type: ignore[arg-type]
+        index_base_date=candidate_date,
+        baseline_source=candidate_source or entry.baseline_source,  # type: ignore[arg-type]
         baseline_evidence_kind=str(row.get("baseline_evidence_kind") or entry.baseline_evidence_kind),  # type: ignore[arg-type]
         baseline_evidence_name=str(row.get("baseline_evidence_name") or ""),
         baseline_evidence_url=str(row.get("baseline_evidence_url") or ""),

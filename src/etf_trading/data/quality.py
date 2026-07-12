@@ -193,6 +193,26 @@ def has_official_baseline(source: str, base_date: object) -> bool:
     return source in _OFFICIAL_BASELINE_SOURCES and _parse_date(base_date) is not None
 
 
+def allows_new_index_position(
+    regime_allows: object,
+    *,
+    pool: str | None,
+    baseline_source: str,
+    index_base_date: object,
+    completeness_status: object,
+    data_is_ready: bool,
+) -> bool:
+    """Require trusted, complete and current index history before new entries."""
+
+    return bool(
+        regime_allows
+        and pool == "core"
+        and has_official_baseline(baseline_source, index_base_date)
+        and completeness_status == "COMPLETE"
+        and data_is_ready
+    )
+
+
 def assess_index_history_completeness(
     prices: pd.DataFrame,
     index_base_date: date | pd.Timestamp | str | None,

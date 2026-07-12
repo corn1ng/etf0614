@@ -15,6 +15,13 @@ from etf_trading.backtest.engine import BacktestEngine
 from etf_trading.data.indexes import DEFAULT_INDEXES, INDEX_HISTORY_AUTO_START, IndexDefinition, get_index_definition, index_options
 from etf_trading.data.initialization import InitializationService
 from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.quality import (
+    HistoryReadiness,
+    allows_new_index_position,
+    assess_index_history_completeness,
+    assess_price_history,
+    expected_latest_trade_date,
+)
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.report.daily_report import DailyAdviceReport
 from etf_trading.research.comparison import compare_regime_pairs
@@ -613,6 +620,20 @@ def _build_index_trend_summary(
             rows.append(base_row)
             continue
 
+        completeness = assess_index_history_completeness(
+            prices,
+            definition.index_base_date,
+            baseline_source=definition.baseline_source,
+            index_code=definition.index_code,
+            source_kind=definition.source_kind,
+            evidence_name=definition.baseline_evidence_name,
+            evidence_kind=definition.baseline_evidence_kind,
+        )
+        readiness = assess_price_history(
+            prices,
+            expected_latest_trade_date(),
+            min_history_rows=252,
+        )
         featured = add_trend_regime_features(prices)
         if featured.empty:
             rows.append(base_row)
@@ -625,7 +646,14 @@ def _build_index_trend_summary(
                 "large_trend": regime.large_trend,
                 "medium_trend": regime.medium_trend,
                 "small_trend": regime.small_trend,
-                "allows_new_position": bool(regime.allows_new_position),
+                "allows_new_position": allows_new_index_position(
+                    regime.allows_new_position,
+                    pool=definition.pool,
+                    baseline_source=definition.baseline_source,
+                    index_base_date=definition.index_base_date,
+                    completeness_status=completeness.status,
+                    data_is_ready=readiness.readiness == HistoryReadiness.READY,
+                ),
                 "latest_date": pd.Timestamp(last["trade_date"]).strftime("%Y-%m-%d"),
                 "history_rows": int(len(featured)),
             }

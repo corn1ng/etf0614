@@ -2,6 +2,8 @@ from datetime import date
 import sqlite3
 
 import pandas as pd
+import pytest
+import yaml
 
 import etf_trading.data.initialization as initialization
 from etf_trading.data.index_catalog import BaselineSource, IndexCatalogEntry, SourceKind
@@ -182,6 +184,32 @@ def _official_evidence(index_code: str, reference_date: str) -> dict[str, object
     }
 
 
+def _fallback_evidence(index_code: str, status: str) -> dict[str, object]:
+    if status == "THIRD_PARTY_PUBLICATION":
+        return {
+            "index_code": index_code,
+            "evidence_status": status,
+            "reference_date": "2005-04-08",
+            "baseline_source": "third_party_publication",
+            "baseline_evidence_kind": "publication_date",
+            "baseline_evidence_name": "聚宽",
+            "baseline_evidence_url": "https://www.joinquant.com/data/dict/indexData",
+            "checked_at": "2026-07-10",
+            "detail": "第三方仅提供发布日期，不能视为官方基日",
+        }
+    return {
+        "index_code": index_code,
+        "evidence_status": "UNRESOLVED",
+        "reference_date": None,
+        "baseline_source": "unverified",
+        "baseline_evidence_kind": "unresolved",
+        "baseline_evidence_name": "",
+        "baseline_evidence_url": "",
+        "checked_at": "2026-07-10",
+        "detail": "官方基础信息暂时不可用",
+    }
+
+
 def _service_with_catalog_and_cached_index_prices(tmp_path, index_code: str) -> tuple[InitializationService, SQLiteStore]:
     store = SQLiteStore(tmp_path / "etf.sqlite")
     parquet_store = ParquetStore(tmp_path / "parquet")
@@ -352,6 +380,82 @@ def test_verify_baseline_evidence_can_skip_evidence_file_writes(monkeypatch, tmp
     service.verify_index_baseline_evidence("2026-07-10", write_evidence=False)
 
     assert writes == []
+
+
+@pytest.mark.parametrize("fallback_status", ["THIRD_PARTY_PUBLICATION", "UNRESOLVED"])
+def test_verify_baseline_evidence_preserves_existing_official_catalog_and_yaml_on_fallback(
+    monkeypatch, tmp_path, fallback_status
+):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    parquet_store = ParquetStore(tmp_path / "parquet")
+    official_entry = _catalog_entry(
+        "000300",
+        index_base_date=date(2004, 12, 31),
+        baseline_source="official_api",
+        baseline_evidence_kind="official_base_date",
+        baseline_evidence_name="中证指数官方基础信息",
+        baseline_evidence_url="https://example.test/000300",
+        baseline_checked_at=date(2026, 7, 9),
+    )
+    service = InitializationService(store, provider=_PartialIndexHistoryProvider(), parquet_store=parquet_store)
+    service.sync_index_catalog([official_entry])
+    parquet_store.write_index_prices("000300", _prices("000300", start="2004-12-31", end="2026-07-10"))
+    service.evidence_resolver = _FakeEvidenceResolver(_fallback_evidence("000300", fallback_status))
+    evidence_path = tmp_path / "index_baseline_evidence.yaml"
+    evidence_path.write_text(
+        "evidence:\n"
+        "  '000300':\n"
+        "    reference_date: '2004-12-31'\n"
+        "    source: official_api\n"
+        "    kind: official_base_date\n"
+        "    source_name: 中证指数官方基础信息\n"
+        "    source_url: https://example.test/000300\n"
+        "    checked_at: '2026-07-09'\n"
+        "    detail: 已核验官方记录\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(initialization, "DEFAULT_BASELINE_EVIDENCE_PATH", evidence_path)
+
+    service.verify_index_baseline_evidence("2026-07-10")
+
+    catalog = store.list_index_catalog(include_reserve=True).iloc[0]
+    coverage = store.list_index_history_coverage().iloc[0]
+    saved = yaml.safe_load(evidence_path.read_text(encoding="utf-8"))["evidence"]["000300"]
+    assert catalog["baseline_source"] == "official_api"
+    assert catalog["index_base_date"] == "2004-12-31"
+    assert coverage["baseline_source"] == "official_api"
+    assert coverage["completeness_status"] == "COMPLETE"
+    assert saved["source"] == "official_api"
+    assert saved["reference_date"] == "2004-12-31"
+
+
+def test_resolved_official_evidence_can_replace_existing_official_catalog_entry():
+    entry = _catalog_entry(
+        "000300",
+        index_base_date=date(2004, 12, 31),
+        baseline_source="official_api",
+        baseline_evidence_kind="official_base_date",
+    )
+    evidence = pd.DataFrame(
+        [
+            {
+                "index_code": "000300",
+                "evidence_status": "OFFICIAL",
+                "reference_date": "2005-01-04",
+                "baseline_source": "official_factsheet",
+                "baseline_evidence_kind": "official_base_date",
+                "baseline_evidence_name": "官方资料",
+                "baseline_evidence_url": "https://example.test/factsheet/000300",
+                "checked_at": "2026-07-10",
+            }
+        ]
+    )
+
+    merged = initialization._entry_with_resolved_evidence(entry, evidence)
+
+    assert merged.index_base_date == date(2005, 1, 4)
+    assert merged.baseline_source == "official_factsheet"
+    assert merged.baseline_evidence_name == "官方资料"
 
 
 def test_initialization_service_creates_history_jobs_for_all_master_etfs(tmp_path):

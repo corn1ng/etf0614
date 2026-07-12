@@ -26,6 +26,7 @@ from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
 from etf_trading.data.quality import (
     HistoryAssessment,
     HistoryReadiness,
+    allows_new_index_position,
     assess_index_history_completeness,
     assess_price_history,
     expected_latest_trade_date,
@@ -1042,16 +1043,13 @@ def _coverage_by_index_code(coverage: pd.DataFrame | None) -> dict[str, dict[str
 
 
 def _allows_new_index_position(row: dict[str, object], definition: IndexDefinition, regime_allows: object) -> bool:
-    if not bool(regime_allows):
-        return False
-    if row.get("history_completeness_status") in {"BASELINE_REFERENCED", "BASELINE_UNVERIFIED"}:
-        return False
-    if definition.pool is None:
-        return True
-    return bool(
-        definition.pool == "core"
-        and row.get("history_completeness_status") == "COMPLETE"
-        and row.get("data_status") == "数据可用"
+    return allows_new_index_position(
+        regime_allows,
+        pool=definition.pool,
+        baseline_source=definition.baseline_source,
+        index_base_date=definition.index_base_date,
+        completeness_status=row.get("history_completeness_status"),
+        data_is_ready=row.get("data_status") == "数据可用",
     )
 
 
