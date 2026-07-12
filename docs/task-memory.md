@@ -366,3 +366,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - `IndexCatalogEntry.baseline_source == "unverified"` must always stay `BASELINE_UNVERIFIED`; never turn a long provider history into an unverified "历史完整" claim.
   - Keep page control containers before their dynamic table containers in NiceGUI; otherwise controls can be rendered below a long table.
   - Add new task, pool, and completeness codes to `VALUE_LABELS` and validate both persisted task summaries and table output in Chinese.
+
+## 2026-07-12 - Design index health trend workbench
+
+- Summary: Approved a trend-only redesign for `市场地图 -> 指数体检`: fixed configured ordering and search, a row-click tabbed dialog for trend summary/atomic indicators/data quality, and no valuation display or conclusion.
+- Verification: `rg -n "TBD|TODO|FIXME|待定|待补|不确定|implement later|fill in|appropriate|Similar to|handle edge cases" docs/superpowers/specs/2026-07-12-index-health-trend-workbench-design.md` returned no matches; `git diff --check --no-index /dev/null docs/superpowers/specs/2026-07-12-index-health-trend-workbench-design.md` passed.
+- Watch out next time:
+  - Keep data-invalid indexes visible and inspectable, but suppress all trend-based transaction conclusions.
+  - Search must retain `DEFAULT_INDEXES` relative order; never replace it with category or code sorting.
+  - Keep valuation interfaces intact but outside the trend page's data flow until a complete, validated source is available.
