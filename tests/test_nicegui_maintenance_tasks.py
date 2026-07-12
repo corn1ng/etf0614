@@ -576,6 +576,30 @@ def test_index_history_batch_message_distinguishes_stale_from_success():
     assert message == "已检查 5 个指数：补齐 2，跳过 1，行情仍滞后 1，失败/无数据 1"
 
 
+def test_persisted_history_repair_task_uses_chinese_incomplete_history_summary():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    run = MaintenanceTaskRun(
+        task_id=12,
+        task_type="index_history_repair",
+        state="success",
+        progress_done=1,
+        progress_total=1,
+        progress_detail="801010 REPAIRED",
+        result_json='[{"index_code":"801010","status":"REPAIRED","completeness_status":"INCOMPLETE"}]',
+        error_message=None,
+        started_at="2026-07-12 10:00:00",
+        finished_at="2026-07-12 10:01:00",
+        updated_at="2026-07-12 10:01:00",
+    )
+
+    status = maintenance._task_status_from_run(run)
+
+    assert status.title == "仅补历史不完整"
+    assert status.message == "已检查 1 个指数：历史不完整 1"
+    assert status.progress_detail == "801010 已修复"
+
+
 def test_render_tasks_restores_persisted_index_batch_after_page_refresh(monkeypatch):
     from etf_trading.nicegui_app.pages import maintenance
 

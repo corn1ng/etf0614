@@ -15,7 +15,11 @@ from etf_trading.data.providers.akshare_provider import AkShareProvider
 from etf_trading.data.storage import MaintenanceTaskRun
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.tables import VALUE_LABELS, render_table
-from etf_trading.nicegui_app.maintenance_tasks import IndexHistoryBatchRunner
+from etf_trading.nicegui_app.maintenance_tasks import (
+    INDEX_MAINTENANCE_TASK_TYPES,
+    IndexCatalogMaintenanceRunner,
+    IndexHistoryBatchRunner,
+)
 from etf_trading.nicegui_app.state import invalidate_snapshot_cache
 from etf_trading.nicegui_app.view_models import (
     PlatformSnapshot,
@@ -29,6 +33,10 @@ from etf_trading.nicegui_app.view_models import (
 SAMPLE_CATEGORIES = ["A股宽基", "A股行业", "港股宽基", "港股科技", "港股医药", "商品", "债券"]
 EtfHistoryProgressView = EtfHistoryProgress
 INDEX_HISTORY_BATCH_TASK_TITLE = "补齐全部指数历史"
+INDEX_TASK_TITLES = {
+    "index_history_batch": INDEX_HISTORY_BATCH_TASK_TITLE,
+    **INDEX_MAINTENANCE_TASK_TYPES,
+}
 
 
 @dataclass
@@ -73,9 +81,9 @@ def _format_task_time(value: datetime | None) -> str:
 
 def _task_status_from_run(run: MaintenanceTaskRun) -> MaintenanceTaskStatus:
     result = json.loads(run.result_json) if run.result_json else None
-    title = INDEX_HISTORY_BATCH_TASK_TITLE
+    title = INDEX_TASK_TITLES.get(run.task_type, run.task_type)
     if run.state == "success":
-        message = _index_history_batch_message(result or [])
+        message = _catalog_task_message(run.task_type, result or [])
         error = ""
     elif run.state == "running":
         message = f"{title}正在执行，请稍候..."
@@ -115,7 +123,7 @@ def _task_progress_detail_label(detail: str) -> str:
 
 def _index_history_batch_message(rows: list[dict[str, object]]) -> str:
     statuses = pd.Series([str(row.get("status", "")) for row in rows], dtype=str)
-    completed = int(statuses.isin(["INITIALIZED", "UPDATED"]).sum())
+    completed = int(statuses.isin(["INITIALIZED", "UPDATED", "REPAIRED"]).sum())
     skipped = int((statuses == "SKIPPED").sum())
     stale = int((statuses == "STALE").sum())
     failed_or_empty = int(statuses.isin(["FAILED", "EMPTY"]).sum())
@@ -123,6 +131,23 @@ def _index_history_batch_message(rows: list[dict[str, object]]) -> str:
         f"已检查 {len(rows)} 个指数：补齐 {completed}，跳过 {skipped}，"
         f"行情仍滞后 {stale}，失败/无数据 {failed_or_empty}"
     )
+
+
+def _catalog_task_message(task_type: str, rows: list[dict[str, object]]) -> str:
+    if task_type == "index_catalog_sync":
+        pools = pd.Series([str(row.get("pool", "")) for row in rows], dtype=str)
+        formal = int(pools.isin(["core", "research"]).sum())
+        return (
+            f"目录已同步：候选 {len(rows)}，正式 {formal}，核心 {int((pools == 'core').sum())}，"
+            f"研究 {int((pools == 'research').sum())}，候补 {int((pools == 'reserve').sum())}"
+        )
+    if task_type == "index_source_validation":
+        statuses = pd.Series([str(row.get("status", "")) for row in rows], dtype=str)
+        return f"已验证 {len(rows)} 个指数：可用 {int((statuses == 'SUCCESS').sum())}，异常 {int((statuses != 'SUCCESS').sum())}"
+    if task_type == "index_history_repair":
+        completeness = pd.Series([str(row.get("completeness_status", "")) for row in rows], dtype=str)
+        return f"已检查 {len(rows)} 个指数：历史不完整 {int((completeness == 'INCOMPLETE').sum())}"
+    return _index_history_batch_message(rows)
 
 
 def _render_task_center(container, status: MaintenanceTaskStatus) -> None:
@@ -216,18 +241,31 @@ def _render_gap_detail(snapshot: PlatformSnapshot) -> None:
 
 def _render_tasks(snapshot: PlatformSnapshot, store, parquet_store) -> None:
     index_runner = IndexHistoryBatchRunner(store, parquet_store)
+    catalog_runner = IndexCatalogMaintenanceRunner(store, parquet_store) if hasattr(store, "list_index_catalog") else None
     index_runner.reconcile_interrupted()
-    persisted_run = index_runner.latest()
+    persisted_runs = [run for run in [index_runner.latest()] if run is not None]
+    if catalog_runner is not None:
+        for task_type in INDEX_MAINTENANCE_TASK_TYPES:
+            run = catalog_runner.latest(task_type)
+            if run is not None:
+                persisted_runs.append(run)
+    persisted_run = max(persisted_runs, key=lambda run: run.task_id) if persisted_runs else None
     task_status = _task_status_from_run(persisted_run) if persisted_run is not None else MaintenanceTaskStatus()
     task_center = ui.column().classes("w-full")
     _render_task_center(task_center, task_status)
 
     def refresh_persisted_index_task() -> None:
-        if task_status.state != "idle" and task_status.title != INDEX_HISTORY_BATCH_TASK_TITLE:
+        if task_status.state != "idle" and task_status.title not in set(INDEX_TASK_TITLES.values()):
             return
-        run = index_runner.latest()
-        if run is None:
+        runs = [run for run in [index_runner.latest()] if run is not None]
+        if catalog_runner is not None:
+            for task_type in INDEX_MAINTENANCE_TASK_TYPES:
+                run = catalog_runner.latest(task_type)
+                if run is not None:
+                    runs.append(run)
+        if not runs:
             return
+        run = max(runs, key=lambda item: item.task_id)
         restored = _task_status_from_run(run)
         task_status.__dict__.update(restored.__dict__)
         _render_task_center(task_center, task_status)
@@ -239,6 +277,8 @@ def _render_tasks(snapshot: PlatformSnapshot, store, parquet_store) -> None:
     _render_master_tasks(store, parquet_store, task_center, task_status)
     _render_etf_history_tasks(snapshot, store, parquet_store, task_center, task_status)
     _render_index_history_tasks(store, parquet_store, task_center, task_status, index_runner)
+    if catalog_runner is not None:
+        _render_catalog_index_tasks(store, parquet_store, task_center, task_status, catalog_runner)
     _render_batch_tasks(store, parquet_store, task_center, task_status)
     ui.label("补齐任务只在点击后执行，避免打开页面自动触发耗时操作。").classes("text-xs text-slate-500")
 
@@ -351,6 +391,87 @@ def _render_index_history_tasks(store, parquet_store, task_center, task_status: 
                 ),
             ).props("dense outline")
         ui.label("单个指数失败不会中断全部指数补齐。").classes("text-xs text-slate-500")
+
+
+def _render_catalog_index_tasks(
+    store,
+    parquet_store,
+    task_center,
+    task_status: MaintenanceTaskStatus,
+    runner: IndexCatalogMaintenanceRunner,
+) -> None:
+    end = date.today().isoformat()
+    summary = _index_catalog_summary(store)
+    with ui.expansion("指数目录与完整性", icon="rule").classes("workbench-task-panel w-full"):
+        with ui.row().classes("w-full gap-2"):
+            _metric("候选", summary["candidates"], "目录记录")
+            _metric("正式", summary["formal"], "核心 + 研究")
+            _metric("核心/研究/候补", f"{summary['core']}/{summary['research']}/{summary['reserve']}", "分层")
+            _metric("历史完整", summary["complete"], "已核验")
+            _metric("待补/待核验", summary["incomplete"], "不作买卖依据")
+        ui.label(
+            f"行情仍滞后 {summary['stale']}，历史缺失 {summary['missing']}，读取失败 {summary['read_failed']}。"
+        ).classes("text-xs text-slate-500")
+        with ui.row().classes("workbench-toolbar w-full"):
+            end_input = ui.input("目录任务结束日期", value=end).props("dense outlined type=date").classes("w-44")
+            for task_type, label in INDEX_MAINTENANCE_TASK_TYPES.items():
+                ui.button(
+                    label,
+                    icon="sync" if task_type != "index_source_validation" else "fact_check",
+                    on_click=lambda task_type=task_type: _start_catalog_index_task(
+                        runner,
+                        task_type,
+                        str(end_input.value or end),
+                        task_center,
+                        task_status,
+                    ),
+                ).props("dense outline")
+        ui.label("目录同步和数据源验证不会拉取全历史；全量与修复操作均从 1990-01-01 请求，并可在刷新页面后恢复查看。").classes("text-xs text-slate-500")
+
+
+def _start_catalog_index_task(
+    runner: IndexCatalogMaintenanceRunner,
+    task_type: str,
+    through: str,
+    task_center,
+    task_status: MaintenanceTaskStatus,
+) -> None:
+    run = runner.start(task_type, through=through)
+    restored = _task_status_from_run(run)
+    task_status.__dict__.update(restored.__dict__)
+    _render_task_center(task_center, task_status)
+    ui.notify(task_status.message, type="info")
+
+
+def _index_catalog_summary(store) -> dict[str, int]:
+    catalog = store.list_index_catalog(include_reserve=True)
+    coverage = store.list_index_history_coverage()
+    pools = catalog.get("pool", pd.Series(dtype=str)).fillna("").astype(str)
+    completeness = coverage.get("completeness_status", pd.Series(dtype=str)).fillna("").astype(str)
+    try:
+        with store.connect() as conn:
+            state = pd.read_sql_query("SELECT dataset, asset_code, status FROM data_update_state", conn)
+    except Exception:  # noqa: BLE001 - a missing optional state table should not hide catalog health
+        state = pd.DataFrame()
+    stale = 0
+    read_failed = int((completeness == "READ_FAILED").sum())
+    if not state.empty:
+        index_state = state[state.get("dataset", pd.Series(dtype=str)).astype(str) == "index_daily_price"]
+        statuses = index_state.get("status", pd.Series(dtype=str)).fillna("").astype(str)
+        stale = int((statuses == "STALE").sum())
+        read_failed += int((statuses == "FAILED").sum())
+    return {
+        "candidates": int(len(catalog)),
+        "formal": int(pools.isin(["core", "research"]).sum()),
+        "core": int((pools == "core").sum()),
+        "research": int((pools == "research").sum()),
+        "reserve": int((pools == "reserve").sum()),
+        "complete": int((completeness == "COMPLETE").sum()),
+        "incomplete": int(completeness.isin(["INCOMPLETE", "BASELINE_UNVERIFIED", "SOURCE_LIMITED", "NOT_VALIDATED"]).sum()),
+        "missing": int((completeness == "MISSING_HISTORY").sum()),
+        "stale": stale,
+        "read_failed": read_failed,
+    }
 
 
 def _start_persisted_index_history_batch(

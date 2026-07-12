@@ -19,6 +19,54 @@ class _FakeIndexHistoryService:
         )
 
 
+class _FakeCatalogMaintenanceService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+
+    def ensure_all_index_history(self, through, *, index_codes=None, repair_history=False, on_progress=None):
+        self.calls.append(("history", {"through": through, "index_codes": index_codes, "repair_history": repair_history}))
+        if on_progress is not None:
+            on_progress(IndexHistoryProgress(done=1, total=1, index_code="801010", status="REPAIRED"))
+        return pd.DataFrame(
+            [
+                {
+                    "index_code": "801010",
+                    "status": "REPAIRED",
+                    "completeness_status": "INCOMPLETE",
+                    "completeness_message": "历史不完整",
+                }
+            ]
+        )
+
+
+def test_catalog_maintenance_runner_persists_history_incomplete_result(monkeypatch, tmp_path):
+    from etf_trading.nicegui_app import maintenance_tasks
+
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    service = _FakeCatalogMaintenanceService()
+    runner = maintenance_tasks.IndexCatalogMaintenanceRunner(
+        store,
+        ParquetStore(tmp_path / "parquet"),
+        service_factory=lambda: service,
+    )
+    task = store.create_maintenance_task_run("index_history_repair", progress_total=1)
+
+    async def fake_io_bound(callback):
+        return callback()
+
+    monkeypatch.setattr(maintenance_tasks.run, "io_bound", fake_io_bound)
+    asyncio.run(runner._run(task.task_id, "index_history_repair", "2026-07-10"))
+
+    persisted = store.get_maintenance_task_run(task.task_id)
+    assert persisted is not None
+    assert persisted.state == "success"
+    assert "INCOMPLETE" in str(persisted.result_json)
+    assert service.calls == [
+        ("history", {"through": "2026-07-10", "index_codes": [], "repair_history": True})
+    ]
+
+
 def test_index_history_batch_runner_deduplicates_running_task_and_persists_progress(monkeypatch, tmp_path):
     from etf_trading.nicegui_app import maintenance_tasks
 
