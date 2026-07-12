@@ -392,3 +392,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - A crossed moving average or new range high is an atomic fact, not a transaction recommendation.
   - Keep cross-event definitions dependent on both the current and preceding trading day so a persistent above/below state is not mislabeled as a new crossing.
   - Mark missing amount data only on volume indicators; do not invalidate unrelated price-derived indicators.
+
+## 2026-07-12 - Move index atomic calculation to data maintenance
+
+- Summary: Approved a two-stage index workflow: data maintenance first initializes or repairs raw index history, then a separate manual, persistent “重建指数原子指标” task writes the atomic snapshot. The index-health page is snapshot-read-only and strongly flags stale, missing, or failed snapshots.
+- Verification: Current `load_index_health_snapshot_cached` was inspected and confirmed to rebuild synchronously on a cache miss; the revised design explicitly removes this page-time calculation path.
+- Watch out next time:
+  - A page refresh may reload a snapshot but must never trigger full atomic recomputation or external fetching.
+  - After raw-history or coverage changes, mark the snapshot stale and require an explicit maintenance rebuild rather than silently serving it as current.
+  - Preserve a prior successful snapshot on rebuild failure, but show its generated time and strong stale/failure warning.
