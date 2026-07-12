@@ -87,3 +87,45 @@ This worktree has no generated atomic snapshot. Therefore, no browser QA was run
 ## Commit
 
 Commit subject: `fix: complete index atomic detail overview`. This report is included in that same commit; its final object ID is recorded in the task handoff because a commit cannot accurately contain its own post-commit ID.
+
+## Final re-review event-age guard (2026-07-13)
+
+The re-review found that a stored computed event age of `+inf` reached `int(float(value))` and raised `OverflowError`. The new regression also includes a negative age and a valid finite age; invalid ages are ignored while the valid event keeps its existing `上穿120日均线` / `4 日前` text.
+
+### RED
+
+```powershell
+& 'H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe' -m pytest tests\test_nicegui_view_models.py -q -k 'ignores_nonfinite_and_negative_event_ages' --basetemp 'C:\Users\cjj\AppData\Local\Temp\index-atomic-event-age-red'
+```
+
+Result: expected exit 1; the regression reproduced `OverflowError: cannot convert float infinity to integer` from `_overview_events`.
+
+### GREEN
+
+```powershell
+& 'H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe' -m pytest tests\test_nicegui_view_models.py -q -k 'ignores_nonfinite_and_negative_event_ages' --basetemp 'C:\Users\cjj\AppData\Local\Temp\index-atomic-event-age-green'
+```
+
+Result: exit 0; `1 passed, 38 deselected`.
+
+### Focused module
+
+```powershell
+git diff --check
+& 'H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe' -m pytest tests\test_nicegui_view_models.py -q --basetemp 'C:\Users\cjj\AppData\Local\Temp\index-atomic-event-age-focused'
+```
+
+Result: exit 0; `39 passed in 1.13s`. `git diff --check` produced no errors.
+
+### Full suite
+
+```powershell
+& 'H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe' -m pytest -q --basetemp 'C:\Users\cjj\AppData\Local\Temp\index-atomic-event-age-full'
+```
+
+Result: exit 0; `429 passed in 28.69s`.
+
+### Remaining risks
+
+- A generated atomic snapshot is still unavailable in this worktree, so ready/stale/failed/insufficient dialog browser QA at 1440px and 390px remains unperformed and unclaimed.
+- The reviewer noted a possible minor MA-marker-label collision for tightly clustered values. It is recorded only; this guard has no functional evidence of a collision, so no visual-scope expansion was made.

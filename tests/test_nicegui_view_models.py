@@ -259,6 +259,24 @@ def test_index_atomic_overview_hides_unreliable_visuals_and_reports_empty_events
     assert overview.quality[0].value == "待重建"
 
 
+def test_index_atomic_overview_ignores_nonfinite_and_negative_event_ages():
+    summary = {
+        "index_code": "000300", "snapshot_status": "computed",
+        "history_completeness_status": "COMPLETE", "history_rows": 260,
+        "latest_date": "2026-07-11", "data_source": "akshare_zh_em",
+    }
+    details = pd.DataFrame([
+        _overview_detail("days_since_ma_cross_up_20", float("inf")),
+        _overview_detail("days_since_ma_cross_down_60", -2),
+        _overview_detail("days_since_ma_cross_up_120", 4),
+    ])
+
+    overview = index_atomic_overview(summary, details, "000300")
+
+    assert overview is not None
+    assert [(event.label, event.days) for event in overview.events] == [("上穿120日均线", "4 日前")]
+
+
 def test_index_atomic_overview_range_marker_uses_unrounded_stored_offsets():
     summary = {
         "index_code": "000300", "snapshot_status": "computed",

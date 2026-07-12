@@ -893,9 +893,12 @@ def _overview_events(rows: dict[str, dict[str, object]]) -> tuple[IndexAtomicOve
             if row is None or _text(row.get("status")) != "computed":
                 continue
             try:
-                days = int(float(row.get("value")))
-            except (TypeError, ValueError):
+                event_age = float(row.get("value"))
+            except (TypeError, ValueError, OverflowError):
                 continue
+            if not math.isfinite(event_age) or event_age < 0:
+                continue
+            days = int(event_age)
             events.append((days, IndexAtomicOverviewEvent("{}{}日均线".format(label, window), "{} 日前".format(days))))
     return tuple(event for _, event in sorted(events, key=lambda item: item[0])[:2])
 
