@@ -48,6 +48,17 @@ def test_theme_contains_atomic_detail_layout_hooks():
     assert ".atomic-detail-row" in WORKBENCH_CSS
 
 
+def test_theme_contains_index_atomic_workbench_layout_hooks():
+    for css_class in [
+        ".index-atomic-alert",
+        ".index-atomic-dialog",
+        ".index-atomic-detail-grid",
+    ]:
+        assert css_class in WORKBENCH_CSS
+    assert ".index-atomic-detail-grid {" in WORKBENCH_CSS
+    assert "grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));" in WORKBENCH_CSS
+
+
 def test_task_center_theme_classes_exist():
     for css_class in [
         ".workbench-task-center",

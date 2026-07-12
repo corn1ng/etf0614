@@ -13,6 +13,15 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Register the active task key before scheduling, and remove it plus persist failure if scheduling raises.
   - Test runner-level publication failure at the final metadata replacement as well as Task 2's lower-level rollback contract.
 
+## 2026-07-12 - Redesign index health as an atomic workbench
+
+- Summary: Replaced `市场地图 -> 指数体检` with a read-only atomic-indicator workbench. It reads the maintenance snapshot through the persisted catalog/coverage inputs, keeps the eight Task 4 table columns, separates core and research pools, and opens a three-tab wide detail dialog instead of rendering health conclusions or valuation data.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-market-full-final-6` passed (332 tests). Regular Playwright at `http://127.0.0.1:8515` and `http://127.0.0.1:8516` checked missing, ready, stale, and failed snapshots at 1440px and 390px with no console errors/warnings or root horizontal overflow; evidence is under `C:\Users\cjj\AppData\Local\Temp\index-atomic-market-browser*`.
+- Watch out next time:
+  - Pass `index_atomic_snapshot_inputs(create_store())` into the read-only loader; rebuilding coverage from the display summary loses signature fields and marks a valid maintenance snapshot stale.
+  - A page reload may only read the snapshot again. Keep rebuild actions in data maintenance and retain the last successful rows when the snapshot is stale.
+  - Validate the missing, stale, and corrupt-meta failed states with local fixtures; none may fabricate table rows.
+
 ## 2026-07-12 - Add durable index atomic snapshot maintenance task
 
 - Summary: Added a persisted, local-only maintenance runner and `数据维护 -> 指数目录与完整性` entry point for rebuilding index atomic indicators. The task records per-index progress, published snapshot metadata, and its result so it restores after a page reload.

@@ -1,6 +1,74 @@
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
+
+
+def test_market_page_uses_readonly_atomic_snapshot_and_no_legacy_health_builder():
+    source = Path("src/etf_trading/nicegui_app/pages/market.py").read_text(encoding="utf-8")
+
+    assert "load_index_atomic_snapshot_readonly" in source
+    assert "load_index_health_snapshot_cached" not in source
+    assert "build_index_atomic_snapshot" not in source
+    assert "CORE_VALUATION_METRICS" not in source
+
+
+def test_market_page_declares_pool_search_and_tabbed_detail_dialog():
+    source = Path("src/etf_trading/nicegui_app/pages/market.py").read_text(encoding="utf-8")
+
+    for text in ("核心池", "研究池", "搜索指数", "关键指标", "全部原子指标", "数据质量"):
+        assert text in source
+    for forbidden in ("大趋势", "中趋势", "小趋势", "允许开仓", "估值"):
+        assert forbidden not in source
+
+
+def test_market_page_declares_snapshot_states_fixed_columns_and_readonly_reload():
+    source = Path("src/etf_trading/nicegui_app/pages/market.py").read_text(encoding="utf-8")
+
+    for text in (
+        "原子指标快照待重建",
+        "尚未生成指数原子指标快照",
+        "最近一次原子指标快照生成失败",
+        "当前输入最新日期",
+        "指标状态计数",
+        "前往数据维护",
+        "index_atomic_detail_groups",
+        "ui.dialog()",
+        "index-atomic-dialog",
+    ):
+        assert text in source
+    assert source.count("load_index_atomic_snapshot_readonly") == 3
+    assert "index_atomic_snapshot_inputs(create_store())" in source
+    assert '"computed": "已计算"' in source
+    assert "IndexAtomicFilters(pool=str(pool.value or \"core\")" in source
+    assert "row_key=\"index_code\"" in source
+
+
+def test_market_key_metrics_use_stored_atoms_for_range_and_snapshot_data_status():
+    from etf_trading.nicegui_app.pages import market
+    from etf_trading.nicegui_app.view_models import IndexAtomicDetailGroup, IndexAtomicDetailItem
+
+    def item(metric_key: str, value: str) -> IndexAtomicDetailItem:
+        return IndexAtomicDetailItem(
+            metric_key=metric_key,
+            label=metric_key,
+            value=value,
+            status="已计算",
+            reason="测试快照",
+            as_of_date="2026-07-12",
+            sample_count="300",
+            data_source="测试数据源",
+        )
+
+    groups = [
+        IndexAtomicDetailGroup("价格与均线", [item("close", "1,001.00"), item("ma_20", "995.00"), item("ma_60", "980.00"), item("close_vs_ma_20", "0.6%"), item("close_vs_ma_60", "2.1%")]),
+        IndexAtomicDetailGroup("区间位置", [item("range_20_high", "是"), item("range_20_low", "否")]),
+    ]
+
+    rows = dict((label, value) for label, value, _status in market._key_metric_rows(groups, {"snapshot_status": "computed"}))
+
+    assert rows["20日区间"] == "20日新高"
+    assert rows["数据状态"] == "已计算"
 
 
 def test_index_trend_summary_exposes_chinese_data_status_and_trading_day_lag():
@@ -799,151 +867,3 @@ def test_atomic_row_click_event_extracts_etf_code():
     assert _event_row_code(Event({"row": {"ETF代码": "512880"}})) == "512880"
     assert _event_row_code(Event({"ETF代码": "159915"})) == "159915"
     assert _event_row_code(Event([])) == ""
-
-
-def test_index_health_page_uses_cached_snapshot(monkeypatch):
-    from etf_trading.nicegui_app.pages import market
-    from etf_trading.nicegui_app.state import IndexAtomicSnapshotCacheResult
-    from etf_trading.nicegui_app.view_models import PlatformSnapshot
-
-    calls = []
-    labels = []
-    table_batches = []
-
-    class FakeProps:
-        def __init__(self, owner):
-            self.owner = owner
-            self.values = {}
-
-        def __call__(self, value):
-            return self.owner
-
-        def __setitem__(self, key, value):
-            self.values[key] = value
-
-    class FakeElement:
-        def __init__(self, value=None, options=None):
-            self.value = value
-            self.options = options or []
-            self.props = FakeProps(self)
-
-        def classes(self, value):
-            return self
-
-        def props(self, value):
-            return self
-
-        def on_value_change(self, handler):
-            return self
-
-        def on(self, event_name, handler):
-            self.handler = handler
-            return self
-
-        def clear(self):
-            return None
-
-        def update(self):
-            return None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-    class FakeUi:
-        def row(self):
-            return FakeElement()
-
-        def column(self):
-            return FakeElement()
-
-        def input(self, label):
-            return FakeElement(value="")
-
-        def select(self, options, value=None, label=None):
-            return FakeElement(value=value, options=options)
-
-        def button(self, label, icon=None, on_click=None):
-            return FakeElement()
-
-        def label(self, text):
-            labels.append(str(text))
-            return FakeElement()
-
-        def icon(self, name):
-            return FakeElement()
-
-        def table(self, columns, rows, row_key=None, pagination=None):
-            table_batches.append(list(rows))
-            return FakeElement()
-
-        def notify(self, message, type=None):
-            return None
-
-    summary = pd.DataFrame(
-        {
-            "index_code": ["000300"],
-            "index_name": ["沪深300"],
-            "market": ["A股"],
-            "category": ["A股宽基"],
-            "latest_date": ["2026-07-03"],
-            "data_status": ["数据可用"],
-            "history_rows": [900],
-            "large_trend": ["UP"],
-            "medium_trend": ["UP"],
-            "small_trend": ["PULLBACK"],
-            "allows_new_position": [True],
-            "trend_health_status": ["normal"],
-            "trend_health_reason": ["趋势门槛通过"],
-            "valuation_overview_label": ["mid_percentile"],
-            "valuation_health_status": ["complete"],
-            "valuation_health_reason": ["核心估值可用"],
-            "valuation_latest_date": ["2026-07-03"],
-            "valuation_coverage_years": [3.1],
-            "valuation_primary_source": ["unit"],
-        }
-    )
-    details = pd.DataFrame(
-        {
-            "index_code": ["000300", "000300"],
-            "detail_kind": ["trend", "valuation"],
-            "metric_name": ["large_trend", "pe_ttm"],
-            "metric_label": ["大趋势", "市盈率TTM"],
-            "current_value": ["UP", 12.5],
-            "status": ["normal", "computed"],
-            "reason": ["大趋势向上", "已计算历史分位"],
-            "display_direction": ["higher_is_better", "higher_is_more_expensive"],
-            "historical_percentile": [pd.NA, 42.0],
-            "window_years": [pd.NA, 3.1],
-            "first_date": ["2022-01-03", "2023-01-03"],
-            "latest_date": ["2026-07-03", "2026-07-03"],
-            "sample_count": [900, 800],
-            "data_source": ["unit", "unit"],
-        }
-    )
-
-    def fake_cached(parquet_store, definitions=None, *, coverage=None, force_refresh=False):
-        calls.append(force_refresh)
-        return IndexAtomicSnapshotCacheResult(summary=summary, details=details, status="ready", generated_at=datetime(2026, 7, 6, 10, 0, 0))
-
-    monkeypatch.setattr(market, "ui", FakeUi())
-    monkeypatch.setattr(market, "load_index_health_snapshot_cached", fake_cached, raising=False)
-    snapshot = PlatformSnapshot(
-        master=pd.DataFrame(),
-        watchlist=pd.DataFrame(),
-        index_summary=summary,
-        universe=pd.DataFrame(),
-        gaps=pd.DataFrame(),
-        coverage=pd.DataFrame(),
-        generated_at=datetime(2026, 7, 6, 10, 0, 0),
-    )
-
-    market._render_index_health(snapshot, object())
-
-    assert calls == [False]
-    assert table_batches[0][0]["index_code"] == "000300"
-    assert "指数数据状态：指数：1/1 数据可用；最近有效交易日 2026-07-03。非“数据可用”的指数不应作为趋势或买卖依据。" in labels
-    assert "趋势原子指标：000300" in labels
-    assert "估值原子指标：000300" in labels

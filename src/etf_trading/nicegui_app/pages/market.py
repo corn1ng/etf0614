@@ -2,31 +2,62 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from urllib.parse import quote
+
 import pandas as pd
 from nicegui import ui
 
-from etf_trading.data.indexes import IndexDefinition
 from etf_trading.nicegui_app.components.alerts import empty_state
 from etf_trading.nicegui_app.components.charts import render_ranged_lightweight_chart
 from etf_trading.nicegui_app.components.tables import render_table
 from etf_trading.nicegui_app.state import (
+    create_store,
+    index_atomic_snapshot_inputs,
     index_chart_payload,
-    invalidate_index_health_snapshot_cache,
-    load_index_health_snapshot_cached,
+    load_index_atomic_snapshot_readonly,
 )
 from etf_trading.nicegui_app.view_models import (
-    IndexHealthFilters,
+    IndexAtomicFilters,
+    INDEX_ATOMIC_DATA_SOURCE_LABELS,
     PlatformSnapshot,
+    build_index_atomic_rows,
     code_from_option,
     current_ui_audit_findings,
+    index_atomic_detail_groups,
     index_choice_options,
-    index_health_detail_options,
-    index_health_detail_rows,
-    index_health_filter_options,
-    index_health_rows,
-    index_health_summary,
     index_data_status_notice,
     market_overview,
+)
+
+
+_SNAPSHOT_STATUS_LABELS = {
+    "ready": "已验证",
+    "stale": "待重建",
+    "missing": "不存在",
+    "failed": "生成失败",
+    "building": "生成中",
+    "computed": "已计算",
+    "insufficient_history": "历史不足",
+    "missing_input": "缺少输入字段",
+    "read_failed": "读取失败",
+    "calculation_failed": "计算失败",
+    "COMPLETE": "历史完整",
+    "INCOMPLETE": "历史不完整",
+    "BASELINE_UNVERIFIED": "基日待核验",
+    "SOURCE_LIMITED": "数据源历史不完整",
+    "MISSING_HISTORY": "历史缺失",
+    "NOT_VALIDATED": "待校验",
+}
+_KEY_METRICS = (
+    ("close", "最新收盘"),
+    ("ma_20", "MA20"),
+    ("ma_60", "MA60"),
+    ("close_vs_ma_20", "相对MA20"),
+    ("close_vs_ma_60", "相对MA60"),
+    ("range_20", "20日区间"),
+    ("return_20", "20日收益"),
+    ("data_status", "数据状态"),
 )
 
 
@@ -75,7 +106,9 @@ def _render_index_reference(snapshot: PlatformSnapshot) -> None:
             rows = data.fillna("").to_dict("records")
             with table_area:
                 if rows:
-                    render_table(rows, row_key="index_code", compact=True, ui_module=ui).classes("workbench-data-table workbench-data-table--compact")
+                    render_table(rows, row_key="index_code", compact=True, ui_module=ui).classes(
+                        "workbench-data-table workbench-data-table--compact"
+                    )
                 else:
                     empty_state("当前池没有指数", "请先在数据维护页同步目录并完成相应数据任务。")
 
@@ -90,213 +123,238 @@ def _render_index_reference(snapshot: PlatformSnapshot) -> None:
 
 
 def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
+    """Render stored index atoms only; maintenance owns every rebuild."""
+
     if parquet_store is None:
         empty_state("暂无指数体检", "当前页面没有可用历史数据存储。")
         _render_audit("market")
         return
 
-    try:
-        definitions, coverage = _index_health_inputs(snapshot)
-        cache_result = load_index_health_snapshot_cached(parquet_store, definitions, coverage=coverage)
-        holder = {"summary": cache_result.summary, "details": cache_result.details, "result": cache_result}
-    except Exception as exc:  # noqa: BLE001 - diagnostics should surface snapshot failures
-        empty_state("指数体检快照生成失败", str(exc))
-        _render_audit("market")
-        return
+    definitions, coverage = index_atomic_snapshot_inputs(create_store())
+    holder = {"result": load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)}
 
-    ui.label(index_data_status_notice(snapshot)).classes("workbench-chart-note")
-    status_area = ui.row().classes("w-full")
-    metric_area = ui.row().classes("w-full gap-2")
-    table_area = ui.column().classes("w-full")
-    detail_area = ui.column().classes("w-full gap-2")
-    filter_maps = {
-        "categories": index_health_filter_options(holder["summary"], "category", "全部分类"),
-        "trend": index_health_filter_options(holder["summary"], "trend_health_status", "全部趋势体检"),
-        "valuation": index_health_filter_options(holder["summary"], "valuation_health_status", "全部估值体检"),
-    }
+    with ui.column().classes("index-atomic-workbench w-full gap-3"):
+        with ui.column().classes("index-atomic-toolbar w-full gap-2"):
+            status_area = ui.row().classes("index-atomic-status-bar w-full")
+            with ui.row().classes("index-atomic-controls w-full items-center gap-2"):
+                pool = ui.toggle({"core": "核心池", "research": "研究池"}, value="core").props("dense")
+                query = ui.input("搜索指数").props("dense outlined clearable debounce=250").classes("index-atomic-search")
+                ui.button("重新读取快照", icon="refresh", on_click=lambda: reload_snapshot()).props("dense outline")
+                ui.link("前往数据维护", f"/page/maintenance/{quote('数据体检', safe='')}").classes("text-sm font-semibold")
+        alert_area = ui.column().classes("w-full")
+        table_area = ui.column().classes("index-atomic-table w-full")
 
-    with ui.row().classes("workbench-toolbar w-full"):
-        query = ui.input("代码 / 名称 / 分类").props("dense outlined clearable debounce=250").classes("w-72")
-        category = ui.select(filter_maps["categories"], value=filter_maps["categories"][0], label="分类").props("dense outlined").classes("w-40")
-        trend_status = ui.select(filter_maps["trend"], value=filter_maps["trend"][0], label="趋势体检").props("dense outlined").classes("w-40")
-        valuation_status = ui.select(filter_maps["valuation"], value=filter_maps["valuation"][0], label="估值体检").props("dense outlined").classes("w-40")
-        detail_select = ui.select([], value=None, label="查看指数").props("dense outlined").classes("w-72")
-        ui.button("刷新快照", icon="refresh", on_click=lambda: reload_snapshot()).props("dense outline")
-
-    selected_holder = {"code": ""}
-
-    def render_cache_status() -> None:
-        status_area.clear()
+    def render_status_bar() -> None:
         result = holder["result"]
-        if result.status == "ready":
-            return
+        status_area.clear()
+        generated_at = _datetime_text(result.generated_at)
+        current_date = result.current_latest_date or "暂无"
+        counts = _snapshot_status_counts(result.summary)
         with status_area:
-            if result.status == "stale":
-                ui.label(f"指数体检快照刷新失败，当前展示上一版缓存：{result.message}").classes("text-xs text-amber-700")
-            elif result.status == "building":
-                ui.label("指数体检快照正在生成，稍后刷新即可查看。").classes("text-xs text-blue-700")
-            elif result.status == "failed":
-                ui.label(f"指数体检快照生成失败：{result.message}").classes("text-xs text-red-700")
+            with ui.row().classes("w-full items-center gap-2 flex-wrap"):
+                ui.label(f"快照状态：{_SNAPSHOT_STATUS_LABELS.get(result.status, result.status)}").classes("index-atomic-status")
+                ui.label(f"生成时间：{generated_at}").classes("index-atomic-status")
+                ui.label(f"当前输入最新日期：{current_date}").classes("index-atomic-status")
+                ui.label(f"指标状态计数：{counts}").classes("index-atomic-status")
 
-    def render_metrics() -> None:
-        metric_area.clear()
-        with metric_area:
-            for metric in index_health_summary(holder["summary"]):
-                _metric(metric.label, metric.value, metric.detail)
-
-    def current_filters() -> IndexHealthFilters:
-        return IndexHealthFilters(
-            query=str(query.value or ""),
-            category=str(category.value or "全部分类"),
-            trend_status=str(trend_status.value or "全部趋势体检"),
-            valuation_status=str(valuation_status.value or "全部估值体检"),
-        )
-
-    def refresh_filter_options() -> None:
-        def sync(select_control, key: str, column: str, all_label: str) -> None:
-            options = index_health_filter_options(holder["summary"], column, all_label)
-            filter_maps[key] = options
-            current = str(select_control.value or all_label)
-            select_control.options = options
-            select_control.value = current if current in options else options[0]
-            select_control.update()
-
-        sync(category, "categories", "category", "全部分类")
-        sync(trend_status, "trend", "trend_health_status", "全部趋势体检")
-        sync(valuation_status, "valuation", "valuation_health_status", "全部估值体检")
-
-    def select_detail(index_code: str) -> None:
-        if not index_code:
+    def render_alert() -> None:
+        result = holder["result"]
+        alert_area.clear()
+        message = _snapshot_alert_message(result.status)
+        if not message:
             return
-        selected_holder["code"] = index_code
-        for option in detail_select.options:
-            if code_from_option(option) == index_code:
-                detail_select.value = option
-                detail_select.update()
-                break
-        render_details()
+        with alert_area:
+            with ui.element("div").classes("index-atomic-alert w-full"):
+                ui.label(message).classes("text-sm font-bold")
+                ui.link("前往数据维护", f"/page/maintenance/{quote('数据体检', safe='')}").classes("text-sm font-semibold")
 
     def refresh_table() -> None:
-        filters = current_filters()
-        rows = index_health_rows(holder["summary"], filters)
-        options = index_health_detail_options(holder["summary"], filters)
-        option_by_code = {code_from_option(option): option for option in options}
-        current_code = selected_holder["code"]
-        if not current_code or current_code not in option_by_code:
-            current_code = code_from_option(options[0]) if options else ""
-            selected_holder["code"] = current_code
-        detail_select.options = options
-        detail_select.value = option_by_code.get(current_code)
-        detail_select.update()
-
+        result = holder["result"]
         table_area.clear()
+        if result.status in {"missing", "failed"}:
+            return
+        rows = build_index_atomic_rows(
+            result.summary,
+            IndexAtomicFilters(pool=str(pool.value or "core"), query=str(query.value or "")),
+        )
         with table_area:
             if rows:
-                render_table(rows, row_key="index_code", pagination=15, compact=True, ui_module=ui).classes("workbench-data-table w-full").on(
-                    "rowClick",
-                    lambda event: select_detail(_event_row_code(event, "index_code")),
-                )
+                render_table(rows, row_key="index_code", pagination=15, compact=True, ui_module=ui).classes(
+                    "workbench-data-table workbench-data-table--compact w-full"
+                ).on("rowClick", lambda event: _open_index_atomic_dialog(holder["result"], _event_row_code(event, "index_code")))
             else:
-                empty_state("没有匹配指数体检", "换一个筛选条件，或先到数据维护补齐指数历史与估值缓存。")
-        render_details()
-
-    def render_details() -> None:
-        detail_area.clear()
-        index_code = selected_holder["code"]
-        with detail_area:
-            if not index_code:
-                empty_state("暂无指数体检详情", "请选择一个指数查看原子指标。")
-                return
-            trend_rows = index_health_detail_rows(holder["details"], index_code, "trend")
-            valuation_rows = index_health_detail_rows(holder["details"], index_code, "valuation")
-            ui.label(f"趋势原子指标：{index_code}").classes("text-sm font-semibold text-slate-700")
-            if trend_rows:
-                render_table(trend_rows, pagination=12, compact=True, ui_module=ui).classes("workbench-data-table w-full")
-            else:
-                empty_state("暂无趋势原子指标", "当前快照中没有这个指数的趋势明细。")
-            ui.label(f"估值原子指标：{index_code}").classes("text-sm font-semibold text-slate-700")
-            if valuation_rows:
-                render_table(valuation_rows, pagination=12, compact=True, ui_module=ui).classes("workbench-data-table w-full")
-            else:
-                empty_state("暂无估值原子指标", "当前快照中没有这个指数的估值明细。")
+                empty_state("没有匹配的指数", "请调整核心/研究池或搜索条件。")
 
     def reload_snapshot() -> None:
         try:
-            should_force_refresh = holder["result"].status == "ready"
-            if should_force_refresh:
-                invalidate_index_health_snapshot_cache(parquet_store)
-            cache_result = load_index_health_snapshot_cached(
-                parquet_store,
-                definitions,
-                coverage=coverage,
-                force_refresh=should_force_refresh,
-            )
-            holder["summary"] = cache_result.summary
-            holder["details"] = cache_result.details
-            holder["result"] = cache_result
-        except Exception as exc:  # noqa: BLE001 - keep current page usable after refresh failures
-            ui.notify(f"刷新指数体检失败：{exc}", type="negative")
+            holder["result"] = load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+        except Exception as exc:  # noqa: BLE001 - a read failure must keep the visible snapshot intact
+            ui.notify(f"读取指数原子指标快照失败：{exc}", type="negative")
             return
-        refresh_filter_options()
-        render_cache_status()
-        render_metrics()
+        render_status_bar()
+        render_alert()
         refresh_table()
-        if cache_result.status == "failed":
-            ui.notify("指数体检快照生成失败，请查看页面提示", type="negative")
-        elif cache_result.status == "stale":
-            ui.notify("指数体检快照刷新失败，已保留上一版缓存", type="warning")
-        else:
-            ui.notify("指数体检快照已刷新", type="positive")
 
+    pool.on_value_change(lambda event: refresh_table())
     query.on_value_change(lambda event: refresh_table())
-    category.on_value_change(lambda event: refresh_table())
-    trend_status.on_value_change(lambda event: refresh_table())
-    valuation_status.on_value_change(lambda event: refresh_table())
-    detail_select.on_value_change(lambda event: select_detail(code_from_option(str(detail_select.value or ""))))
-    render_cache_status()
-    render_metrics()
+    render_status_bar()
+    render_alert()
     refresh_table()
     _render_audit("market")
 
 
-def _index_health_inputs(snapshot: PlatformSnapshot) -> tuple[tuple[IndexDefinition, ...], pd.DataFrame]:
-    summary = snapshot.index_summary.copy()
-    if summary.empty or "index_code" not in summary:
-        return (), pd.DataFrame()
-    definitions: list[IndexDefinition] = []
-    for row in summary.fillna("").to_dict("records"):
-        code = str(row.get("index_code") or "").strip()
-        if not code:
-            continue
-        base_date = pd.to_datetime(row.get("index_base_date"), errors="coerce")
-        definitions.append(
-            IndexDefinition(
-                code,
-                str(row.get("index_name") or code),
-                str(row.get("market") or ""),
-                str(row.get("category") or ""),
-                code,
-                pool=str(row.get("pool") or "core"),
-                index_base_date=None if pd.isna(base_date) else pd.Timestamp(base_date).date(),
-            )
+def _open_index_atomic_dialog(result, index_code: str) -> None:
+    if not index_code:
+        return
+    groups = index_atomic_detail_groups(result.details, index_code)
+    summary = _summary_row(result.summary, index_code)
+    dialog = ui.dialog()
+    with dialog:
+        with ui.card().classes("index-atomic-dialog"):
+            with ui.row().classes("w-full items-center justify-between gap-2"):
+                ui.label(f"指数原子指标：{_summary_identity(summary, index_code)}").classes("text-lg font-bold")
+                ui.button("关闭", icon="close", on_click=dialog.close).props("flat dense")
+            with ui.tabs().classes("w-full") as tabs:
+                key_tab = ui.tab("关键指标")
+                all_tab = ui.tab("全部原子指标")
+                quality_tab = ui.tab("数据质量")
+            with ui.tab_panels(tabs, value=key_tab).classes("w-full"):
+                with ui.tab_panel(key_tab):
+                    _render_key_metrics(groups, summary)
+                with ui.tab_panel(all_tab):
+                    _render_all_atomic_groups(groups)
+                with ui.tab_panel(quality_tab):
+                    _render_snapshot_quality(result, summary)
+    dialog.open()
+
+
+def _render_key_metrics(groups, summary: dict[str, object]) -> None:
+    _render_metric_grid(_key_metric_rows(groups, summary))
+
+
+def _key_metric_rows(groups, summary: dict[str, object]) -> list[tuple[str, str, str]]:
+    items_by_key = {item.metric_key: item for group in groups for item in group.items}
+    rows: list[tuple[str, str, str]] = []
+    for key, label in _KEY_METRICS:
+        if key == "range_20":
+            high = items_by_key.get("range_20_high")
+            low = items_by_key.get("range_20_low")
+            value = _range_20_text(high.value if high is not None else "", low.value if low is not None else "")
+            status = high.status if high is not None else (low.status if low is not None else "")
+        elif key == "data_status":
+            value = _status_text(summary.get("snapshot_status"), "数据不足")
+            status = ""
+        else:
+            item = items_by_key.get(key)
+            value = item.value if item is not None else "数据不足"
+            status = item.status if item is not None else ""
+        rows.append((label, value, status))
+    return rows
+
+
+def _range_20_text(high: str, low: str) -> str:
+    if high == "是":
+        return "20日新高"
+    if low == "是":
+        return "20日新低"
+    if high == "数据不足" or low == "数据不足":
+        return "数据不足"
+    return "区间内"
+
+
+def _render_all_atomic_groups(groups) -> None:
+    with ui.element("div").classes("index-atomic-detail-grid"):
+        for group in groups:
+            with ui.element("section").classes("index-atomic-detail-group"):
+                ui.label(group.title).classes("index-atomic-detail-title")
+                if group.items:
+                    _render_metric_grid([(item.label, item.value, item.status) for item in group.items])
+                else:
+                    ui.label("该组没有存储指标。").classes("text-sm text-slate-500")
+
+
+def _render_snapshot_quality(result, summary: dict[str, object]) -> None:
+    coverage = " · ".join(
+        part
+        for part in (
+            _status_text(summary.get("history_completeness_status"), ""),
+            _text(summary.get("history_completeness_message"), ""),
         )
-    coverage_columns = [
-        column
-        for column in (
-            "index_code",
-            "index_base_date",
-            "history_completeness_status",
-            "history_completeness_message",
-        )
-        if column in summary
-    ]
-    coverage = summary[coverage_columns].rename(
-        columns={
-            "history_completeness_status": "completeness_status",
-            "history_completeness_message": "completeness_message",
-        }
+        if part
+    ) or "暂无"
+    _render_metric_grid(
+        [
+            ("快照生成时间", _datetime_text(result.generated_at), ""),
+            ("快照状态", _SNAPSHOT_STATUS_LABELS.get(result.status, result.status), ""),
+            ("原始历史状态", _status_text(summary.get("history_status"), "暂无"), ""),
+            ("历史行数", _text(summary.get("history_rows"), "0"), ""),
+            ("历史覆盖", coverage, ""),
+            ("数据源", _data_source_text(summary.get("data_source")), ""),
+            ("错误信息", _text(summary.get("error_text"), "无"), ""),
+        ]
     )
-    return tuple(definitions), coverage
+
+
+def _render_metric_grid(rows: list[tuple[str, str, str]]) -> None:
+    with ui.element("div").classes("index-atomic-detail-grid"):
+        for label, value, status in rows:
+            with ui.element("div").classes("index-atomic-detail-item"):
+                ui.label(label).classes("index-atomic-detail-label")
+                ui.label(value).classes("index-atomic-detail-value")
+                if status:
+                    ui.label(status).classes("index-atomic-detail-status")
+
+
+def _summary_row(summary: pd.DataFrame, index_code: str) -> dict[str, object]:
+    if summary.empty or "index_code" not in summary:
+        return {}
+    rows = summary[summary["index_code"].fillna("").astype(str) == index_code].to_dict("records")
+    return rows[0] if rows else {}
+
+
+def _summary_identity(summary: dict[str, object], index_code: str) -> str:
+    name = _text(summary.get("index_name"), "")
+    return f"{index_code} {name}".strip()
+
+
+def _snapshot_alert_message(status: str) -> str:
+    messages = {
+        "stale": "原子指标快照待重建，当前展示的是上次成功生成的数据。",
+        "missing": "尚未生成指数原子指标快照，不能展示计算指标。请前往数据维护执行“重建指数原子指标”。",
+        "failed": "最近一次原子指标快照生成失败，不能把结果作为最新数据使用。请查看数据维护任务并重新执行。",
+        "building": "指数原子指标快照正在生成，完成后请重新读取快照。",
+    }
+    return messages.get(status, "")
+
+
+def _snapshot_status_counts(summary: pd.DataFrame) -> str:
+    if summary.empty or "snapshot_status" not in summary:
+        return "暂无"
+    counts = summary["snapshot_status"].fillna("").astype(str).value_counts()
+    if counts.empty:
+        return "暂无"
+    return "、".join(f"{_SNAPSHOT_STATUS_LABELS.get(key, key)} {count}" for key, count in counts.items())
+
+
+def _datetime_text(value: datetime | None) -> str:
+    return value.strftime("%Y-%m-%d %H:%M") if value is not None else "暂无"
+
+
+def _text(value: object, fallback: str) -> str:
+    if value is None or (not isinstance(value, (list, tuple, dict)) and pd.isna(value)):
+        return fallback
+    text = str(value).strip()
+    return text or fallback
+
+
+def _status_text(value: object, fallback: str) -> str:
+    text = _text(value, fallback)
+    return _SNAPSHOT_STATUS_LABELS.get(text, text)
+
+
+def _data_source_text(value: object) -> str:
+    text = _text(value, "暂无")
+    return INDEX_ATOMIC_DATA_SOURCE_LABELS.get(text, text)
 
 
 def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
@@ -313,22 +371,17 @@ def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
             if not selected:
                 empty_state("暂无指数K线", "请选择一个指数。")
                 return
-
             payload = index_chart_payload(parquet_store, selected)
             if not payload[0]["series"]:
                 empty_state("暂无指数K线", "先补齐该指数历史。")
                 return
-
             render_ranged_lightweight_chart(payload, element_id=f"index-chart-{selected}", title=f"指数：{selected}")
 
     with ui.row().classes("workbench-chart-selector w-full"):
-        ui.select(
-            options,
-            value=options[0],
-            label="选择指数",
-            on_change=lambda event: draw_chart(event.value),
-        ).props("dense outlined").classes("w-96")
-        ui.label("指数只做市场状态判断，ETF 交易载体在 ETF 数据页处理。").classes("workbench-chart-note")
+        ui.select(options, value=options[0], label="选择指数").props("dense outlined").classes("w-96").on_value_change(
+            lambda event: draw_chart(event.value)
+        )
+        ui.label("指数只做市场状态判断，ETF交易载体在ETF数据页处理。").classes("workbench-chart-note")
     chart_area = ui.column().classes("w-full gap-2")
     draw_chart(options[0])
     _render_audit("market")
@@ -336,16 +389,16 @@ def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
 
 def _metric(label: str, value: object, detail: str) -> None:
     with ui.column().classes("workbench-metric"):
-        ui.label(label).classes("workbench-metric-label")
+        ui.label(str(label)).classes("workbench-metric-label")
         ui.label(str(value)).classes("workbench-metric-value")
-        ui.label(detail).classes("text-xs text-slate-400")
+        ui.label(str(detail)).classes("workbench-metric-detail")
 
 
 def _event_row_code(event, key: str) -> str:
-    args = getattr(event, "args", None)
+    args = getattr(event, "args", event)
     if isinstance(args, dict):
         row = args.get("row", args)
-    elif isinstance(args, list) and len(args) >= 2 and isinstance(args[1], dict):
+    elif isinstance(args, (list, tuple)) and len(args) > 1 and isinstance(args[1], dict):
         row = args[1]
     else:
         row = {}
@@ -358,6 +411,6 @@ def _render_audit(page_slug: str) -> None:
     expansion = getattr(ui, "expansion", None)
     if not callable(expansion):
         return
-    with expansion("本页 UI 修正点", icon="rule").classes("w-full text-sm"):
+    with expansion("页面审计", icon="fact_check").classes("w-full"):
         for item in findings:
-            ui.label(f"{item.problem} -> {item.fix}").classes("text-xs text-slate-500")
+            ui.label(f"{item.problem} → {item.fix}").classes("text-xs text-slate-500")
