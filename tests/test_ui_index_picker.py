@@ -248,7 +248,7 @@ def test_common_index_customizer_can_reset_to_defaults(monkeypatch):
 
 def test_filter_index_definitions_matches_category_code_and_name():
     by_code = [item.index_code for item in app._filter_index_definitions(category_filter="A股行业", query="银行")]
-    assert by_code == ["399986"]
+    assert by_code == ["399986", "801780", "801782", "801783"]
 
     by_name = [item.index_code for item in app._filter_index_definitions(category_filter="全部分类", query="红利")]
     assert {"000922", "000015", "H30269", "930955", "931446"}.issubset(set(by_name))

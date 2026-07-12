@@ -13,7 +13,7 @@
 - 第一阶段只覆盖 A 股和港股；不增加付费数据源、境外市场、商品或债券指数。
 - 正式目录目标为 180 个经验证指数：核心池 100 个、研究池 80 个；配置保留约 30 个候补。
 - 首次历史补齐必须从 `1990-01-01` 请求；不得用十年窗口代替全历史。
-- 核心池必须同时满足历史完整、最新行情正常和至少一个活跃 ETF 映射；研究池不得进入研究回测、策略或买卖建议输入。
+- 核心池必须同时满足可核验官方基日、历史完整、最新行情正常和至少一个活跃 ETF 映射；基日待核验的指数不得进入核心池、研究回测、策略或买卖建议输入。
 - 历史完整性、行情新鲜度和数据源可读性必须分别存储和显示；所有用户可见状态为中文。
 - 生成的 SQLite、Parquet、日志、报告和临时测试目录不得提交。
 - 使用 `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe` 与唯一的 `--basetemp C:\Users\cjj\AppData\Local\Temp\...` 运行测试。
@@ -108,7 +108,8 @@ class IndexCatalogEntry:
     category_level_2: str
     index_type: str
     pool: Literal["core", "research", "reserve"]
-    index_base_date: date
+    index_base_date: date | None
+    baseline_source: Literal["official_methodology", "official_factsheet", "unverified"]
     published_at: date | None
     source_kind: Literal["csi", "shenwan", "hk"]
     provider_symbol: str
@@ -134,7 +135,7 @@ def catalog_definitions(
     return tuple(entry.to_index_definition() for entry in selected)
 ```
 
-Populate `configs/index_universe.yaml` with exactly 210 records. Use the existing 49 records as migration seeds, all 31 rows returned by `ak.sw_index_first_info()` as A 股行业覆盖，人工筛选的申万二级行业和 ETF 覆盖主题补足 A 股 143 条，以及经过港股端点验证的宽基、行业和中国资产指数补足港股 37 条。每条记录必须有实际代码、指数基日、数据源类型和提供者代码；不得以名称猜测代替代码。
+Populate `configs/index_universe.yaml` with exactly 210 records. Use the existing 49 records as migration seeds, all 31 rows returned by `ak.sw_index_first_info()` as A 股行业覆盖，人工筛选的申万二级行业和 ETF 覆盖主题补足 A 股 143 条，以及经过港股端点验证的宽基、行业和中国资产指数补足港股 37 条。每条记录必须有实际代码、数据源类型和提供者代码；可核验的官方基日填写 `index_base_date` 与官方来源，未补录官方基日时写入 `baseline_source: unverified`，并且不能被标记为历史完整或核心可交易。
 
 Keep compatibility in `indexes.py`:
 
@@ -223,12 +224,12 @@ CREATE TABLE IF NOT EXISTS index_catalog (
     index_code TEXT PRIMARY KEY, name TEXT NOT NULL, market TEXT NOT NULL,
     category_level_1 TEXT NOT NULL, category_level_2 TEXT NOT NULL,
     index_type TEXT NOT NULL, pool TEXT NOT NULL,
-    index_base_date TEXT NOT NULL, published_at TEXT,
+    index_base_date TEXT, baseline_source TEXT NOT NULL, published_at TEXT,
     source_kind TEXT NOT NULL, provider_symbol TEXT NOT NULL,
     aliases_json TEXT NOT NULL DEFAULT '[]', updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS index_history_coverage (
-    index_code TEXT PRIMARY KEY, index_base_date TEXT NOT NULL,
+    index_code TEXT PRIMARY KEY, index_base_date TEXT, baseline_source TEXT NOT NULL,
     local_first_trade_date TEXT, source_first_trade_date TEXT,
     latest_trade_date TEXT, history_rows INTEGER NOT NULL DEFAULT 0,
     completeness_status TEXT NOT NULL, completeness_message TEXT NOT NULL,
@@ -410,7 +411,11 @@ def ensure_index_history(self, index_code: str, through: date | str) -> IndexHis
     fetched = self.provider.fetch_index_daily(entry, fetch_start, through)
     featured = _merge_index_history(existing, fetched, entry.index_code)
     self.parquet_store.write_index_prices(entry.index_code, featured)
-    completeness = assess_index_history_completeness(featured, entry.index_base_date)
+    completeness = assess_index_history_completeness(
+        featured,
+        entry.index_base_date,
+        baseline_source=entry.baseline_source,
+    )
     self.store.upsert_index_history_coverage(entry.index_code, **completeness.to_storage_values())
     return IndexHistoryResult.from_frame(entry.index_code, featured, completeness)
 ```
@@ -426,7 +431,7 @@ $env:PYTHONPATH='H:\pythonproject\etf0614\etf0614\src'
 & 'H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe' -m pytest tests\test_storage_and_services.py tests\test_index_support.py tests\test_data_coverage.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-history-green
 ```
 
-Expected: PASS，覆盖完整、缺失、滞后和读取失败互不混淆。
+Expected: PASS，覆盖完整、缺失、基日待核验、滞后和读取失败互不混淆。
 
 - [ ] **Step 5: 提交目录服务与完整性评估**
 
@@ -649,6 +654,7 @@ Add these display labels:
 VALUE_LABELS.update({
     "COMPLETE": "历史完整",
     "INCOMPLETE": "历史不完整",
+    "BASELINE_UNVERIFIED": "基日待核验",
     "SOURCE_LIMITED": "数据源历史不完整",
     "index_catalog_sync": "同步指数目录",
     "index_source_validation": "验证指数数据源",
