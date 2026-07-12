@@ -506,6 +506,15 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Evidence writes must be monotonic by reliability: `third_party_*` and unresolved outcomes may never overwrite `official_methodology`, `official_factsheet`, or `official_api`.
   - After a CSI rate limit, recheck only downgraded candidates after a successful single-code probe; do not repeat the complete formal-index batch.
   - Keep JoinQuant publication dates as explicit third-party references when CSI does not return a code-matching official basic date.
+
+## 2026-07-12 - Enforce baseline evidence gates across every entry point
+
+- Summary: Applied monotonic evidence merging to YAML and SQLite, added official-complete gating to NiceGUI and Streamlit summaries/signals, and localized the baseline-verification CLI including missing values.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\baseline-final-signal-controller` passed with 401 tests. The refreshed NiceGUI maintenance page returned HTTP 200 on `http://127.0.0.1:8503/page/maintenance`.
+- Watch out next time:
+  - Apply the official-baseline + COMPLETE + fresh-data gate at every signal-generation path, not only at summary tables or visible action controls.
+  - Treat third-party and unresolved evidence as monotonic lower-confidence states: they may not overwrite official records in YAML, SQLite, cache projections, or derived coverage.
+  - Normalize pandas `NaN` and `NaT` before any user-facing CLI/table text so internal sentinel values never leak into Chinese output.
 ## 2026-07-12 - Restore index-worktree baseline
 
 - Summary: Synced the verified-base-date coverage assertion to the current Chinese completeness message; no production behavior changed.
