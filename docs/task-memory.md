@@ -1,5 +1,13 @@
 # Task Memory
 
+## 2026-07-13 - Refine index atomic detail readability
+
+- Summary: Added scoped responsive presentation for the stored index-atomic overview: four desktop cards, two at 960px, one at 720px, plus compact MA/range/timeline/evidence and expandable-group styling. The page only presents stored snapshot facts; absent atomic items draw neither MA ladders, range markers, nor synthetic events.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_nicegui_theme.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-detail-theme-red` first failed as expected for the missing overview selector; the green rerun passed 9 tests. `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_nicegui_view_models.py tests\test_nicegui_app_import.py tests\test_nicegui_theme.py tests\test_nicegui_navigation.py tests\test_index_health_snapshot.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-detail-focused` passed 97 tests, and `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-detail-full` passed 423 tests. Browser plugin not available; the local app at `http://127.0.0.1:8502/page/market/%E6%8C%87%E6%95%B0%E4%BD%93%E6%A3%80` was checked with local Chrome at 1440px and 390px: the missing-snapshot alert appeared, root horizontal overflow was absent, and no captured console errors/warnings occurred. This worktree has no generated atomic snapshot, so the overview dialog, stale, and failed snapshot states were not fabricated or passed as browser-verified.
+- Watch out next time:
+  - Keep all overview rules under `.index-atomic-*`; do not expand responsive changes into shared workbench or main-table selectors.
+  - A visual QA result for the missing state does not prove the generated-snapshot dialog; rebuild a real local snapshot before claiming the card, tabs, or expandable indicator groups have been browser-tested.
+
 ## 2026-07-12 - Design readable index atomic detail
 
 - Summary: Approved a detail-dialog readability redesign for `市场地图 -> 指数体检`: the renamed `状态概览` reads position, events, and evidence in that order, while expandable full groups preserve every atomic fact and data-quality audit trail. It makes no score, trend conclusion, or trading recommendation and does not change snapshot computation.

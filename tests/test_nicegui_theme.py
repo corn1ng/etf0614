@@ -59,6 +59,19 @@ def test_theme_contains_index_atomic_workbench_layout_hooks():
     assert "grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));" in WORKBENCH_CSS
 
 
+def test_theme_contains_readable_index_atomic_overview_rules():
+    for css_class in [
+        ".index-atomic-overview-grid", ".index-atomic-overview-card", ".index-atomic-ma-ladder",
+        ".index-atomic-range-track", ".index-atomic-event-timeline", ".index-atomic-expand-group",
+        ".index-atomic-evidence-groups", ".index-atomic-full-groups",
+    ]:
+        assert css_class in WORKBENCH_CSS
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr));" in WORKBENCH_CSS
+    assert "@media (max-width: 960px)" in WORKBENCH_CSS
+    assert ".index-atomic-overview-grid { grid-template-columns: 1fr; }" in WORKBENCH_CSS
+    assert "overflow-x: clip;" in WORKBENCH_CSS
+
+
 def test_task_center_theme_classes_exist():
     for css_class in [
         ".workbench-task-center",

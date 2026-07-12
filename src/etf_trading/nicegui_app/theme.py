@@ -624,6 +624,72 @@ body {
   min-width: 0;
   padding: 16px;
 }
+.index-atomic-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+.index-atomic-overview-card,
+.index-atomic-expand-group {
+  min-width: 0;
+  border: 1px solid var(--wb-line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+.index-atomic-overview-card { padding: 10px; }
+.index-atomic-overview-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: #1e293b;
+}
+.index-atomic-overview-note {
+  margin: 2px 0 10px;
+  color: var(--wb-muted);
+  font-size: 12px;
+}
+.index-atomic-ma-ladder {
+  position: relative;
+  min-height: 84px;
+  overflow: hidden;
+}
+.index-atomic-range-track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: #dbe5f1;
+}
+.index-atomic-range-marker {
+  position: absolute;
+  top: -4px;
+  width: 16px;
+  height: 16px;
+  border: 3px solid #ffffff;
+  border-radius: 50%;
+  background: var(--wb-blue);
+  transform: translateX(-50%);
+}
+.index-atomic-event-timeline {
+  display: grid;
+  gap: 8px;
+  border-left: 2px solid #cbd5e1;
+  padding-left: 10px;
+}
+.index-atomic-evidence-heading {
+  margin-top: 16px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #334155;
+}
+.index-atomic-evidence-groups,
+.index-atomic-full-groups {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.index-atomic-expand-group .q-item { min-height: 38px; }
 .index-atomic-detail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -679,6 +745,9 @@ body {
 .tone-success { color: var(--wb-green); }
 .tone-warning { color: var(--wb-amber); }
 .tone-danger { color: var(--wb-red); }
+@media (max-width: 960px) {
+  .index-atomic-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 720px) {
   .workbench-sidebar { width: 58px; flex-shrink: 0; }
   .workbench-brand { padding: 0 8px; font-size: 0; }
@@ -698,6 +767,8 @@ body {
   .index-atomic-controls { align-items: stretch; }
   .index-atomic-search { flex-basis: 100%; max-width: none; }
   .index-atomic-dialog { width: calc(100vw - 20px); padding: 12px; }
+  .index-atomic-overview-grid { grid-template-columns: 1fr; }
+  .index-atomic-dialog { overflow-x: clip; }
   .index-atomic-detail-grid { grid-template-columns: 1fr; }
 }
 """
