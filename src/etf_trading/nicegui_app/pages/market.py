@@ -19,6 +19,7 @@ from etf_trading.nicegui_app.state import (
 )
 from etf_trading.nicegui_app.view_models import (
     IndexAtomicFilters,
+    IndexAtomicOverview,
     INDEX_ATOMIC_DATA_SOURCE_LABELS,
     INDEX_ATOMIC_DISPLAY_COLUMNS,
     PlatformSnapshot,
@@ -26,6 +27,7 @@ from etf_trading.nicegui_app.view_models import (
     code_from_option,
     current_ui_audit_findings,
     index_atomic_detail_groups,
+    index_atomic_overview,
     index_choice_options,
     index_data_status_notice,
     market_overview,
@@ -50,18 +52,6 @@ _SNAPSHOT_STATUS_LABELS = {
     "MISSING_HISTORY": "历史缺失",
     "NOT_VALIDATED": "待校验",
 }
-_KEY_METRICS = (
-    ("close", "最新收盘"),
-    ("ma_20", "MA20"),
-    ("ma_60", "MA60"),
-    ("close_vs_ma_20", "相对MA20"),
-    ("close_vs_ma_60", "相对MA60"),
-    ("range_20", "20日区间"),
-    ("return_20", "20日收益"),
-    ("data_status", "数据状态"),
-)
-
-
 def render(snapshot: PlatformSnapshot, section: str, parquet_store=None) -> None:
     if section == "市场总览":
         _render_overview(snapshot)
@@ -220,8 +210,9 @@ def _index_atomic_table_rows(rows: list[dict[str, object]]) -> list[dict[str, ob
 def _open_index_atomic_dialog(result, index_code: str) -> None:
     if not index_code:
         return
-    groups = index_atomic_detail_groups(result.details, index_code)
     summary = _summary_row(result.summary, index_code)
+    overview = index_atomic_overview(summary, result.details, index_code)
+    groups = index_atomic_detail_groups(result.details, index_code)
     dialog = ui.dialog()
     with dialog:
         with ui.card().classes("index-atomic-dialog"):
@@ -229,12 +220,12 @@ def _open_index_atomic_dialog(result, index_code: str) -> None:
                 ui.label(f"指数原子指标：{_summary_identity(summary, index_code)}").classes("text-lg font-bold")
                 ui.button("关闭", icon="close", on_click=dialog.close).props("flat dense")
             with ui.tabs().classes("w-full") as tabs:
-                key_tab = ui.tab("关键指标")
+                overview_tab = ui.tab("状态概览")
                 all_tab = ui.tab("全部原子指标")
                 quality_tab = ui.tab("数据质量")
-            with ui.tab_panels(tabs, value=key_tab).classes("w-full"):
-                with ui.tab_panel(key_tab):
-                    _render_key_metrics(groups, summary)
+            with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
+                with ui.tab_panel(overview_tab):
+                    _render_atomic_overview(overview)
                 with ui.tab_panel(all_tab):
                     _render_all_atomic_groups(groups)
                 with ui.tab_panel(quality_tab):
@@ -242,49 +233,86 @@ def _open_index_atomic_dialog(result, index_code: str) -> None:
     dialog.open()
 
 
-def _render_key_metrics(groups, summary: dict[str, object]) -> None:
-    _render_metric_grid(_key_metric_rows(groups, summary))
+def _render_atomic_overview(overview: IndexAtomicOverview | None) -> None:
+    if overview is None:
+        empty_state("暂无状态概览", "当前快照中没有这只指数的原子指标。")
+        return
+    ui.label("今天的市场状态").classes("index-atomic-overview-title")
+    ui.label("先看价格在哪里、发生过什么，再按分组核对全部原子事实。").classes("index-atomic-overview-note")
+    with ui.element("div").classes("index-atomic-overview-grid"):
+        _render_trend_card(overview.trend)
+        _render_range_card(overview.range_position)
+        _render_events_card(overview.events, overview.events_empty_text)
+        _render_quality_card(overview.quality)
+    ui.label("完整原子事实").classes("index-atomic-evidence-heading")
+    _render_expandable_groups(overview.evidence_groups, "index-atomic-evidence-groups")
 
 
-def _key_metric_rows(groups, summary: dict[str, object]) -> list[tuple[str, str, str]]:
-    items_by_key = {item.metric_key: item for group in groups for item in group.items}
-    rows: list[tuple[str, str, str]] = []
-    for key, label in _KEY_METRICS:
-        if key == "range_20":
-            high = items_by_key.get("range_20_high")
-            low = items_by_key.get("range_20_low")
-            value = _range_20_text(high.value if high is not None else "", low.value if low is not None else "")
-            status = _status_text(high.status if high is not None else (low.status if low is not None else ""), "数据不足")
-        elif key == "data_status":
-            value = _status_text(summary.get("snapshot_status"), "数据不足")
-            status = ""
-        else:
-            item = items_by_key.get(key)
-            value = _detail_metric_value(item) if item is not None else "数据不足"
-            status = _status_text(item.status, "数据不足") if item is not None else "数据不足"
-        rows.append((label, value, status))
-    return rows
-
-
-def _range_20_text(high: str, low: str) -> str:
-    if high == "是":
-        return "20日新高"
-    if low == "是":
-        return "20日新低"
-    if high == "数据不足" or low == "数据不足":
-        return "数据不足"
-    return "区间内"
-
-
-def _render_all_atomic_groups(groups) -> None:
-    with ui.element("div").classes("index-atomic-detail-grid"):
+def _render_expandable_groups(groups, class_name: str) -> None:
+    with ui.element("div").classes(class_name):
         for group in groups:
-            with ui.element("section").classes("index-atomic-detail-group"):
-                ui.label(group.title).classes("index-atomic-detail-title")
+            with ui.expansion(group.title, value=group.title == "价格与均线").classes("index-atomic-expand-group"):
                 if group.items:
                     _render_metric_grid(_detail_metric_rows(group.items))
                 else:
                     ui.label("该组没有存储指标。").classes("text-sm text-slate-500")
+
+
+def _render_trend_card(trend) -> None:
+    with ui.element("section").classes("index-atomic-overview-card"):
+        ui.label("趋势结构").classes("index-atomic-card-title")
+        if not trend.visible:
+            ui.label(trend.close.value).classes("index-atomic-card-value")
+            ui.label(trend.close.reason).classes("index-atomic-card-reason")
+            return
+        ui.label(trend.close.value).classes("index-atomic-card-value")
+        with ui.element("div").classes("index-atomic-ma-ladder"):
+            for level, relation in zip(trend.levels, trend.relations, strict=True):
+                with ui.row().classes("index-atomic-ma-row w-full justify-between"):
+                    ui.label("{} {}".format(level.label, level.value))
+                    ui.label(relation.value).classes("index-atomic-ma-relation")
+
+
+def _render_range_card(range_position) -> None:
+    with ui.element("section").classes("index-atomic-overview-card"):
+        ui.label("区间位置").classes("index-atomic-card-title")
+        ui.label(range_position.headline).classes("index-atomic-card-value")
+        if range_position.marker is None:
+            ui.label(range_position.reason or "数据不足").classes("index-atomic-card-reason")
+            return
+        with ui.element("div").classes("index-atomic-range-track"):
+            ui.element("span").classes("index-atomic-range-marker").style(
+                "left: {}%".format(range_position.marker * 100)
+            )
+        with ui.row().classes("w-full justify-between"):
+            ui.label(range_position.from_low.value)
+            ui.label(range_position.from_high.value)
+
+
+def _render_events_card(events, empty_text: str) -> None:
+    with ui.element("section").classes("index-atomic-overview-card"):
+        ui.label("最近事件").classes("index-atomic-card-title")
+        if not events:
+            ui.label(empty_text).classes("index-atomic-card-reason")
+            return
+        with ui.element("div").classes("index-atomic-event-timeline"):
+            for event in events:
+                with ui.row().classes("w-full justify-between"):
+                    ui.label(event.label)
+                    ui.label(event.days)
+
+
+def _render_quality_card(items) -> None:
+    with ui.element("section").classes("index-atomic-overview-card"):
+        ui.label("数据质量").classes("index-atomic-card-title")
+        for item in items:
+            with ui.row().classes("w-full justify-between"):
+                ui.label(item.label)
+                ui.label(item.value)
+
+
+def _render_all_atomic_groups(groups) -> None:
+    _render_expandable_groups(groups, "index-atomic-full-groups")
 
 
 def _render_snapshot_quality(result, summary: dict[str, object]) -> None:
@@ -310,10 +338,11 @@ def _render_snapshot_quality(result, summary: dict[str, object]) -> None:
 
 
 def _detail_metric_rows(items) -> list[tuple[str, str, str]]:
-    return [
-        (item.label, _detail_metric_value(item), _status_text(item.status, "数据不足"))
-        for item in items
-    ]
+    rows: list[tuple[str, str, str]] = []
+    for item in items:
+        status = _status_text(item.status, "数据不足")
+        rows.append((item.label, _detail_metric_value(item), "" if status == "已计算" else status))
+    return rows
 
 
 def _detail_metric_value(item) -> str:

@@ -17,7 +17,7 @@ def test_market_page_uses_readonly_atomic_snapshot_and_no_legacy_health_builder(
 def test_market_page_declares_pool_search_and_tabbed_detail_dialog():
     source = Path("src/etf_trading/nicegui_app/pages/market.py").read_text(encoding="utf-8")
 
-    for text in ("核心池", "研究池", "搜索指数", "关键指标", "全部原子指标", "数据质量"):
+    for text in ("核心池", "研究池", "搜索指数", "状态概览", "全部原子指标", "数据质量"):
         assert text in source
     for forbidden in ("大趋势", "中趋势", "小趋势", "允许开仓", "估值"):
         assert forbidden not in source
@@ -45,31 +45,26 @@ def test_market_page_declares_snapshot_states_fixed_columns_and_readonly_reload(
     assert "row_key=\"index_code\"" in source
 
 
-def test_market_key_metrics_use_stored_atoms_for_range_and_snapshot_data_status():
+def test_market_page_uses_overview_model_without_snapshot_builder():
+    source = Path("src/etf_trading/nicegui_app/pages/market.py").read_text(encoding="utf-8")
+
+    assert "index_atomic_overview" in source
+    assert "状态概览" in source
+    assert "ui.expansion" in source
+    assert "build_index_atomic_snapshot" not in source
+    assert "load_index_atomic_snapshot_readonly" in source
+
+
+def test_market_detail_rows_hide_normal_computed_status_but_keep_failures():
     from etf_trading.nicegui_app.pages import market
-    from etf_trading.nicegui_app.view_models import IndexAtomicDetailGroup, IndexAtomicDetailItem
+    from etf_trading.nicegui_app.view_models import IndexAtomicDetailItem
 
-    def item(metric_key: str, value: str) -> IndexAtomicDetailItem:
-        return IndexAtomicDetailItem(
-            metric_key=metric_key,
-            label=metric_key,
-            value=value,
-            status="已计算",
-            reason="测试快照",
-            as_of_date="2026-07-12",
-            sample_count="300",
-            data_source="测试数据源",
-        )
+    computed = IndexAtomicDetailItem("close", "收盘价", "4,780.79", "已计算", "已从本地指数历史计算", "2026-07-11", "260", "akshare_zh_em")
+    missing = IndexAtomicDetailItem("amount_avg_20", "20日平均成交额", "数据不足", "缺少输入字段", "缺少 amount 字段", "2026-07-11", "260", "akshare_zh_em")
 
-    groups = [
-        IndexAtomicDetailGroup("价格与均线", [item("close", "1,001.00"), item("ma_20", "995.00"), item("ma_60", "980.00"), item("close_vs_ma_20", "0.6%"), item("close_vs_ma_60", "2.1%")]),
-        IndexAtomicDetailGroup("区间位置", [item("range_20_high", "是"), item("range_20_low", "否")]),
-    ]
-
-    rows = dict((label, value) for label, value, _status in market._key_metric_rows(groups, {"snapshot_status": "computed"}))
-
-    assert rows["20日区间"] == "20日新高"
-    assert rows["数据状态"] == "已计算"
+    assert {label: status for label, _value, status in market._detail_metric_rows([computed, missing])} == {
+        "收盘价": "", "20日平均成交额": "缺少输入字段",
+    }
 
 
 def test_market_atomic_presentation_uses_chinese_known_and_unknown_fallbacks():
@@ -87,7 +82,7 @@ def test_market_atomic_presentation_uses_chinese_known_and_unknown_fallbacks():
     assert market._status_text("mystery_status", "") == "未知状态"
     assert market._data_source_text("akshare_zh_em") == "AkShare（东方财富指数行情）"
     assert market._data_source_text("unknown_provider") == "未知数据源"
-    assert rows["收盘价"][1] == "已计算"
+    assert rows["收盘价"][1] == ""
     assert rows["数据源"] == ("未知数据源", "未知状态")
 
 
