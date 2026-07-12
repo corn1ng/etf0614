@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+
+from etf_trading.data.index_catalog import IndexCatalogEntry
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,44 @@ class SQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_maintenance_task_run_type_time
                     ON maintenance_task_run(task_type, task_id DESC);
 
+                CREATE TABLE IF NOT EXISTS index_catalog (
+                    index_code TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    market TEXT NOT NULL,
+                    category_level_1 TEXT NOT NULL,
+                    category_level_2 TEXT NOT NULL,
+                    index_type TEXT NOT NULL,
+                    pool TEXT NOT NULL,
+                    index_base_date TEXT,
+                    baseline_source TEXT NOT NULL,
+                    source_kind TEXT NOT NULL,
+                    provider_symbol TEXT NOT NULL,
+                    aliases_json TEXT NOT NULL DEFAULT '[]',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS index_history_coverage (
+                    index_code TEXT PRIMARY KEY,
+                    index_base_date TEXT,
+                    baseline_source TEXT NOT NULL,
+                    local_first_trade_date TEXT,
+                    source_first_trade_date TEXT,
+                    latest_trade_date TEXT,
+                    history_rows INTEGER NOT NULL DEFAULT 0,
+                    completeness_status TEXT NOT NULL,
+                    completeness_message TEXT NOT NULL,
+                    validated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS index_etf_mapping (
+                    index_code TEXT NOT NULL,
+                    etf_code TEXT NOT NULL,
+                    mapping_source TEXT NOT NULL,
+                    confidence TEXT NOT NULL,
+                    is_tradable INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (index_code, etf_code)
+                );
+
                 CREATE TABLE IF NOT EXISTS strategy_signal (
                     etf_code TEXT NOT NULL,
                     trade_date TEXT NOT NULL,
@@ -168,6 +210,135 @@ class SQLiteStore:
     def list_etf_master(self) -> pd.DataFrame:
         with self.connect() as conn:
             return pd.read_sql_query("SELECT * FROM etf_master ORDER BY etf_code", conn)
+
+    def upsert_index_catalog(self, entries: Sequence[IndexCatalogEntry]) -> None:
+        if not entries:
+            return
+        columns = [
+            "index_code", "name", "market", "category_level_1", "category_level_2", "index_type", "pool",
+            "index_base_date", "baseline_source", "source_kind", "provider_symbol", "aliases_json",
+        ]
+        rows = [
+            (
+                entry.index_code,
+                entry.name,
+                entry.market,
+                entry.category_level_1,
+                entry.category_level_2,
+                entry.index_type,
+                entry.pool,
+                entry.index_base_date.isoformat() if entry.index_base_date else None,
+                entry.baseline_source,
+                entry.source_kind,
+                entry.provider_symbol,
+                json.dumps(entry.aliases, ensure_ascii=False),
+            )
+            for entry in entries
+        ]
+        placeholders = ",".join("?" for _ in columns)
+        update_clause = ",".join(f"{column}=excluded.{column}" for column in columns if column != "index_code")
+        with self.connect() as conn:
+            conn.executemany(
+                f"""
+                INSERT INTO index_catalog ({",".join(columns)}) VALUES ({placeholders})
+                ON CONFLICT(index_code) DO UPDATE SET {update_clause}, updated_at=CURRENT_TIMESTAMP
+                """,
+                rows,
+            )
+
+    def list_index_catalog(self, *, pool: str | None = None, include_reserve: bool = False) -> pd.DataFrame:
+        clauses: list[str] = []
+        values: list[object] = []
+        if pool is not None:
+            clauses.append("pool = ?")
+            values.append(pool)
+        elif not include_reserve:
+            clauses.append("pool != 'reserve'")
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.connect() as conn:
+            return pd.read_sql_query(f"SELECT * FROM index_catalog{where} ORDER BY index_code", conn, params=values)
+
+    def upsert_index_history_coverage(
+        self,
+        index_code: str,
+        *,
+        index_base_date: str | None,
+        baseline_source: str,
+        local_first_trade_date: str | None,
+        source_first_trade_date: str | None,
+        latest_trade_date: str | None,
+        history_rows: int,
+        completeness_status: str,
+        completeness_message: str,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO index_history_coverage (
+                    index_code, index_base_date, baseline_source, local_first_trade_date,
+                    source_first_trade_date, latest_trade_date, history_rows,
+                    completeness_status, completeness_message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(index_code) DO UPDATE SET
+                    index_base_date=excluded.index_base_date,
+                    baseline_source=excluded.baseline_source,
+                    local_first_trade_date=excluded.local_first_trade_date,
+                    source_first_trade_date=excluded.source_first_trade_date,
+                    latest_trade_date=excluded.latest_trade_date,
+                    history_rows=excluded.history_rows,
+                    completeness_status=excluded.completeness_status,
+                    completeness_message=excluded.completeness_message,
+                    validated_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    index_code, index_base_date, baseline_source, local_first_trade_date,
+                    source_first_trade_date, latest_trade_date, history_rows,
+                    completeness_status, completeness_message,
+                ),
+            )
+
+    def list_index_history_coverage(self) -> pd.DataFrame:
+        with self.connect() as conn:
+            return pd.read_sql_query("SELECT * FROM index_history_coverage ORDER BY index_code", conn)
+
+    def replace_index_etf_mappings(
+        self,
+        frame: pd.DataFrame,
+        *,
+        index_codes: Sequence[str] | None = None,
+    ) -> None:
+        required = ["index_code", "etf_code", "mapping_source", "confidence", "is_tradable"]
+        data = frame.copy()
+        for column in required:
+            if column not in data:
+                data[column] = None
+        data = data[required]
+        target_codes = sorted({str(code) for code in (index_codes or data["index_code"].dropna().astype(str).tolist()) if code})
+        if not target_codes:
+            return
+        with self.connect() as conn:
+            conn.executemany("DELETE FROM index_etf_mapping WHERE index_code = ?", [(code,) for code in target_codes])
+            if not data.empty:
+                conn.executemany(
+                    """
+                    INSERT INTO index_etf_mapping (index_code, etf_code, mapping_source, confidence, is_tradable)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            str(row.index_code),
+                            str(row.etf_code),
+                            str(row.mapping_source),
+                            str(row.confidence),
+                            int(bool(row.is_tradable)),
+                        )
+                        for row in data.itertuples(index=False)
+                    ],
+                )
+
+    def list_index_etf_mappings(self) -> pd.DataFrame:
+        with self.connect() as conn:
+            return pd.read_sql_query("SELECT * FROM index_etf_mapping ORDER BY index_code, etf_code", conn)
 
     def set_watchlist(self, etf_code: str, enabled: bool, allow_buy: bool, category: str | None = None, note: str | None = None) -> None:
         with self.connect() as conn:

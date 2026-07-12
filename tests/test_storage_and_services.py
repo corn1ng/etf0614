@@ -1,5 +1,6 @@
 import pandas as pd
 
+from etf_trading.data.index_catalog import IndexCatalogEntry
 from etf_trading.data.initialization import InitializationService
 from etf_trading.data.provider import DataProvider
 from etf_trading.data.storage import ParquetStore, SQLiteStore
@@ -310,3 +311,56 @@ def test_ensure_all_etf_history_uses_local_master_when_refresh_fails(tmp_path):
     assert result["etf_code"].tolist() == ["512880"]
     assert result["status"].tolist() == ["INITIALIZED"]
     assert provider.calls == [("512880", "2021-07-12", "2026-07-11")]
+
+
+def test_sqlite_store_persists_catalog_coverage_and_etf_mappings(tmp_path):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    entry = IndexCatalogEntry(
+        index_code="801010",
+        name="农林牧渔",
+        market="A股",
+        category_level_1="申万一级行业",
+        category_level_2="一级行业",
+        index_type="行业",
+        pool="core",
+        index_base_date=None,
+        baseline_source="unverified",
+        source_kind="shenwan",
+        provider_symbol="801010",
+    )
+
+    store.upsert_index_catalog([entry])
+    store.upsert_index_history_coverage(
+        "801010",
+        index_base_date=None,
+        baseline_source="unverified",
+        local_first_trade_date="1999-12-30",
+        source_first_trade_date="1999-12-30",
+        latest_trade_date="2026-07-10",
+        history_rows=6408,
+        completeness_status="BASELINE_UNVERIFIED",
+        completeness_message="基日待核验",
+    )
+    store.replace_index_etf_mappings(
+        pd.DataFrame(
+            [
+                {
+                    "index_code": "801010",
+                    "etf_code": "516300",
+                    "mapping_source": "data_source",
+                    "confidence": "high",
+                    "is_tradable": 1,
+                }
+            ]
+        )
+    )
+
+    catalog = store.list_index_catalog(pool="core")
+    coverage = store.list_index_history_coverage()
+    mappings = store.list_index_etf_mappings()
+
+    assert catalog.iloc[0]["index_code"] == "801010"
+    assert catalog.iloc[0]["baseline_source"] == "unverified"
+    assert coverage.iloc[0]["completeness_status"] == "BASELINE_UNVERIFIED"
+    assert mappings.iloc[0]["is_tradable"] == 1
