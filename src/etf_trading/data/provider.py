@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import date
+from typing import TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from etf_trading.data.index_catalog import IndexCatalogEntry
 
 
 class DataProvider(ABC):
@@ -34,7 +38,12 @@ class DataProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def fetch_index_daily(self, code: str, start_date: date | str, end_date: date | str) -> pd.DataFrame:
+    def fetch_index_daily(
+        self,
+        code: str | "IndexCatalogEntry",
+        start_date: date | str,
+        end_date: date | str,
+    ) -> pd.DataFrame:
         raise NotImplementedError
 
     @abstractmethod

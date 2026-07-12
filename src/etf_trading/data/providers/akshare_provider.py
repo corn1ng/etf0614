@@ -15,7 +15,8 @@ from typing import TypeVar
 import pandas as pd
 
 from etf_trading.data.provider import DataProvider
-from etf_trading.data.indexes import get_index_definition, normalize_index_daily
+from etf_trading.data.index_catalog import IndexCatalogEntry, default_index_catalog
+from etf_trading.data.indexes import normalize_index_daily
 from etf_trading.universe.classification import classify_etf
 
 
@@ -75,48 +76,75 @@ class AkShareProvider(DataProvider):
         # when no stable endpoint is available for a code.
         return pd.DataFrame(columns=["etf_code", "trade_date", "unit_nav", "accumulated_nav", "iopv", "premium_rate"])
 
-    def fetch_index_daily(self, code: str, start_date: date | str, end_date: date | str) -> pd.DataFrame:
-        definition = get_index_definition(str(code))
-        if definition.market == "港股":
+    def fetch_index_daily(
+        self,
+        code: str | IndexCatalogEntry,
+        start_date: date | str,
+        end_date: date | str,
+    ) -> pd.DataFrame:
+        entry = _resolve_index_catalog_entry(code)
+        if entry.source_kind == "shenwan":
+            try:
+                raw = _call_with_retries(
+                    self.ak.index_hist_sw,
+                    f"AkShare 申万行业指数行情 {entry.index_code}",
+                    symbol=entry.provider_symbol,
+                    period="day",
+                )
+                frame = normalize_index_daily(raw, entry.index_code, "akshare_shenwan")
+            except Exception:
+                frame = pd.DataFrame()
+        elif entry.source_kind == "hk":
             frame = pd.DataFrame()
             try:
-                raw = _call_with_retries(self.ak.stock_hk_index_daily_em, f"AkShare 港股指数行情 {code}", symbol=definition.provider_symbol)
-                frame = normalize_index_daily(raw, definition.index_code, "akshare_hk_em")
+                raw = _call_with_retries(
+                    self.ak.stock_hk_index_daily_em,
+                    f"AkShare 港股指数行情 {entry.index_code}",
+                    symbol=entry.provider_symbol,
+                )
+                frame = normalize_index_daily(raw, entry.index_code, "akshare_hk_em")
             except Exception:
                 frame = pd.DataFrame()
             if frame.empty:
-                raw = _call_with_retries(
-                    self.ak.stock_hk_index_daily_sina,
-                    f"AkShare 新浪港股指数行情 {code}",
-                    attempts=2,
-                    symbol=definition.provider_symbol,
-                )
-                frame = normalize_index_daily(raw, definition.index_code, "akshare_hk_sina")
+                try:
+                    raw = _call_with_retries(
+                        self.ak.stock_hk_index_daily_sina,
+                        f"AkShare 新浪港股指数行情 {entry.index_code}",
+                        attempts=2,
+                        symbol=entry.provider_symbol,
+                    )
+                    frame = normalize_index_daily(raw, entry.index_code, "akshare_hk_sina")
+                except Exception:
+                    frame = pd.DataFrame()
         else:
             candidates: list[pd.DataFrame] = []
             try:
-                raw = _call_with_retries(self.ak.stock_zh_index_daily_em, f"AkShare A股指数行情 {code}", symbol=definition.provider_symbol)
-                candidates.append(normalize_index_daily(raw, definition.index_code, "akshare_zh_em"))
+                raw = _call_with_retries(
+                    self.ak.stock_zh_index_daily_em,
+                    f"AkShare 中证指数行情 {entry.index_code}",
+                    symbol=entry.provider_symbol,
+                )
+                candidates.append(normalize_index_daily(raw, entry.index_code, "akshare_zh_em"))
             except Exception:
                 pass
             try:
                 raw = _call_with_retries(
                     self.ak.stock_zh_index_daily,
-                    f"AkShare A股指数新浪行情 {code}",
-                    symbol=_sina_index_symbol(definition.provider_symbol),
+                    f"AkShare 中证指数新浪行情 {entry.index_code}",
+                    symbol=_sina_index_symbol(entry.provider_symbol),
                 )
-                candidates.append(normalize_index_daily(raw, definition.index_code, "akshare_zh_sina"))
+                candidates.append(normalize_index_daily(raw, entry.index_code, "akshare_zh_sina"))
             except Exception:
                 pass
             try:
                 raw = _call_with_retries(
                     self.ak.stock_zh_index_hist_csindex,
-                    f"AkShare 中证官网指数行情 {code}",
-                    symbol=definition.provider_symbol,
+                    f"AkShare 中证官网指数行情 {entry.index_code}",
+                    symbol=entry.provider_symbol,
                     start_date=_fmt_date(start_date),
                     end_date=_fmt_date(end_date),
                 )
-                candidates.append(normalize_index_daily(raw, definition.index_code, "akshare_csindex"))
+                candidates.append(normalize_index_daily(raw, entry.index_code, "akshare_csindex"))
             except Exception:
                 pass
             frame = _choose_latest_index_frame(candidates)
@@ -137,6 +165,16 @@ class AkShareProvider(DataProvider):
 
 def _fmt_date(value: date | str) -> str:
     return pd.Timestamp(value).strftime("%Y%m%d")
+
+
+def _resolve_index_catalog_entry(code: str | IndexCatalogEntry) -> IndexCatalogEntry:
+    if isinstance(code, IndexCatalogEntry):
+        return code
+    normalized_code = str(code)
+    for entry in default_index_catalog():
+        if entry.index_code == normalized_code:
+            return entry
+    raise KeyError(f"Unknown index code: {normalized_code}")
 
 
 def _infer_exchange(code: str) -> str:

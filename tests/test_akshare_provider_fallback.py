@@ -1,5 +1,6 @@
 import pandas as pd
 
+from etf_trading.data.index_catalog import IndexCatalogEntry
 from etf_trading.data.providers.akshare_provider import AkShareProvider
 
 
@@ -106,3 +107,113 @@ def test_fetch_exchange_traded_etf_spot_normalizes_realtime_fields():
     assert row["exchange"] == "SSE"
     assert row["is_active"] == 1
     assert row["tradability_status"] == "exchange_traded"
+
+
+def _catalog_entry(*, code: str, market: str, source_kind: str, provider_symbol: str) -> IndexCatalogEntry:
+    return IndexCatalogEntry(
+        index_code=code,
+        name="测试指数",
+        market=market,
+        category_level_1="测试分类",
+        category_level_2="测试分类",
+        index_type="行业",
+        pool="research",
+        index_base_date=None,
+        baseline_source="unverified",
+        source_kind=source_kind,  # type: ignore[arg-type]
+        provider_symbol=provider_symbol,
+    )
+
+
+class _FakeShenwanIndexAk:
+    def index_hist_sw(self, *, symbol, period):
+        assert symbol == "801010"
+        assert period == "day"
+        return pd.DataFrame(
+            {
+                "日期": ["1999-12-30", "2000-01-04"],
+                "开盘": [1000.0, 1005.0],
+                "最高": [1001.0, 1006.0],
+                "最低": [999.0, 1004.0],
+                "收盘": [1000.5, 1005.5],
+                "成交量": [100, 101],
+                "成交额": [1000, 1010],
+            }
+        )
+
+
+def test_fetch_index_daily_uses_shenwan_route_for_catalog_entry():
+    provider = AkShareProvider.__new__(AkShareProvider)
+    provider.ak = _FakeShenwanIndexAk()
+
+    result = provider.fetch_index_daily(
+        _catalog_entry(code="801010", market="A股", source_kind="shenwan", provider_symbol="801010"),
+        "1990-01-01",
+        "2000-01-04",
+    )
+
+    assert result["index_code"].tolist() == ["801010", "801010"]
+    assert result["trade_date"].dt.strftime("%Y-%m-%d").tolist() == ["1999-12-30", "2000-01-04"]
+    assert result["data_source"].tolist() == ["akshare_shenwan", "akshare_shenwan"]
+
+
+class _FakeCsiHongKongIndexAk:
+    def stock_zh_index_hist_csindex(self, *, symbol, start_date, end_date):
+        assert symbol == "H30015"
+        assert start_date == "19900101"
+        assert end_date == "20260710"
+        return pd.DataFrame(
+            {
+                "日期": ["2026-07-09"],
+                "开盘": [1000.0],
+                "最高": [1001.0],
+                "最低": [999.0],
+                "收盘": [1000.5],
+                "成交量": [100],
+                "成交额": [1000],
+            }
+        )
+
+
+def test_fetch_index_daily_uses_csi_route_for_hong_kong_catalog_entry():
+    provider = AkShareProvider.__new__(AkShareProvider)
+    provider.ak = _FakeCsiHongKongIndexAk()
+
+    result = provider.fetch_index_daily(
+        _catalog_entry(code="H30015", market="港股", source_kind="csi", provider_symbol="H30015"),
+        "1990-01-01",
+        "2026-07-10",
+    )
+
+    assert result["index_code"].tolist() == ["H30015"]
+    assert result["data_source"].tolist() == ["akshare_csindex"]
+
+
+class _FakeHongKongIndexAk:
+    def stock_hk_index_daily_em(self, *, symbol):
+        assert symbol == "HSTECH"
+        return pd.DataFrame(
+            {
+                "日期": ["2026-07-09"],
+                "开盘": [3000.0],
+                "最高": [3001.0],
+                "最低": [2999.0],
+                "收盘": [3000.5],
+                "成交量": [100],
+                "成交额": [1000],
+            }
+        )
+
+
+def test_fetch_index_daily_uses_hong_kong_route_for_catalog_entry():
+    provider = AkShareProvider.__new__(AkShareProvider)
+    provider.ak = _FakeHongKongIndexAk()
+
+    result = provider.fetch_index_daily(
+        _catalog_entry(code="HSTECH", market="港股", source_kind="hk", provider_symbol="HSTECH"),
+        "2026-07-01",
+        "2026-07-10",
+    )
+
+    assert result["index_code"].tolist() == ["HSTECH"]
+    assert result["data_source"].tolist() == ["akshare_hk_em"]
