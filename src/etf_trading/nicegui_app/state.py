@@ -56,6 +56,7 @@ _ATOMIC_SNAPSHOT_ERRORS: dict[str, str] = {}
 _ATOMIC_SNAPSHOT_CACHE_LOCK = RLock()
 ATOMIC_SNAPSHOT_BUILD_MARKER_MAX_AGE_SECONDS = 600.0
 INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 1
+_INDEX_ATOMIC_SNAPSHOT_LOCK = RLock()
 
 
 @dataclass(frozen=True)
@@ -249,36 +250,42 @@ def load_index_atomic_snapshot_readonly(
 ) -> IndexAtomicSnapshotCacheResult:
     """Read a maintenance-produced snapshot without calculating or fetching data."""
 
-    summary_file, details_file, meta_file = _index_atomic_snapshot_cache_paths(parquet_store)
     current_latest_date = _index_atomic_snapshot_current_latest_date(definitions, coverage)
-    if not all(path.exists() for path in (summary_file, details_file, meta_file)):
-        return _empty_index_atomic_snapshot_result("missing", current_latest_date=current_latest_date)
+    with _INDEX_ATOMIC_SNAPSHOT_LOCK:
+        summary_file, details_file, meta_file = _index_atomic_snapshot_cache_paths(parquet_store)
+        if not all(path.exists() for path in (summary_file, details_file, meta_file)):
+            return _empty_index_atomic_snapshot_result("missing", current_latest_date=current_latest_date)
 
-    try:
-        meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        _validate_index_atomic_snapshot_meta(meta)
-        summary = pd.read_parquet(summary_file)
-        details = pd.read_parquet(details_file)
-        generated_at = _parse_cache_datetime(meta["generated_at"])
-        if generated_at is None:
-            raise ValueError("generated_at 无法解析")
-    except Exception as exc:  # noqa: BLE001 - cache corruption must not break page rendering
-        return _empty_index_atomic_snapshot_result(
-            "failed",
-            current_latest_date=current_latest_date,
-            message=f"读取指数原子快照失败：{exc}",
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            _validate_index_atomic_snapshot_meta(meta)
+            summary = pd.read_parquet(summary_file)
+            details = pd.read_parquet(details_file)
+            generated_at = _parse_cache_datetime(meta["generated_at"])
+            if generated_at is None:
+                raise ValueError("generated_at 无法解析")
+        except Exception as exc:  # noqa: BLE001 - cache corruption must not break page rendering
+            return _empty_index_atomic_snapshot_result(
+                "failed",
+                current_latest_date=current_latest_date,
+                message=f"读取指数原子快照失败：{exc}",
+            )
+
+        source_signature = _index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+        coverage_signature = _index_atomic_snapshot_coverage_signature(coverage)
+        status = (
+            "ready"
+            if meta["source_signature"] == source_signature and meta["coverage_signature"] == coverage_signature
+            else "stale"
         )
-
-    source_signature = _index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
-    status = "ready" if meta["source_signature"] == source_signature else "stale"
-    return IndexAtomicSnapshotCacheResult(
-        summary=summary,
-        details=details,
-        status=status,
-        generated_at=generated_at,
-        current_latest_date=current_latest_date,
-        task_result_id=_index_atomic_snapshot_task_result_id(meta.get("task_result_id")),
-    )
+        return IndexAtomicSnapshotCacheResult(
+            summary=summary,
+            details=details,
+            status=status,
+            generated_at=generated_at,
+            current_latest_date=current_latest_date,
+            task_result_id=_index_atomic_snapshot_task_result_id(meta.get("task_result_id")),
+        )
 
 
 def write_index_atomic_snapshot(
@@ -294,41 +301,47 @@ def write_index_atomic_snapshot(
 ) -> None:
     """Persist already-calculated index atoms without rebuilding them.
 
-    Every replacement is atomic and begins only after all three temporary files
-    are complete, preserving the last successful snapshot on write failures.
+    The process-local lock prevents in-process readers from observing the
+    publication window. Individual file replacements are atomic, and a failed
+    publication restores backed-up live files. Cross-process transactions are
+    intentionally not claimed.
     """
 
-    summary_file, details_file, meta_file = _index_atomic_snapshot_cache_paths(parquet_store)
-    summary_file.parent.mkdir(parents=True, exist_ok=True)
-    token = f"{os.getpid()}_{time.time_ns()}"
-    tmp_summary = summary_file.with_name(f".{summary_file.stem}.{token}.tmp{summary_file.suffix}")
-    tmp_details = details_file.with_name(f".{details_file.stem}.{token}.tmp{details_file.suffix}")
-    tmp_meta = meta_file.with_name(f".{meta_file.stem}.{token}.tmp{meta_file.suffix}")
-    try:
-        _index_atomic_cache_safe_summary(summary).to_parquet(tmp_summary, index=False)
-        _index_atomic_cache_safe_details(details).to_parquet(tmp_details, index=False)
-        tmp_meta.write_text(
-            json.dumps(
-                {
-                    "schema_version": INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION,
-                    "catalog_signature": _index_atomic_snapshot_catalog_signature(definitions),
-                    "source_signature": str(source_signature),
-                    "generated_at": generated_at.isoformat(timespec="seconds"),
-                    "data_status_counts": _index_atomic_snapshot_status_counts(summary),
-                    "task_result_id": task_result_id,
-                    "coverage_signature": hashlib.sha256(_index_coverage_signature_bytes(coverage)).hexdigest(),
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        tmp_summary.replace(summary_file)
-        tmp_details.replace(details_file)
-        tmp_meta.replace(meta_file)
-    finally:
-        _safe_unlink(tmp_summary)
-        _safe_unlink(tmp_details)
-        _safe_unlink(tmp_meta)
+    with _INDEX_ATOMIC_SNAPSHOT_LOCK:
+        summary_file, details_file, meta_file = _index_atomic_snapshot_cache_paths(parquet_store)
+        summary_file.parent.mkdir(parents=True, exist_ok=True)
+        token = f"{os.getpid()}_{time.time_ns()}"
+        tmp_summary = summary_file.with_name(f".{summary_file.stem}.{token}.tmp{summary_file.suffix}")
+        tmp_details = details_file.with_name(f".{details_file.stem}.{token}.tmp{details_file.suffix}")
+        tmp_meta = meta_file.with_name(f".{meta_file.stem}.{token}.tmp{meta_file.suffix}")
+        try:
+            _index_atomic_cache_safe_summary(summary).to_parquet(tmp_summary, index=False)
+            _index_atomic_cache_safe_details(details).to_parquet(tmp_details, index=False)
+            tmp_meta.write_text(
+                json.dumps(
+                    {
+                        "schema_version": INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION,
+                        "catalog_signature": _index_atomic_snapshot_catalog_signature(definitions),
+                        "source_signature": str(source_signature),
+                        "generated_at": generated_at.isoformat(timespec="seconds"),
+                        "data_status_counts": _index_atomic_snapshot_status_counts(summary),
+                        "task_result_id": task_result_id,
+                        "coverage_signature": _index_atomic_snapshot_coverage_signature(coverage),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            _verify_index_atomic_snapshot_temporary_files(tmp_summary, tmp_details, tmp_meta)
+            _publish_index_atomic_snapshot(
+                (summary_file, details_file, meta_file),
+                (tmp_summary, tmp_details, tmp_meta),
+                token,
+            )
+        finally:
+            _safe_unlink(tmp_summary)
+            _safe_unlink(tmp_details)
+            _safe_unlink(tmp_meta)
 
 
 def load_index_health_snapshot_cached(
@@ -372,6 +385,52 @@ def _index_atomic_snapshot_cache_paths(parquet_store: ParquetStore) -> tuple[Pat
         cache_dir / "index_atomic_snapshot_details.parquet",
         cache_dir / "index_atomic_snapshot.meta.json",
     )
+
+
+def _publish_index_atomic_snapshot(
+    live_files: tuple[Path, Path, Path],
+    temporary_files: tuple[Path, Path, Path],
+    token: str,
+) -> None:
+    """Publish a complete snapshot, restoring the prior generation on failure.
+
+    Callers must hold ``_INDEX_ATOMIC_SNAPSHOT_LOCK``. This provides a
+    coherent protocol for one Python process; it is not a cross-process
+    transaction.
+    """
+
+    backups = [(live, live.with_name(f".{live.name}.{token}.backup")) for live in live_files if live.exists()]
+    moved_backups: list[tuple[Path, Path]] = []
+    published_files: list[Path] = []
+    try:
+        for live, backup in backups:
+            live.replace(backup)
+            moved_backups.append((live, backup))
+        for temporary, live in zip(temporary_files, live_files, strict=True):
+            temporary.replace(live)
+            published_files.append(live)
+    except Exception:
+        for live in published_files:
+            _safe_unlink(live)
+        for live, backup in reversed(moved_backups):
+            backup.replace(live)
+        raise
+    else:
+        for _, backup in moved_backups:
+            _safe_unlink(backup)
+
+
+def _verify_index_atomic_snapshot_temporary_files(
+    summary_file: Path,
+    details_file: Path,
+    meta_file: Path,
+) -> None:
+    """Ensure a complete temporary generation is readable before publishing it."""
+
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    _validate_index_atomic_snapshot_meta(meta)
+    pd.read_parquet(summary_file)
+    pd.read_parquet(details_file)
 
 
 def _atomic_snapshot_build_marker_path(parquet_store: ParquetStore) -> Path:
@@ -435,6 +494,10 @@ def _index_coverage_signature_bytes(coverage: pd.DataFrame | None) -> bytes:
     columns = sorted(str(column) for column in coverage.columns)
     normalized = coverage.loc[:, columns].fillna("").astype(str).sort_values("index_code")
     return ("|coverage=" + normalized.to_csv(index=False)).encode()
+
+
+def _index_atomic_snapshot_coverage_signature(coverage: pd.DataFrame | None) -> str:
+    return hashlib.sha256(_index_coverage_signature_bytes(coverage)).hexdigest()
 
 
 def _non_reserve_index_definitions(definitions: tuple[IndexDefinition, ...]) -> tuple[IndexDefinition, ...]:
@@ -664,11 +727,18 @@ def _validate_index_atomic_snapshot_meta(meta: object) -> None:
         raise ValueError("元数据不是对象")
     if meta.get("schema_version") != INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION:
         raise ValueError("快照 schema 版本不匹配")
-    required = ("catalog_signature", "source_signature", "generated_at", "data_status_counts", "task_result_id")
+    required = (
+        "catalog_signature",
+        "source_signature",
+        "coverage_signature",
+        "generated_at",
+        "data_status_counts",
+        "task_result_id",
+    )
     missing = [key for key in required if key not in meta]
     if missing:
         raise ValueError(f"元数据缺少字段：{', '.join(missing)}")
-    if not isinstance(meta["catalog_signature"], str) or not isinstance(meta["source_signature"], str):
+    if not all(isinstance(meta[key], str) for key in ("catalog_signature", "source_signature", "coverage_signature")):
         raise ValueError("元数据签名无效")
     if not isinstance(meta["data_status_counts"], dict):
         raise ValueError("数据状态统计无效")

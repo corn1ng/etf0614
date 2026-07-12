@@ -4,6 +4,15 @@ Use this file as the project-level memory for future Codex tasks. Read it at the
 
 Keep entries concise and reusable. Prefer lessons, constraints, verification notes, and project-specific pitfalls over a raw activity log.
 
+## 2026-07-12 - Harden index atomic snapshot publication
+
+- Summary: Added a process-local read/write lock plus a backup-and-rollback publish protocol for the three index atomic snapshot files. Coverage metadata is now required and verified independently before a snapshot can be ready.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-state-review-full-final` passed (311 tests).
+- Watch out next time:
+  - A multi-file cache needs rollback as well as per-file replacement; a last-file failure must restore every earlier file before releasing the reader lock.
+  - The process-local lock provides coherent reads only inside this Python process. Do not describe it as a cross-process or object-store transaction.
+  - Validate explicit metadata signatures even when their source inputs are also folded into a broader source signature; missing and malformed metadata need distinct failure handling.
+
 ## 2026-07-12 - Make index atomic snapshots maintenance-only
 
 - Summary: Replaced the NiceGUI index health cache rebuild path with a versioned, three-file index atomic snapshot contract. Pages now only read, report missing/stale/failed state, and retain a temporary legacy-name read-only forwarder until the market page migration.
