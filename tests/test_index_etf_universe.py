@@ -1,5 +1,6 @@
 import pandas as pd
 
+from etf_trading.data.index_catalog import IndexCatalogEntry
 from etf_trading.data.indexes import IndexDefinition
 from etf_trading.data.storage import ParquetStore
 from etf_trading.research.index_etf_universe import build_index_etf_universe, selected_etf_codes
@@ -113,3 +114,53 @@ def test_selected_etf_codes_returns_deduplicated_top_samples():
     )
 
     assert selected_etf_codes(universe, ["000300", "000905"]) == ["510300"]
+
+
+def test_build_index_etf_universe_excludes_research_pool_from_tradeable_samples(tmp_path):
+    parquet_store = ParquetStore(tmp_path)
+    parquet_store.write_prices("510300", _price_frame(300))
+    parquet_store.write_prices("516300", _price_frame(300).assign(etf_code="516300"))
+    master = pd.DataFrame(
+        {
+            "etf_code": ["510300", "516300"],
+            "name": ["沪深300ETF", "农林牧渔ETF"],
+            "tracking_index": ["000300", "801010"],
+            "amount": [100_000_000, 90_000_000],
+            "volume": [1_000_000, 900_000],
+            "is_active": [1, 1],
+        }
+    )
+    entries = (
+        IndexCatalogEntry(
+            index_code="000300",
+            name="沪深300",
+            market="A股",
+            category_level_1="宽基",
+            category_level_2="核心宽基",
+            index_type="宽基",
+            pool="core",
+            index_base_date=None,
+            baseline_source="unverified",
+            source_kind="csi",
+            provider_symbol="000300",
+        ),
+        IndexCatalogEntry(
+            index_code="801010",
+            name="农林牧渔",
+            market="A股",
+            category_level_1="申万一级行业",
+            category_level_2="一级行业",
+            index_type="行业",
+            pool="research",
+            index_base_date=None,
+            baseline_source="unverified",
+            source_kind="shenwan",
+            provider_symbol="801010",
+        ),
+    )
+
+    universe = build_index_etf_universe(master, parquet_store, entries=entries)
+
+    assert universe["index_code"].tolist() == ["000300"]
+    assert universe.iloc[0]["pool"] == "core"
+    assert bool(universe.iloc[0]["is_tradable"]) is True

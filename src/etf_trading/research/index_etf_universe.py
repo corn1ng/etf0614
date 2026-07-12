@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from etf_trading.data.index_catalog import IndexCatalogEntry
 from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
 from etf_trading.data.storage import ParquetStore
 
@@ -26,6 +27,8 @@ UNIVERSE_COLUMNS = [
     "history_rows",
     "sample_rank",
     "is_top_sample",
+    "pool",
+    "is_tradable",
 ]
 
 INDEX_ALIASES: dict[str, tuple[str, ...]] = {
@@ -70,17 +73,24 @@ def build_index_etf_universe(
     parquet_store: ParquetStore,
     definitions: Sequence[IndexDefinition] = DEFAULT_INDEXES,
     config: IndexEtfSampleConfig | None = None,
+    *,
+    entries: Sequence[IndexCatalogEntry] | None = None,
 ) -> pd.DataFrame:
-    """Return ETF samples grouped by their tracked or inferred index."""
+    """Return tradeable ETF samples for core index entries only."""
 
     config = config or IndexEtfSampleConfig()
     normalized = _normalize_master(master)
     if normalized.empty:
         return pd.DataFrame(columns=UNIVERSE_COLUMNS)
 
+    candidates_by_index = (
+        [(entry.to_index_definition(), entry.aliases, entry.pool) for entry in entries if entry.pool == "core"]
+        if entries is not None
+        else [(definition, (), "core") for definition in definitions]
+    )
     rows: list[dict[str, object]] = []
-    for definition in definitions:
-        candidates = _candidates_for_index(normalized, definition)
+    for definition, aliases, pool in candidates_by_index:
+        candidates = _candidates_for_index(normalized, definition, aliases)
         if candidates.empty:
             continue
         candidates = _attach_history_rows(candidates, parquet_store)
@@ -100,6 +110,8 @@ def build_index_etf_universe(
                     "index_category": definition.category,
                     "sample_rank": rank,
                     "is_top_sample": rank <= config.max_per_index,
+                    "pool": pool,
+                    "is_tradable": True,
                 }
             )
             rows.append(row)
@@ -123,6 +135,10 @@ def selected_etf_codes(universe: pd.DataFrame, index_codes: Sequence[str]) -> li
         universe["index_code"].astype(str).isin(allowed_indexes)
         & universe["is_top_sample"].fillna(False).astype(bool)
     ]
+    if "pool" in selected:
+        selected = selected[selected["pool"].fillna("").astype(str) == "core"]
+    if "is_tradable" in selected:
+        selected = selected[selected["is_tradable"].fillna(False).astype(bool)]
     codes: list[str] = []
     seen: set[str] = set()
     for code in selected["etf_code"].map(_format_etf_code):
@@ -153,12 +169,16 @@ def _normalize_master(master: pd.DataFrame) -> pd.DataFrame:
     return normalized[["etf_code", "etf_name", "tracking_index", "amount", "volume"]].reset_index(drop=True)
 
 
-def _candidates_for_index(master: pd.DataFrame, definition: IndexDefinition) -> pd.DataFrame:
+def _candidates_for_index(
+    master: pd.DataFrame,
+    definition: IndexDefinition,
+    aliases: Sequence[str] = (),
+) -> pd.DataFrame:
     explicit = master[_explicit_tracking_match(master["tracking_index"], definition)].copy()
     explicit["mapping_source"] = "data_source"
     explicit["confidence"] = "high"
 
-    inferred = master[_name_match(master["etf_name"], definition)].copy()
+    inferred = master[_name_match(master["etf_name"], definition, aliases)].copy()
     inferred["mapping_source"] = "name_inferred"
     inferred["confidence"] = "medium"
 
@@ -178,8 +198,8 @@ def _explicit_tracking_match(values: pd.Series, definition: IndexDefinition) -> 
     return normalized_values.isin(accepted)
 
 
-def _name_match(names: pd.Series, definition: IndexDefinition) -> pd.Series:
-    aliases = _aliases_for(definition)
+def _name_match(names: pd.Series, definition: IndexDefinition, catalog_aliases: Sequence[str] = ()) -> pd.Series:
+    aliases = _aliases_for(definition, catalog_aliases)
     if not aliases:
         return pd.Series(False, index=names.index)
     text = names.fillna("").astype(str)
@@ -189,9 +209,10 @@ def _name_match(names: pd.Series, definition: IndexDefinition) -> pd.Series:
     return mask
 
 
-def _aliases_for(definition: IndexDefinition) -> tuple[str, ...]:
+def _aliases_for(definition: IndexDefinition, catalog_aliases: Sequence[str] = ()) -> tuple[str, ...]:
     aliases = [definition.name]
     aliases.extend(INDEX_ALIASES.get(definition.index_code, ()))
+    aliases.extend(catalog_aliases)
     result: list[str] = []
     for alias in aliases:
         text = str(alias).strip()

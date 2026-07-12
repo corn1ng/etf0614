@@ -15,6 +15,12 @@ import time
 
 import pandas as pd
 
+from etf_trading.data.index_catalog import (
+    IndexCatalogEntry,
+    catalog_definitions,
+    catalog_entries_from_frame,
+    default_index_catalog,
+)
 from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
 from etf_trading.data.quality import (
     assess_price_history,
@@ -83,8 +89,14 @@ def load_snapshot(store: SQLiteStore, parquet_store: ParquetStore) -> PlatformSn
     store.initialize_schema()
     raw_master = store.list_etf_master()
     watchlist = store.list_watchlist()
-    index_summary = build_index_trend_summary(parquet_store)
-    universe = build_index_etf_universe(raw_master, parquet_store)
+    catalog_entries = _snapshot_catalog_entries(store)
+    core_entries = tuple(entry for entry in catalog_entries if entry.pool == "core")
+    index_summary = build_index_trend_summary(parquet_store, catalog_definitions(catalog_entries))
+    universe = build_index_etf_universe(raw_master, parquet_store, entries=core_entries)
+    store.replace_index_etf_mappings(
+        universe,
+        index_codes=[entry.index_code for entry in core_entries],
+    )
     etf_overview = build_etf_data_overview(raw_master, watchlist, parquet_store, universe)
     gaps = build_data_gap_detail(raw_master, watchlist, index_summary, universe, parquet_store)
     coverage = build_data_coverage_summary(gaps, raw_master, watchlist, index_summary, universe)
@@ -97,6 +109,15 @@ def load_snapshot(store: SQLiteStore, parquet_store: ParquetStore) -> PlatformSn
         coverage=coverage,
         generated_at=datetime.now(),
     )
+
+
+def _snapshot_catalog_entries(store: SQLiteStore) -> tuple[IndexCatalogEntry, ...]:
+    catalog = store.list_index_catalog()
+    if catalog.empty:
+        entries = default_index_catalog()
+        store.upsert_index_catalog(entries)
+        return tuple(entry for entry in entries if entry.pool != "reserve")
+    return catalog_entries_from_frame(catalog)
 
 
 def load_snapshot_cached(

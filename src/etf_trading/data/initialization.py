@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -10,7 +9,11 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from etf_trading.data.index_catalog import IndexCatalogEntry, default_index_catalog
+from etf_trading.data.index_catalog import (
+    IndexCatalogEntry,
+    catalog_entries_from_frame,
+    default_index_catalog,
+)
 from etf_trading.data.indexes import INDEX_HISTORY_AUTO_START
 from etf_trading.data.provider import DataProvider
 from etf_trading.data.quality import (
@@ -439,7 +442,7 @@ class InitializationService:
         if catalog.empty:
             self.sync_index_catalog()
             catalog = self.store.list_index_catalog()
-        return _catalog_entries_from_frame(catalog)
+        return catalog_entries_from_frame(catalog)
 
     def _catalog_entry(self, index_code: str) -> IndexCatalogEntry:
         normalized_code = str(index_code)
@@ -447,7 +450,7 @@ class InitializationService:
         if not catalog.empty:
             matched = catalog[catalog["index_code"].astype(str) == normalized_code]
             if not matched.empty:
-                return _catalog_entries_from_frame(matched)[0]
+                return catalog_entries_from_frame(matched)[0]
         for entry in default_index_catalog():
             if entry.index_code == normalized_code:
                 return entry
@@ -481,35 +484,6 @@ def _normalize_existing_index_frame(frame: pd.DataFrame, index_code: str) -> pd.
     result["trade_date"] = pd.to_datetime(result["trade_date"])
     result = result.drop_duplicates(subset=["index_code", "trade_date"], keep="last")
     return result.sort_values("trade_date").reset_index(drop=True)
-
-
-def _catalog_entries_from_frame(frame: pd.DataFrame) -> tuple[IndexCatalogEntry, ...]:
-    entries: list[IndexCatalogEntry] = []
-    for row in frame.itertuples(index=False):
-        base_value = getattr(row, "index_base_date", None)
-        base_date = None if base_value is None or pd.isna(base_value) else pd.Timestamp(base_value).date()
-        aliases_value = getattr(row, "aliases_json", "[]")
-        try:
-            aliases = tuple(str(value) for value in json.loads(aliases_value or "[]"))
-        except (TypeError, json.JSONDecodeError):
-            aliases = ()
-        entries.append(
-            IndexCatalogEntry(
-                index_code=str(row.index_code),
-                name=str(row.name),
-                market=str(row.market),
-                category_level_1=str(row.category_level_1),
-                category_level_2=str(row.category_level_2),
-                index_type=str(row.index_type),
-                pool=str(row.pool),  # type: ignore[arg-type]
-                index_base_date=base_date,
-                baseline_source=str(row.baseline_source),  # type: ignore[arg-type]
-                source_kind=str(row.source_kind),  # type: ignore[arg-type]
-                provider_symbol=str(row.provider_symbol),
-                aliases=aliases,
-            )
-        )
-    return tuple(entries)
 
 
 def _frame_first_trade_date(frame: pd.DataFrame | None) -> str | None:

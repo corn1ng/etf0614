@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from etf_trading.data.index_catalog import IndexCatalogEntry
+from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.nicegui_app import state
 from etf_trading.nicegui_app.view_models import PlatformSnapshot
 
@@ -174,6 +176,52 @@ def test_load_snapshot_cached_refreshes_after_ttl(monkeypatch):
 
     assert first is not second
     assert calls == ["called", "called"]
+
+
+def test_load_snapshot_limits_tradeable_universe_and_mapping_to_sqlite_core_catalog(tmp_path, monkeypatch):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    parquet_store = ParquetStore(tmp_path / "parquet")
+    store.initialize_schema()
+    entries = (
+        IndexCatalogEntry(
+            index_code="000300", name="沪深300", market="A股", category_level_1="宽基", category_level_2="核心宽基",
+            index_type="宽基", pool="core", index_base_date=None, baseline_source="unverified",
+            source_kind="csi", provider_symbol="000300",
+        ),
+        IndexCatalogEntry(
+            index_code="801010", name="农林牧渔", market="A股", category_level_1="申万一级行业", category_level_2="一级行业",
+            index_type="行业", pool="research", index_base_date=None, baseline_source="unverified",
+            source_kind="shenwan", provider_symbol="801010",
+        ),
+    )
+    store.upsert_index_catalog(entries)
+    store.upsert_etf_master(
+        pd.DataFrame(
+            [
+                {"etf_code": "510300", "name": "沪深300ETF", "tracking_index": "000300", "is_active": 1, "amount": 100},
+                {"etf_code": "516300", "name": "农林牧渔ETF", "tracking_index": "801010", "is_active": 1, "amount": 90},
+            ]
+        )
+    )
+    prices = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2024-01-01", periods=300, freq="D"),
+            "open": [1.0] * 300,
+            "high": [1.1] * 300,
+            "low": [0.9] * 300,
+            "close": [1.0] * 300,
+            "volume": [1000] * 300,
+            "amount": [1000] * 300,
+        }
+    )
+    parquet_store.write_prices("510300", prices.assign(etf_code="510300"))
+    parquet_store.write_prices("516300", prices.assign(etf_code="516300"))
+    monkeypatch.setattr(state, "build_index_trend_summary", lambda *args, **kwargs: pd.DataFrame())
+
+    snapshot = state.load_snapshot(store, parquet_store)
+
+    assert snapshot.universe["index_code"].tolist() == ["000300"]
+    assert store.list_index_etf_mappings()["index_code"].tolist() == ["000300"]
 
 
 def test_load_index_health_snapshot_cached_writes_and_reuses_disk_cache(tmp_path, monkeypatch):

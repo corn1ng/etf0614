@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
+import json
 from pathlib import Path
 from typing import Literal, TYPE_CHECKING
 
@@ -85,6 +86,38 @@ def catalog_definitions(
     if not include_reserve:
         selected = [entry for entry in selected if entry.pool != "reserve"]
     return tuple(entry.to_index_definition() for entry in selected)
+
+
+def catalog_entries_from_frame(frame: "pd.DataFrame") -> tuple[IndexCatalogEntry, ...]:
+    """Rehydrate catalogue entries read from SQLite without changing their metadata."""
+
+    import pandas as pd
+
+    entries: list[IndexCatalogEntry] = []
+    for row in frame.itertuples(index=False):
+        base_value = getattr(row, "index_base_date", None)
+        base_date = None if base_value is None or pd.isna(base_value) else pd.Timestamp(base_value).date()
+        try:
+            aliases = tuple(str(value) for value in json.loads(getattr(row, "aliases_json", "[]") or "[]"))
+        except (TypeError, json.JSONDecodeError):
+            aliases = ()
+        entries.append(
+            IndexCatalogEntry(
+                index_code=str(row.index_code),
+                name=str(row.name),
+                market=str(row.market),
+                category_level_1=str(row.category_level_1),
+                category_level_2=str(row.category_level_2),
+                index_type=str(row.index_type),
+                pool=str(row.pool),  # type: ignore[arg-type]
+                index_base_date=base_date,
+                baseline_source=str(row.baseline_source),  # type: ignore[arg-type]
+                source_kind=str(row.source_kind),  # type: ignore[arg-type]
+                provider_symbol=str(row.provider_symbol),
+                aliases=aliases,
+            )
+        )
+    return tuple(entries)
 
 
 def _expand_catalog_mappings(raw: dict[str, object]) -> Iterable[dict[str, object]]:
