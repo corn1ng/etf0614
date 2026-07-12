@@ -4,6 +4,75 @@ Use this file as the project-level memory for future Codex tasks. Read it at the
 
 Keep entries concise and reusable. Prefer lessons, constraints, verification notes, and project-specific pitfalls over a raw activity log.
 
+## 2026-07-12 - Keep index atomic rebuild inputs coherent and configured
+
+- Summary: Restored the configured non-reserve catalog order after SQLite's code-sorted read, while retaining persisted metadata and putting unknown persisted codes last deterministically. Every atomic writer now requires an expected input signature captured before calculation and re-checks the current store/catalog/coverage and local-history signature under the publish lock; a mismatch preserves the old snapshot and persists a Chinese failed result.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-final-fix-full` passed (338 tests).
+- Watch out next time:
+  - `SQLiteStore.list_index_catalog()` is code-sorted, so maintenance inputs that expose `catalog_order` must reapply `default_index_catalog()` order without replacing persisted fields.
+  - Capture an input signature before reading local histories and verify it again immediately before atomic publication; never sign an old summary with a post-build signature.
+  - The process-local publish lock detects a changed signature before publishing but is not a cross-process transaction.
+
+## 2026-07-12 - Serialize index atomic snapshot rebuild starts
+
+- Summary: Closed the same-process race between checking for a running atomic rebuild and scheduling a new one. The runner now serializes reconciliation, claim, active-key registration, and scheduling; an injected writer also makes runner-level publication rollback regressions deterministic.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-maintenance-concurrency-full-final` passed (320 tests).
+- Watch out next time:
+  - A persisted "running" query plus a later insert is not an atomic claim; protect their entire same-process transition, including background scheduling.
+  - Register the active task key before scheduling, and remove it plus persist failure if scheduling raises.
+  - Test runner-level publication failure at the final metadata replacement as well as Task 2's lower-level rollback contract.
+
+## 2026-07-12 - Redesign index health as an atomic workbench
+
+- Summary: Replaced `市场地图 -> 指数体检` with a read-only atomic-indicator workbench. It reads the maintenance snapshot through the persisted catalog/coverage inputs, keeps the eight Task 4 table columns, separates core and research pools, and opens a three-tab wide detail dialog instead of rendering health conclusions or valuation data.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-market-full-final-6` passed (332 tests). Regular Playwright at `http://127.0.0.1:8515` and `http://127.0.0.1:8516` checked missing, ready, stale, and failed snapshots at 1440px and 390px with no console errors/warnings or root horizontal overflow; evidence is under `C:\Users\cjj\AppData\Local\Temp\index-atomic-market-browser*`.
+- Watch out next time:
+  - Pass `index_atomic_snapshot_inputs(create_store())` into the read-only loader; rebuilding coverage from the display summary loses signature fields and marks a valid maintenance snapshot stale.
+  - A page reload may only read the snapshot again. Keep rebuild actions in data maintenance and retain the last successful rows when the snapshot is stale.
+  - Validate the missing, stale, and corrupt-meta failed states with local fixtures; none may fabricate table rows.
+
+## 2026-07-12 - Close atomic workbench review findings
+
+- Summary: Sanitized every Task 5 status and source display boundary so unknown values render as `未知状态` or `未知数据源`; projected the index workbench table to its exact eight visible Task 4 columns while retaining the hidden row key. Restored the unrelated index-chart event binding, metric, event-normalization, and audit-copy changes to the pre-Task-5 baseline.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-market-review-full` passed (334 tests). Seeded regular Playwright asserted the exact eight headers, hidden `index_code`, no visible `computed` or unknown provider code, and no console errors/warnings; evidence is `C:\Users\cjj\AppData\Local\Temp\index-atomic-market-browser-seeded\review-result.json`.
+- Watch out next time:
+  - A view-model formatter may use a raw-code fallback. Page render boundaries still need safe Chinese fallbacks for unknown status and source codes.
+  - Generic table inference is insufficient for a fixed UX contract; explicitly project display fields before passing rows to the shared table helper.
+
+## 2026-07-12 - Close final atomic main-table status review
+
+- Summary: Sanitized the explicit main-table `data_status` projection itself, so a known internal code displays in Chinese and any unknown code displays `未知状态` before reaching the shared table component.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-main-status-full` passed (335 tests). Seeded Playwright confirmed the visible table contains `已计算`, not `computed`, preserves the eight headers, and records no console errors/warnings in `C:\Users\cjj\AppData\Local\Temp\index-atomic-market-browser-seeded\main-status-result.json`.
+- Watch out next time:
+  - Sanitizing a detail or status-bar boundary is not sufficient when a separately projected main-table field passes through the shared table renderer.
+
+## 2026-07-12 - Add durable index atomic snapshot maintenance task
+
+- Summary: Added a persisted, local-only maintenance runner and `数据维护 -> 指数目录与完整性` entry point for rebuilding index atomic indicators. The task records per-index progress, published snapshot metadata, and its result so it restores after a page reload.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-maintenance-full` passed (318 tests).
+- Watch out next time:
+  - Keep index atomic rebuilds local-only: use persisted catalogue/coverage plus Parquet histories; never construct an initialization service, provider, or page-time builder.
+  - Pass the maintenance task ID into the atomic writer and only mark the run successful after its three-file snapshot publication succeeds.
+  - Progress callbacks belong after each index's local calculation, so a restart can distinguish an interrupted rebuild from a completed snapshot.
+
+## 2026-07-12 - Harden index atomic snapshot publication
+
+- Summary: Added a process-local read/write lock plus a backup-and-rollback publish protocol for the three index atomic snapshot files. Coverage metadata is now required and verified independently before a snapshot can be ready.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-state-review-full-final` passed (311 tests).
+- Watch out next time:
+  - A multi-file cache needs rollback as well as per-file replacement; a last-file failure must restore every earlier file before releasing the reader lock.
+  - The process-local lock provides coherent reads only inside this Python process. Do not describe it as a cross-process or object-store transaction.
+  - Validate explicit metadata signatures even when their source inputs are also folded into a broader source signature; missing and malformed metadata need distinct failure handling.
+
+## 2026-07-12 - Make index atomic snapshots maintenance-only
+
+- Summary: Replaced the NiceGUI index health cache rebuild path with a versioned, three-file index atomic snapshot contract. Pages now only read, report missing/stale/failed state, and retain a temporary legacy-name read-only forwarder until the market page migration.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_index_health_snapshot.py tests\test_nicegui_state_cache.py tests\test_nicegui_app_import.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-state-focused` passed (34 tests).
+- Watch out next time:
+  - Keep every index snapshot build in maintenance; a page-time cache miss must return `missing`, never schedule or run a builder.
+  - Treat the summary, details, and metadata files as one logical version: write all temporary files before replacing any live file, and publish metadata last.
+  - Remove `load_index_health_snapshot_cached` and its no-op invalidator when the market page moves to `load_index_atomic_snapshot_readonly`.
+
 ## Entry Template
 
 ```md
@@ -437,3 +506,28 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Evidence writes must be monotonic by reliability: `third_party_*` and unresolved outcomes may never overwrite `official_methodology`, `official_factsheet`, or `official_api`.
   - After a CSI rate limit, recheck only downgraded candidates after a successful single-code probe; do not repeat the complete formal-index batch.
   - Keep JoinQuant publication dates as explicit third-party references when CSI does not return a code-matching official basic date.
+## 2026-07-12 - Restore index-worktree baseline
+
+- Summary: Synced the verified-base-date coverage assertion to the current Chinese completeness message; no production behavior changed.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-workbench-baseline-green` passed with 298 tests.
+- Watch out next time:
+  - When changing user-facing data-quality copy, update direct storage assertions in the same change.
+
+## 2026-07-12 - Compute index atomic indicator snapshots
+
+- Summary: Replaced the index health calculation with local-price atomic metrics for MA position/crossing, range, return/drawdown, volatility, amount, and data quality; valuation and transaction-conclusion outputs are absent.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_index_health_snapshot.py tests\test_index_valuations.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-kernel-green-final` passed with 11 tests.
+- Watch out next time:
+  - Migrate `nicegui_app.state` from the removed `build_index_health_snapshot` / `INDEX_HEALTH_*` interface before running the full suite.
+  - A moving-average cross requires an adjacent-day side switch; a persistent above/below position is not a new event.
+  - Missing `amount` is a volume-only input gap and must not invalidate price-derived atoms.
+
+## 2026-07-12 - Present index atomic indicator rows
+
+- Summary: Added atomic index summary rows with core/research pool filtering, stable catalog-order sorting, code/name-only search, Chinese fixed-column formatting, and six stored-fact detail groups. Promoted the existing 20-day range high/low facts into the atomic summary schema so the list can distinguish new high, new low, and in-range without recomputation. The snapshot cache now uses schema v2 so existing v1 snapshots are stale rather than silently presented as current data.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_nicegui_view_models.py tests\test_nicegui_table_display.py tests\test_nicegui_theme.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-view-model-green-final-review` passed with 48 tests; `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_nicegui_state_cache.py tests\test_nicegui_app_import.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-state-app-green` passed with 36 tests; full `pytest -q` passed with 328 tests.
+- Watch out next time:
+  - Keep `range_20_high` and `range_20_low` as stored summary facts; `range_20_status` is only the calculation-state field and cannot identify the range position by itself.
+  - Any atomic-summary schema change needs the index-atomic cache schema version, boolean-safe Parquet serialization, and an old-schema stale-cache regression in the same change.
+  - Filter the selected visible pool before searching only code/name, then sort solely and stably by `catalog_order`; reserve rows stay hidden.
+  - Detail groups format stored values and statuses only. Do not add calculations, valuation, trend tiers, scoring, ranking, position permission, strategies, or transaction conclusions.

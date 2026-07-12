@@ -1,13 +1,21 @@
+from dataclasses import replace
 from datetime import datetime
 import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
-from etf_trading.data.index_catalog import IndexCatalogEntry
+from etf_trading.data.index_catalog import IndexCatalogEntry, default_index_catalog
+from etf_trading.data.indexes import IndexDefinition
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.nicegui_app import state
-from etf_trading.nicegui_app.view_models import PlatformSnapshot
+from etf_trading.nicegui_app.view_models import IndexAtomicFilters, PlatformSnapshot, build_index_atomic_rows
+from etf_trading.research.index_health_snapshot import (
+    INDEX_ATOMIC_DETAIL_COLUMNS,
+    INDEX_ATOMIC_SUMMARY_COLUMNS,
+    build_index_atomic_snapshot,
+)
 
 
 class FakeStore:
@@ -42,6 +50,57 @@ def _atomic_master() -> pd.DataFrame:
             "tradability_status": ["exchange_traded"],
         }
     )
+
+
+def _definition(index_code: str, *, pool: str = "core") -> IndexDefinition:
+    return IndexDefinition(
+        index_code=index_code,
+        name=f"Index {index_code}",
+        market="A股",
+        category="宽基",
+        provider_symbol=index_code,
+        pool=pool,
+        baseline_source="unverified",
+    )
+
+
+def _parquet_store(tmp_path: Path) -> ParquetStore:
+    return ParquetStore(tmp_path / "parquet")
+
+
+def _summary(index_code: str) -> pd.DataFrame:
+    row = {column: pd.NA for column in INDEX_ATOMIC_SUMMARY_COLUMNS}
+    row.update(
+        {
+            "index_code": index_code,
+            "index_name": f"Index {index_code}",
+            "snapshot_status": "ready",
+            "history_status": "complete",
+            "latest_date": "2026-07-11",
+        }
+    )
+    return pd.DataFrame([row], columns=INDEX_ATOMIC_SUMMARY_COLUMNS)
+
+
+def _details(index_code: str) -> pd.DataFrame:
+    row = {column: pd.NA for column in INDEX_ATOMIC_DETAIL_COLUMNS}
+    row.update({"index_code": index_code, "metric_key": "close", "status": "ready"})
+    return pd.DataFrame([row], columns=INDEX_ATOMIC_DETAIL_COLUMNS)
+
+
+def _coverage(index_code: str, latest_trade_date: str = "2026-07-12") -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "index_code": [index_code],
+            "latest_trade_date": [latest_trade_date],
+            "history_rows": [1000],
+            "completeness_status": ["complete"],
+        }
+    )
+
+
+def _read_index_atomic_meta(parquet_store: ParquetStore) -> dict[str, object]:
+    return json.loads((parquet_store.root / "cache" / "index_atomic_snapshot.meta.json").read_text(encoding="utf-8"))
 
 
 def _write_atomic_cache(root: Path, signature: str, schema_version: int | None = None) -> None:
@@ -224,69 +283,495 @@ def test_load_snapshot_limits_tradeable_universe_and_mapping_to_sqlite_core_cata
     assert store.list_index_etf_mappings()["index_code"].tolist() == ["000300"]
 
 
-def test_load_index_health_snapshot_cached_writes_and_reuses_disk_cache(tmp_path, monkeypatch):
-    summary = pd.DataFrame({"index_code": ["000300"], "valuation_health_status": ["complete"]})
-    details = pd.DataFrame({"index_code": ["000300"], "detail_kind": ["valuation"], "metric_name": ["pe_ttm"]})
-    calls: list[str] = []
-
-    def fake_builder(parquet_store, definitions=None, coverage=None):
-        calls.append("build")
-        return summary, details
-
-    monkeypatch.setattr(state, "build_index_health_snapshot", fake_builder, raising=False)
+def test_readonly_loader_never_calls_builder_when_snapshot_is_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(
         state,
-        "_index_health_snapshot_source_signature",
-        lambda parquet_store, definitions, coverage=None: "current",
-        raising=False,
-    )
-    state.invalidate_index_health_snapshot_cache()
-
-    parquet_store = FakeParquetStore(str(tmp_path / "parquet"))
-    first = state.load_index_health_snapshot_cached(parquet_store)
-    second = state.load_index_health_snapshot_cached(parquet_store)
-
-    assert first.status == "ready"
-    assert second.status == "ready"
-    assert second.summary["index_code"].tolist() == ["000300"]
-    assert second.details["metric_name"].tolist() == ["pe_ttm"]
-    assert calls == ["build"]
-
-
-def test_load_index_health_snapshot_cached_persists_mixed_detail_values(tmp_path, monkeypatch):
-    summary = pd.DataFrame({"index_code": ["000300"], "valuation_health_status": ["complete"]})
-    details = pd.DataFrame(
-        {
-            "index_code": ["000300", "000300"],
-            "detail_kind": ["trend", "valuation"],
-            "metric_name": ["large_trend", "pe_ttm"],
-            "metric_label": ["大趋势", "市盈率TTM"],
-            "current_value": ["UP", 12.5],
-            "status": ["normal", "computed"],
-            "reason": ["大趋势向上", "已计算历史分位"],
-            "historical_percentile": [pd.NA, 42.0],
-        }
+        "build_index_atomic_snapshot",
+        lambda *args, **kwargs: pytest.fail("page must not build"),
     )
 
+    result = state.load_index_atomic_snapshot_readonly(_parquet_store(tmp_path), (_definition("000300"),))
+
+    assert result.status == "missing"
+    assert result.summary.empty
+    assert list(result.summary.columns) == INDEX_ATOMIC_SUMMARY_COLUMNS
+    assert list(result.details.columns) == INDEX_ATOMIC_DETAIL_COLUMNS
+
+
+def test_readonly_loader_marks_signature_mismatch_stale_and_keeps_previous_rows(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300", "2026-07-13")
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+        expected_input_signature=source_signature,
+    )
+    meta = _read_index_atomic_meta(parquet_store)
+    meta["source_signature"] = "old-signature"
+    (parquet_store.root / "cache" / "index_atomic_snapshot.meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert result.status == "stale"
+    assert result.summary["index_code"].tolist() == ["000300"]
+    assert result.generated_at == datetime(2026, 7, 12, 9, 0)
+    assert result.current_latest_date == "2026-07-13"
+
+
+def test_atomic_snapshot_meta_records_schema_catalog_source_and_task_result(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+        expected_input_signature=source_signature,
+        task_result_id=17,
+    )
+
+    meta = _read_index_atomic_meta(parquet_store)
+
+    assert meta["schema_version"] == state.INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION
+    assert meta["catalog_signature"] == state._index_atomic_snapshot_catalog_signature(definitions)
+    assert meta["source_signature"] == source_signature
+    assert meta["generated_at"] == "2026-07-12T09:00:00"
+    assert meta["task_result_id"] == 17
+    assert meta["data_status_counts"] == {"ready": 1}
+    assert meta["coverage_signature"] == state._index_atomic_snapshot_coverage_signature(coverage)
+
+
+def test_index_atomic_snapshot_round_trip_preserves_20_day_range_facts(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    summary = _summary("000300")
+    summary.loc[0, "range_20_high"] = True
+    summary.loc[0, "range_20_low"] = False
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+
+    state.write_index_atomic_snapshot(
+        summary,
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+        expected_input_signature=source_signature,
+    )
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert result.status == "ready"
+    assert bool(result.summary.iloc[0]["range_20_high"]) is True
+    assert bool(result.summary.iloc[0]["range_20_low"]) is False
+
+
+def test_index_atomic_snapshot_old_schema_is_stale_not_ready(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+        expected_input_signature=source_signature,
+    )
+    meta_file = parquet_store.root / "cache" / "index_atomic_snapshot.meta.json"
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    meta["schema_version"] = state.INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION - 1
+    meta_file.write_text(json.dumps(meta), encoding="utf-8")
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert result.status == "stale"
+    assert result.summary["index_code"].tolist() == ["000300"]
+
+
+def test_index_atomic_snapshot_inputs_excludes_reserve_catalog_entries(tmp_path):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    store.upsert_index_catalog(
+        (
+            IndexCatalogEntry(
+                index_code="000300", name="沪深300", market="A股", category_level_1="宽基", category_level_2="宽基",
+                index_type="宽基", pool="core", index_base_date=None, baseline_source="unverified",
+                source_kind="csi", provider_symbol="000300",
+            ),
+            IndexCatalogEntry(
+                index_code="801010", name="农林牧渔", market="A股", category_level_1="行业", category_level_2="行业",
+                index_type="行业", pool="research", index_base_date=None, baseline_source="unverified",
+                source_kind="shenwan", provider_symbol="801010",
+            ),
+            IndexCatalogEntry(
+                index_code="000001", name="上证指数", market="A股", category_level_1="宽基", category_level_2="宽基",
+                index_type="宽基", pool="reserve", index_base_date=None, baseline_source="unverified",
+                source_kind="csi", provider_symbol="000001",
+            ),
+        )
+    )
+    store.upsert_index_history_coverage(
+        "000300",
+        index_base_date=None,
+        baseline_source="unverified",
+        local_first_trade_date="2020-01-01",
+        source_first_trade_date=None,
+        latest_trade_date="2026-07-11",
+        history_rows=1000,
+        completeness_status="complete",
+        completeness_message="完整",
+    )
+
+    definitions, coverage = state.index_atomic_snapshot_inputs(store)
+
+    assert [definition.index_code for definition in definitions] == ["000300", "801010"]
+    assert coverage["index_code"].tolist() == ["000300"]
+
+
+def test_index_atomic_snapshot_inputs_use_configured_catalog_order_for_sqlite_snapshot_rows(tmp_path):
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    configured = {entry.index_code: entry for entry in default_index_catalog()}
+    persisted_300 = replace(configured["000300"], name="持久化沪深300")
+    unknown = IndexCatalogEntry(
+        index_code="000000",
+        name="未知持久化指数",
+        market="A股",
+        category_level_1="测试",
+        category_level_2="测试",
+        index_type="测试",
+        pool="core",
+        index_base_date=None,
+        baseline_source="unverified",
+        source_kind="csi",
+        provider_symbol="000000",
+    )
+    store.upsert_index_catalog((persisted_300, configured["000016"], configured["801012"], unknown))
+
+    definitions, coverage = state.index_atomic_snapshot_inputs(store)
+    summary, _ = build_index_atomic_snapshot(_parquet_store(tmp_path), definitions, coverage=coverage)
+    rows = build_index_atomic_rows(summary, IndexAtomicFilters(pool="core"))
+    research_rows = build_index_atomic_rows(summary, IndexAtomicFilters(pool="research"))
+
+    assert store.list_index_catalog()["index_code"].tolist() == ["000000", "000016", "000300", "801012"]
+    assert [definition.index_code for definition in definitions] == ["000300", "000016", "801012", "000000"]
+    assert definitions[0].name == "持久化沪深300"
+    assert summary["catalog_order"].tolist() == [0, 1, 2, 3]
+    assert [row["index_code"] for row in rows] == ["000300", "000016", "000000"]
+    assert [row["index_code"] for row in research_rows] == ["801012"]
+
+
+def test_atomic_snapshot_writer_requires_an_expected_input_signature(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+
+    with pytest.raises(TypeError, match="expected_input_signature"):
+        state.write_index_atomic_snapshot(
+            _summary("000300"),
+            _details("000300"),
+            source_signature,
+            datetime(2026, 7, 12, 9, 0),
+            parquet_store,
+            definitions=definitions,
+            coverage=coverage,
+        )
+
+
+def test_atomic_snapshot_writer_rejects_changed_expected_input_signature_before_publish(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    expected_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        expected_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+        expected_input_signature=expected_signature,
+        task_result_id=99,
+    )
+    parquet_store.write_index_prices(
+        "000300",
+        pd.DataFrame({"trade_date": ["2026-07-12"], "close": [1.0]}),
+    )
+
+    with pytest.raises(ValueError, match="本地输入已变化，拒绝发布快照"):
+        state.write_index_atomic_snapshot(
+            _summary("000905"),
+            _details("000905"),
+            expected_signature,
+            datetime(2026, 7, 12, 10, 0),
+            parquet_store,
+            definitions=definitions,
+            coverage=coverage,
+            expected_input_signature=expected_signature,
+            task_result_id=100,
+        )
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert result.status == "stale"
+    assert result.summary["index_code"].tolist() == ["000300"]
+    assert _read_index_atomic_meta(parquet_store)["task_result_id"] == 99
+
+
+def test_readonly_loader_returns_failed_for_corrupt_snapshot_files(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        expected_input_signature=source_signature,
+    )
+    (parquet_store.root / "cache" / "index_atomic_snapshot.meta.json").write_text("{broken", encoding="utf-8")
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions)
+
+    assert result.status == "failed"
+    assert result.summary.empty
+    assert "读取指数原子快照失败" in result.message
+
+
+def test_failed_atomic_snapshot_write_keeps_last_successful_snapshot(tmp_path, monkeypatch):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        expected_input_signature=source_signature,
+    )
+    original_to_parquet = pd.DataFrame.to_parquet
+    writes = 0
+
+    def fail_second_temp_write(frame, path, *args, **kwargs):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("disk full")
+        return original_to_parquet(frame, path, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_second_temp_write)
+    with pytest.raises(OSError, match="disk full"):
+        state.write_index_atomic_snapshot(
+            _summary("000300"),
+            _details("000300"),
+            source_signature,
+            datetime(2026, 7, 12, 10, 0),
+            parquet_store,
+            definitions=definitions,
+            expected_input_signature=source_signature,
+        )
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions)
+
+    assert result.status == "ready"
+    assert result.generated_at == datetime(2026, 7, 12, 9, 0)
+
+
+def test_final_atomic_snapshot_publish_failure_restores_all_previous_files(tmp_path, monkeypatch):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        expected_input_signature=source_signature,
+    )
+    _, _, meta_file = state._index_atomic_snapshot_cache_paths(parquet_store)
+    original_replace = Path.replace
+    failed = False
+
+    def fail_final_meta_publish(path, target):
+        nonlocal failed
+        if not failed and Path(target) == meta_file and ".tmp" in path.name:
+            failed = True
+            raise OSError("final publish failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_final_meta_publish)
+    with pytest.raises(OSError, match="final publish failed"):
+        state.write_index_atomic_snapshot(
+            _summary("000905"),
+            _details("000905"),
+            source_signature,
+            datetime(2026, 7, 12, 10, 0),
+            parquet_store,
+            definitions=definitions,
+            expected_input_signature=source_signature,
+        )
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions)
+
+    assert result.status == "ready"
+    assert result.summary["index_code"].tolist() == ["000300"]
+    assert result.details["index_code"].tolist() == ["000300"]
+    assert result.generated_at == datetime(2026, 7, 12, 9, 0)
+
+
+def test_atomic_snapshot_temp_validation_failure_preserves_previous_files(tmp_path, monkeypatch):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        expected_input_signature=source_signature,
+    )
+    original_read_parquet = pd.read_parquet
+
+    def fail_temp_validation(path, *args, **kwargs):
+        if ".tmp" in Path(path).name:
+            raise OSError("temporary snapshot validation failed")
+        return original_read_parquet(path, *args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_parquet", fail_temp_validation)
+    with pytest.raises(OSError, match="temporary snapshot validation failed"):
+        state.write_index_atomic_snapshot(
+            _summary("000905"),
+            _details("000905"),
+            source_signature,
+            datetime(2026, 7, 12, 10, 0),
+            parquet_store,
+            definitions=definitions,
+            expected_input_signature=source_signature,
+        )
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions)
+
+    assert result.status == "ready"
+    assert result.summary["index_code"].tolist() == ["000300"]
+
+
+@pytest.mark.parametrize("invalid_value", [None, 17])
+def test_readonly_loader_fails_for_missing_or_invalid_coverage_signature(tmp_path, invalid_value):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+        expected_input_signature=source_signature,
+    )
+    _, _, meta_file = state._index_atomic_snapshot_cache_paths(parquet_store)
+    meta = _read_index_atomic_meta(parquet_store)
+    if invalid_value is None:
+        del meta["coverage_signature"]
+    else:
+        meta["coverage_signature"] = invalid_value
+    meta_file.write_text(json.dumps(meta), encoding="utf-8")
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert result.status == "failed"
+    assert result.summary.empty
+
+
+def test_readonly_loader_marks_coverage_signature_mismatch_stale(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300", "2026-07-14")
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+        expected_input_signature=source_signature,
+    )
+    _, _, meta_file = state._index_atomic_snapshot_cache_paths(parquet_store)
+    meta = _read_index_atomic_meta(parquet_store)
+    meta["coverage_signature"] = "mismatch"
+    meta_file.write_text(json.dumps(meta), encoding="utf-8")
+
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert result.status == "stale"
+    assert result.current_latest_date == "2026-07-14"
+    assert result.summary["index_code"].tolist() == ["000300"]
+
+
+def test_index_atomic_snapshot_read_and_write_share_module_lock(tmp_path, monkeypatch):
+    class RecordingLock:
+        def __init__(self) -> None:
+            self.entries = 0
+
+        def __enter__(self):
+            self.entries += 1
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    lock = RecordingLock()
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    monkeypatch.setattr(state, "_INDEX_ATOMIC_SNAPSHOT_LOCK", lock, raising=False)
     monkeypatch.setattr(
         state,
-        "build_index_health_snapshot",
-        lambda parquet_store, definitions=None, coverage=None: (summary, details),
-        raising=False,
+        "_index_atomic_snapshot_source_signature",
+        lambda parquet_store, definitions, coverage=None: "current-signature",
     )
-    monkeypatch.setattr(
-        state,
-        "_index_health_snapshot_source_signature",
-        lambda parquet_store, definitions, coverage=None: "mixed-values",
-        raising=False,
+
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        "current-signature",
+        datetime(2026, 7, 12, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        expected_input_signature="current-signature",
     )
-    state.invalidate_index_health_snapshot_cache()
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions)
 
-    parquet_store = FakeParquetStore(str(tmp_path / "parquet"))
-    first = state.load_index_health_snapshot_cached(parquet_store)
-    state.invalidate_index_health_snapshot_cache(parquet_store)
-    second = state.load_index_health_snapshot_cached(parquet_store)
-
-    assert first.status == "ready"
-    assert second.status == "ready"
-    assert second.details["current_value"].tolist() == ["UP", "12.5"]
+    assert result.status == "ready"
+    assert lock.entries == 2

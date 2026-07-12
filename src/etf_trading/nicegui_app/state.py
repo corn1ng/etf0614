@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 import hashlib
@@ -37,9 +38,9 @@ from etf_trading.data.quality import (
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.research.atomic_indicators import ATOMIC_INDICATOR_COLUMNS, build_etf_atomic_indicator_snapshot
 from etf_trading.research.index_health_snapshot import (
-    INDEX_HEALTH_DETAIL_COLUMNS,
-    INDEX_HEALTH_SUMMARY_COLUMNS,
-    build_index_health_snapshot,
+    INDEX_ATOMIC_DETAIL_COLUMNS,
+    INDEX_ATOMIC_SUMMARY_COLUMNS,
+    build_index_atomic_snapshot,
 )
 from etf_trading.research.index_etf_universe import build_index_etf_universe
 from etf_trading.research.regime import TrendRegimeClassifier, add_trend_regime_features
@@ -61,9 +62,8 @@ _ATOMIC_SNAPSHOT_CACHE: dict[str, tuple[str, pd.DataFrame, datetime | None]] = {
 _ATOMIC_SNAPSHOT_ERRORS: dict[str, str] = {}
 _ATOMIC_SNAPSHOT_CACHE_LOCK = RLock()
 ATOMIC_SNAPSHOT_BUILD_MARKER_MAX_AGE_SECONDS = 600.0
-INDEX_HEALTH_SNAPSHOT_CACHE_SCHEMA_VERSION = 2
-_INDEX_HEALTH_SNAPSHOT_CACHE: dict[str, tuple[str, pd.DataFrame, pd.DataFrame, datetime | None]] = {}
-_INDEX_HEALTH_SNAPSHOT_CACHE_LOCK = RLock()
+INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 2
+_INDEX_ATOMIC_SNAPSHOT_LOCK = RLock()
 
 
 @dataclass(frozen=True)
@@ -75,12 +75,19 @@ class AtomicSnapshotCacheResult:
 
 
 @dataclass(frozen=True)
-class IndexHealthSnapshotCacheResult:
+class IndexAtomicSnapshotCacheResult:
     summary: pd.DataFrame
     details: pd.DataFrame
     status: str
     generated_at: datetime | None = None
+    current_latest_date: str | None = None
     message: str = ""
+    task_result_id: int | None = None
+
+
+# Temporary UI compatibility while Task 5 migrates the market page.  The
+# legacy trend/valuation cache contract is deliberately not retained.
+IndexHealthSnapshotCacheResult = IndexAtomicSnapshotCacheResult
 
 
 def create_store(db_path: str | Path | None = None) -> SQLiteStore:
@@ -235,68 +242,170 @@ def invalidate_atomic_snapshot_cache(parquet_store: ParquetStore | None = None) 
         _ATOMIC_SNAPSHOT_ERRORS.pop(cache_key, None)
 
 
+def index_atomic_snapshot_inputs(store: SQLiteStore) -> tuple[tuple[IndexDefinition, ...], pd.DataFrame]:
+    """Load the persistent non-reserve index catalogue and coverage facts."""
+
+    entries = catalog_entries_from_frame(store.list_index_catalog(include_reserve=False))
+    configured_order = {
+        entry.index_code: order
+        for order, entry in enumerate(default_index_catalog())
+        if entry.pool != "reserve"
+    }
+    unknown_order = len(configured_order)
+    entries = tuple(
+        sorted(
+            entries,
+            key=lambda entry: (configured_order.get(entry.index_code, unknown_order), entry.index_code),
+        )
+    )
+    return catalog_definitions(entries), store.list_index_history_coverage()
+
+
+def load_index_atomic_snapshot_readonly(
+    parquet_store: ParquetStore,
+    definitions: tuple[IndexDefinition, ...] = DEFAULT_INDEXES,
+    *,
+    coverage: pd.DataFrame | None = None,
+) -> IndexAtomicSnapshotCacheResult:
+    """Read a maintenance-produced snapshot without calculating or fetching data."""
+
+    current_latest_date = _index_atomic_snapshot_current_latest_date(definitions, coverage)
+    with _INDEX_ATOMIC_SNAPSHOT_LOCK:
+        summary_file, details_file, meta_file = _index_atomic_snapshot_cache_paths(parquet_store)
+        if not all(path.exists() for path in (summary_file, details_file, meta_file)):
+            return _empty_index_atomic_snapshot_result("missing", current_latest_date=current_latest_date)
+
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            _validate_index_atomic_snapshot_meta(meta, require_current_schema=False)
+            summary = pd.read_parquet(summary_file)
+            details = pd.read_parquet(details_file)
+            generated_at = _parse_cache_datetime(meta["generated_at"])
+            if generated_at is None:
+                raise ValueError("generated_at 无法解析")
+        except Exception as exc:  # noqa: BLE001 - cache corruption must not break page rendering
+            return _empty_index_atomic_snapshot_result(
+                "failed",
+                current_latest_date=current_latest_date,
+                message=f"读取指数原子快照失败：{exc}",
+            )
+
+        source_signature = _index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+        coverage_signature = _index_atomic_snapshot_coverage_signature(coverage)
+        status = (
+            "ready"
+            if (
+                meta["schema_version"] == INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION
+                and meta["source_signature"] == source_signature
+                and meta["coverage_signature"] == coverage_signature
+            )
+            else "stale"
+        )
+        return IndexAtomicSnapshotCacheResult(
+            summary=summary,
+            details=details,
+            status=status,
+            generated_at=generated_at,
+            current_latest_date=current_latest_date,
+            task_result_id=_index_atomic_snapshot_task_result_id(meta.get("task_result_id")),
+        )
+
+
+def write_index_atomic_snapshot(
+    summary: pd.DataFrame,
+    details: pd.DataFrame,
+    source_signature: str,
+    generated_at: datetime,
+    parquet_store: ParquetStore,
+    *,
+    definitions: tuple[IndexDefinition, ...] = (),
+    coverage: pd.DataFrame | None = None,
+    expected_input_signature: str,
+    current_input_signature: Callable[[], str] | None = None,
+    task_result_id: int | None = None,
+) -> None:
+    """Persist already-calculated index atoms without rebuilding them.
+
+    ``expected_input_signature`` is mandatory and must equal
+    ``source_signature``. The current input signature is rechecked while
+    holding the publish lock, using ``current_input_signature`` when a caller
+    can reload its catalog and coverage inputs.
+
+    The process-local lock prevents in-process readers from observing the
+    publication window. Individual file replacements are atomic, and a failed
+    publication restores backed-up live files. Cross-process transactions are
+    intentionally not claimed.
+    """
+
+    expected_signature = str(expected_input_signature)
+    if str(source_signature) != expected_signature:
+        raise ValueError("期望输入签名与快照签名不一致")
+
+    def assert_expected_input_signature() -> None:
+        current_signature = (
+            str(current_input_signature())
+            if current_input_signature is not None
+            else _index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+        )
+        if current_signature != expected_signature:
+            raise ValueError("本地输入已变化，拒绝发布快照")
+
+    with _INDEX_ATOMIC_SNAPSHOT_LOCK:
+        assert_expected_input_signature()
+        summary_file, details_file, meta_file = _index_atomic_snapshot_cache_paths(parquet_store)
+        summary_file.parent.mkdir(parents=True, exist_ok=True)
+        token = f"{os.getpid()}_{time.time_ns()}"
+        tmp_summary = summary_file.with_name(f".{summary_file.stem}.{token}.tmp{summary_file.suffix}")
+        tmp_details = details_file.with_name(f".{details_file.stem}.{token}.tmp{details_file.suffix}")
+        tmp_meta = meta_file.with_name(f".{meta_file.stem}.{token}.tmp{meta_file.suffix}")
+        try:
+            _index_atomic_cache_safe_summary(summary).to_parquet(tmp_summary, index=False)
+            _index_atomic_cache_safe_details(details).to_parquet(tmp_details, index=False)
+            tmp_meta.write_text(
+                json.dumps(
+                    {
+                        "schema_version": INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION,
+                        "catalog_signature": _index_atomic_snapshot_catalog_signature(definitions),
+                        "source_signature": str(source_signature),
+                        "generated_at": generated_at.isoformat(timespec="seconds"),
+                        "data_status_counts": _index_atomic_snapshot_status_counts(summary),
+                        "task_result_id": task_result_id,
+                        "coverage_signature": _index_atomic_snapshot_coverage_signature(coverage),
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            _verify_index_atomic_snapshot_temporary_files(tmp_summary, tmp_details, tmp_meta)
+            assert_expected_input_signature()
+            _publish_index_atomic_snapshot(
+                (summary_file, details_file, meta_file),
+                (tmp_summary, tmp_details, tmp_meta),
+                token,
+            )
+        finally:
+            _safe_unlink(tmp_summary)
+            _safe_unlink(tmp_details)
+            _safe_unlink(tmp_meta)
+
+
 def load_index_health_snapshot_cached(
     parquet_store: ParquetStore,
     definitions: tuple[IndexDefinition, ...] = DEFAULT_INDEXES,
     *,
     coverage: pd.DataFrame | None = None,
     force_refresh: bool = False,
-) -> IndexHealthSnapshotCacheResult:
-    source_signature = _index_health_snapshot_source_signature(parquet_store, definitions, coverage)
-    cache_key = _index_health_snapshot_cache_key(parquet_store)
+) -> IndexAtomicSnapshotCacheResult:
+    """Temporary read-only forwarder until the market page adopts the new name."""
 
-    if not force_refresh:
-        with _INDEX_HEALTH_SNAPSHOT_CACHE_LOCK:
-            cached = _INDEX_HEALTH_SNAPSHOT_CACHE.get(cache_key)
-            if cached is not None:
-                cached_signature, summary, details, generated_at = cached
-                if cached_signature == source_signature:
-                    return IndexHealthSnapshotCacheResult(
-                        summary=summary.copy(),
-                        details=details.copy(),
-                        status="ready",
-                        generated_at=generated_at,
-                    )
-
-    disk_cache = _read_index_health_snapshot_disk_cache(parquet_store)
-    if disk_cache is not None and not force_refresh:
-        disk_signature, summary, details, generated_at = disk_cache
-        if disk_signature == source_signature:
-            with _INDEX_HEALTH_SNAPSHOT_CACHE_LOCK:
-                _INDEX_HEALTH_SNAPSHOT_CACHE[cache_key] = (disk_signature, summary.copy(), details.copy(), generated_at)
-            return IndexHealthSnapshotCacheResult(summary=summary.copy(), details=details.copy(), status="ready", generated_at=generated_at)
-
-    try:
-        summary, details = build_index_health_snapshot(parquet_store, definitions=definitions, coverage=coverage)
-        generated_at = datetime.now()
-        _write_index_health_snapshot_disk_cache(summary, details, source_signature, generated_at, parquet_store)
-        with _INDEX_HEALTH_SNAPSHOT_CACHE_LOCK:
-            _INDEX_HEALTH_SNAPSHOT_CACHE[cache_key] = (source_signature, summary.copy(), details.copy(), generated_at)
-        return IndexHealthSnapshotCacheResult(summary=summary.copy(), details=details.copy(), status="ready", generated_at=generated_at)
-    except Exception as exc:  # noqa: BLE001 - keep stale diagnostics available when possible
-        if disk_cache is not None:
-            disk_signature, summary, details, generated_at = disk_cache
-            return IndexHealthSnapshotCacheResult(
-                summary=summary.copy(),
-                details=details.copy(),
-                status="stale",
-                generated_at=generated_at,
-                message=str(exc),
-            )
-        return IndexHealthSnapshotCacheResult(
-            summary=pd.DataFrame(columns=INDEX_HEALTH_SUMMARY_COLUMNS),
-            details=pd.DataFrame(columns=INDEX_HEALTH_DETAIL_COLUMNS),
-            status="failed",
-            message=str(exc),
-        )
+    del force_refresh
+    return load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
 
 
 def invalidate_index_health_snapshot_cache(parquet_store: ParquetStore | None = None) -> None:
-    with _INDEX_HEALTH_SNAPSHOT_CACHE_LOCK:
-        if parquet_store is None:
-            _INDEX_HEALTH_SNAPSHOT_CACHE.clear()
-            return
-        _INDEX_HEALTH_SNAPSHOT_CACHE.pop(_index_health_snapshot_cache_key(parquet_store), None)
+    """Temporary no-op: maintenance owns writes and pages keep no index cache."""
+
+    del parquet_store
 
 
 def _snapshot_cache_key(store: SQLiteStore, parquet_store: ParquetStore) -> tuple[str, str]:
@@ -309,22 +418,64 @@ def _atomic_snapshot_cache_key(parquet_store: ParquetStore) -> str:
     return str(Path(getattr(parquet_store, "root", "data/parquet")).resolve())
 
 
-def _index_health_snapshot_cache_key(parquet_store: ParquetStore) -> str:
-    return str(Path(getattr(parquet_store, "root", "data/parquet")).resolve())
-
-
 def _atomic_snapshot_cache_paths(parquet_store: ParquetStore) -> tuple[Path, Path]:
     cache_dir = Path(getattr(parquet_store, "root", "data/parquet")).resolve() / "cache"
     return cache_dir / "atomic_indicators.parquet", cache_dir / "atomic_indicators.meta.json"
 
 
-def _index_health_snapshot_cache_paths(parquet_store: ParquetStore) -> tuple[Path, Path, Path]:
+def _index_atomic_snapshot_cache_paths(parquet_store: ParquetStore) -> tuple[Path, Path, Path]:
     cache_dir = Path(getattr(parquet_store, "root", "data/parquet")).resolve() / "cache"
     return (
-        cache_dir / "index_health_snapshot.parquet",
-        cache_dir / "index_health_snapshot_details.parquet",
-        cache_dir / "index_health_snapshot.meta.json",
+        cache_dir / "index_atomic_snapshot.parquet",
+        cache_dir / "index_atomic_snapshot_details.parquet",
+        cache_dir / "index_atomic_snapshot.meta.json",
     )
+
+
+def _publish_index_atomic_snapshot(
+    live_files: tuple[Path, Path, Path],
+    temporary_files: tuple[Path, Path, Path],
+    token: str,
+) -> None:
+    """Publish a complete snapshot, restoring the prior generation on failure.
+
+    Callers must hold ``_INDEX_ATOMIC_SNAPSHOT_LOCK``. This provides a
+    coherent protocol for one Python process; it is not a cross-process
+    transaction.
+    """
+
+    backups = [(live, live.with_name(f".{live.name}.{token}.backup")) for live in live_files if live.exists()]
+    moved_backups: list[tuple[Path, Path]] = []
+    published_files: list[Path] = []
+    try:
+        for live, backup in backups:
+            live.replace(backup)
+            moved_backups.append((live, backup))
+        for temporary, live in zip(temporary_files, live_files, strict=True):
+            temporary.replace(live)
+            published_files.append(live)
+    except Exception:
+        for live in published_files:
+            _safe_unlink(live)
+        for live, backup in reversed(moved_backups):
+            backup.replace(live)
+        raise
+    else:
+        for _, backup in moved_backups:
+            _safe_unlink(backup)
+
+
+def _verify_index_atomic_snapshot_temporary_files(
+    summary_file: Path,
+    details_file: Path,
+    meta_file: Path,
+) -> None:
+    """Ensure a complete temporary generation is readable before publishing it."""
+
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    _validate_index_atomic_snapshot_meta(meta)
+    pd.read_parquet(summary_file)
+    pd.read_parquet(details_file)
 
 
 def _atomic_snapshot_build_marker_path(parquet_store: ParquetStore) -> Path:
@@ -358,60 +509,66 @@ def _atomic_snapshot_source_signature(master: pd.DataFrame, parquet_store: Parqu
     return digest.hexdigest()
 
 
-def _index_health_snapshot_source_signature(
+def _index_atomic_snapshot_source_signature(
     parquet_store: ParquetStore,
     definitions: tuple[IndexDefinition, ...],
     coverage: pd.DataFrame | None = None,
 ) -> str:
     digest = hashlib.sha256()
     root = Path(getattr(parquet_store, "root", "data/parquet")).resolve()
-    codes = [definition.index_code for definition in definitions]
-    definition_signature = "|".join(
-        f"{definition.index_code}:{definition.pool}:{definition.index_base_date}:{definition.baseline_source}"
-        for definition in definitions
-    )
-    digest.update(definition_signature.encode())
+    selected_definitions = _non_reserve_index_definitions(definitions)
+    digest.update(f"schema_version={INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION}".encode())
+    digest.update(_index_atomic_snapshot_catalog_signature(selected_definitions).encode())
     digest.update(_index_coverage_signature_bytes(coverage))
-    for folder in ("indexes", "index_valuations"):
-        existing_count = 0
-        missing_count = 0
-        total_size = 0
-        total_mtime_ns = 0
-        max_mtime_ns = 0
-        for code in codes:
-            path = root / folder / f"{code}.parquet"
-            try:
-                stat = path.stat()
-            except OSError:
-                missing_count += 1
-                continue
-            existing_count += 1
-            total_size += stat.st_size
-            total_mtime_ns += stat.st_mtime_ns
-            max_mtime_ns = max(max_mtime_ns, stat.st_mtime_ns)
-        digest.update(f"|{folder}={existing_count}|missing={missing_count}|size={total_size}|mtime_sum={total_mtime_ns}|mtime_max={max_mtime_ns}".encode())
+    for definition in selected_definitions:
+        path = root / "indexes" / f"{definition.index_code}.parquet"
+        try:
+            stat = path.stat()
+        except OSError:
+            digest.update(f"|{definition.index_code}|exists=0".encode())
+        else:
+            digest.update(
+                f"|{definition.index_code}|exists=1|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}".encode()
+            )
     return digest.hexdigest()
 
 
 def _index_coverage_signature_bytes(coverage: pd.DataFrame | None) -> bytes:
     if coverage is None or coverage.empty or "index_code" not in coverage:
         return b"|coverage=empty"
-    columns = [
-        column
-        for column in (
-            "index_code",
-            "completeness_status",
-            "completeness_message",
-            "index_base_date",
-            "baseline_source",
-            "validated_at",
-        )
-        if column in coverage
-    ]
-    if not columns:
-        return b"|coverage=no-columns"
-    normalized = coverage[columns].fillna("").astype(str).sort_values("index_code")
+    columns = sorted(str(column) for column in coverage.columns)
+    normalized = coverage.loc[:, columns].fillna("").astype(str).sort_values("index_code")
     return ("|coverage=" + normalized.to_csv(index=False)).encode()
+
+
+def _index_atomic_snapshot_coverage_signature(coverage: pd.DataFrame | None) -> str:
+    return hashlib.sha256(_index_coverage_signature_bytes(coverage)).hexdigest()
+
+
+def _non_reserve_index_definitions(definitions: tuple[IndexDefinition, ...]) -> tuple[IndexDefinition, ...]:
+    return tuple(definition for definition in definitions if definition.pool != "reserve")
+
+
+def _index_atomic_snapshot_catalog_signature(definitions: tuple[IndexDefinition, ...]) -> str:
+    digest = hashlib.sha256()
+    for order, definition in enumerate(_non_reserve_index_definitions(definitions)):
+        base_date = definition.index_base_date.isoformat() if definition.index_base_date is not None else ""
+        digest.update(
+            "|".join(
+                (
+                    str(order),
+                    definition.index_code,
+                    definition.name,
+                    definition.market,
+                    definition.category,
+                    definition.provider_symbol,
+                    str(definition.pool or ""),
+                    base_date,
+                    definition.baseline_source,
+                )
+            ).encode()
+        )
+    return digest.hexdigest()
 
 
 def _atomic_master_signature_bytes(master: pd.DataFrame) -> bytes:
@@ -475,22 +632,6 @@ def _read_atomic_snapshot_disk_cache(parquet_store: ParquetStore) -> tuple[str, 
         return None
     generated_at = _parse_cache_datetime(meta.get("generated_at"))
     return str(meta.get("source_signature", "")), frame, generated_at
-
-
-def _read_index_health_snapshot_disk_cache(parquet_store: ParquetStore) -> tuple[str, pd.DataFrame, pd.DataFrame, datetime | None] | None:
-    summary_file, details_file, meta_file = _index_health_snapshot_cache_paths(parquet_store)
-    if not summary_file.exists() or not details_file.exists() or not meta_file.exists():
-        return None
-    try:
-        meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        if int(meta.get("schema_version", 0)) != INDEX_HEALTH_SNAPSHOT_CACHE_SCHEMA_VERSION:
-            return None
-        summary = pd.read_parquet(summary_file)
-        details = pd.read_parquet(details_file)
-    except Exception:  # noqa: BLE001 - a broken cache should not break the page
-        return None
-    generated_at = _parse_cache_datetime(meta.get("generated_at"))
-    return str(meta.get("source_signature", "")), summary, details, generated_at
 
 
 def _parse_cache_datetime(value: object) -> datetime | None:
@@ -611,41 +752,77 @@ def _write_atomic_snapshot_disk_cache(
     tmp_meta_file.replace(meta_file)
 
 
-def _write_index_health_snapshot_disk_cache(
-    summary: pd.DataFrame,
-    details: pd.DataFrame,
-    source_signature: str,
-    generated_at: datetime,
-    parquet_store: ParquetStore,
-) -> None:
-    summary_file, details_file, meta_file = _index_health_snapshot_cache_paths(parquet_store)
-    summary_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_summary_file = summary_file.with_name(f"{summary_file.stem}.tmp{summary_file.suffix}")
-    tmp_details_file = details_file.with_name(f"{details_file.stem}.tmp{details_file.suffix}")
-    tmp_meta_file = meta_file.with_name(f"{meta_file.stem}.tmp{meta_file.suffix}")
-    summary_to_write = _index_health_cache_safe_frame(summary, _INDEX_HEALTH_SUMMARY_TEXT_COLUMNS, _INDEX_HEALTH_SUMMARY_NUMERIC_COLUMNS)
-    details_to_write = _index_health_cache_safe_frame(details, _INDEX_HEALTH_DETAIL_TEXT_COLUMNS, _INDEX_HEALTH_DETAIL_NUMERIC_COLUMNS)
-    summary_to_write.to_parquet(tmp_summary_file, index=False)
-    details_to_write.to_parquet(tmp_details_file, index=False)
-    tmp_summary_file.replace(summary_file)
-    tmp_details_file.replace(details_file)
-    tmp_meta_file.write_text(
-        json.dumps(
-            {
-                "schema_version": INDEX_HEALTH_SNAPSHOT_CACHE_SCHEMA_VERSION,
-                "source_signature": source_signature,
-                "generated_at": generated_at.isoformat(timespec="seconds"),
-                "summary_rows": int(len(summary)),
-                "detail_rows": int(len(details)),
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+def _empty_index_atomic_snapshot_result(
+    status: str,
+    *,
+    current_latest_date: str | None,
+    message: str = "",
+) -> IndexAtomicSnapshotCacheResult:
+    return IndexAtomicSnapshotCacheResult(
+        summary=pd.DataFrame(columns=INDEX_ATOMIC_SUMMARY_COLUMNS),
+        details=pd.DataFrame(columns=INDEX_ATOMIC_DETAIL_COLUMNS),
+        status=status,
+        current_latest_date=current_latest_date,
+        message=message,
     )
-    tmp_meta_file.replace(meta_file)
 
 
-_INDEX_HEALTH_SUMMARY_TEXT_COLUMNS = {
+def _validate_index_atomic_snapshot_meta(meta: object, *, require_current_schema: bool = True) -> None:
+    if not isinstance(meta, dict):
+        raise ValueError("元数据不是对象")
+    schema_version = meta.get("schema_version")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool):
+        raise ValueError("快照 schema 版本无效")
+    if require_current_schema and schema_version != INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION:
+        raise ValueError("快照 schema 版本不匹配")
+    required = (
+        "catalog_signature",
+        "source_signature",
+        "coverage_signature",
+        "generated_at",
+        "data_status_counts",
+        "task_result_id",
+    )
+    missing = [key for key in required if key not in meta]
+    if missing:
+        raise ValueError(f"元数据缺少字段：{', '.join(missing)}")
+    if not all(isinstance(meta[key], str) for key in ("catalog_signature", "source_signature", "coverage_signature")):
+        raise ValueError("元数据签名无效")
+    if not isinstance(meta["data_status_counts"], dict):
+        raise ValueError("数据状态统计无效")
+
+
+def _index_atomic_snapshot_current_latest_date(
+    definitions: tuple[IndexDefinition, ...],
+    coverage: pd.DataFrame | None,
+) -> str | None:
+    if coverage is None or coverage.empty or "index_code" not in coverage or "latest_trade_date" not in coverage:
+        return None
+    codes = {definition.index_code for definition in _non_reserve_index_definitions(definitions)}
+    values = pd.to_datetime(
+        coverage.loc[coverage["index_code"].astype(str).isin(codes), "latest_trade_date"], errors="coerce"
+    ).dropna()
+    return None if values.empty else values.max().strftime("%Y-%m-%d")
+
+
+def _index_atomic_snapshot_task_result_id(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _index_atomic_snapshot_status_counts(summary: pd.DataFrame) -> dict[str, int]:
+    for column in ("snapshot_status", "history_status", "data_status"):
+        if column in summary:
+            counts = summary[column].fillna("missing").astype(str).value_counts()
+            return {str(status): int(count) for status, count in counts.items()}
+    return {}
+
+
+_INDEX_ATOMIC_SUMMARY_TEXT_COLUMNS = {
     "index_code",
     "index_name",
     "market",
@@ -654,56 +831,53 @@ _INDEX_HEALTH_SUMMARY_TEXT_COLUMNS = {
     "index_base_date",
     "history_completeness_status",
     "history_completeness_message",
-    "data_status_message",
-    "latest_date",
-    "large_trend",
-    "medium_trend",
-    "small_trend",
-    "trend_health_status",
-    "trend_health_reason",
-    "valuation_overview_label",
-    "valuation_health_status",
-    "valuation_health_reason",
-    "valuation_latest_date",
-    "valuation_primary_source",
-}
-
-_INDEX_HEALTH_SUMMARY_NUMERIC_COLUMNS = {
-    "history_rows",
-    "valuation_coverage_years",
-}
-
-_INDEX_HEALTH_DETAIL_TEXT_COLUMNS = {
-    "index_code",
-    "detail_kind",
-    "metric_name",
-    "metric_label",
-    "current_value",
-    "status",
-    "reason",
-    "display_direction",
-    "first_date",
+    "history_status",
+    "history_reason",
     "latest_date",
     "data_source",
+    "error_text",
+    "snapshot_status",
+    "snapshot_reason",
+    "close_status",
+    "ma_20_status",
+    "ma_60_status",
+    "ma_120_status",
+    "ma_250_status",
+    "range_20_status",
+    "return_20_status",
 }
 
-_INDEX_HEALTH_DETAIL_NUMERIC_COLUMNS = {
-    "historical_percentile",
-    "window_years",
-    "sample_count",
+_INDEX_ATOMIC_SUMMARY_BOOLEAN_COLUMNS = {
+    "close_above_ma_20",
+    "close_above_ma_60",
+    "close_above_ma_120",
+    "close_above_ma_250",
+    "range_20_high",
+    "range_20_low",
 }
 
 
-def _index_health_cache_safe_frame(
-    frame: pd.DataFrame,
-    text_columns: set[str],
-    numeric_columns: set[str],
-) -> pd.DataFrame:
-    result = frame.copy()
-    for column in text_columns.intersection(result.columns):
+def _index_atomic_cache_safe_summary(summary: pd.DataFrame) -> pd.DataFrame:
+    result = summary.copy()
+    for column in _INDEX_ATOMIC_SUMMARY_TEXT_COLUMNS.intersection(result.columns):
         result[column] = result[column].astype("string")
-    for column in numeric_columns.intersection(result.columns):
+    for column in _INDEX_ATOMIC_SUMMARY_BOOLEAN_COLUMNS.intersection(result.columns):
+        result[column] = result[column].astype("boolean")
+    for column in set(result.columns).difference(_INDEX_ATOMIC_SUMMARY_TEXT_COLUMNS).difference(
+        _INDEX_ATOMIC_SUMMARY_BOOLEAN_COLUMNS
+    ):
         result[column] = pd.to_numeric(result[column], errors="coerce")
+    return result
+
+
+def _index_atomic_cache_safe_details(details: pd.DataFrame) -> pd.DataFrame:
+    result = details.copy()
+    for column in set(result.columns).difference({"value", "sample_count"}):
+        result[column] = result[column].astype("string")
+    if "value" in result:
+        result["value"] = result["value"].astype("string")
+    if "sample_count" in result:
+        result["sample_count"] = pd.to_numeric(result["sample_count"], errors="coerce")
     return result
 
 

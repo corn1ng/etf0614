@@ -9,6 +9,7 @@ from nicegui import ui
 
 
 COLUMN_LABELS = {
+    "index": "指数",
     "index_code": "指数代码",
     "index_name": "指数名称",
     "market": "市场",
@@ -36,6 +37,7 @@ COLUMN_LABELS = {
     "small_trend": "小趋势",
     "allows_new_position": "允许新开仓",
     "latest_date": "最新日期",
+    "as_of_date": "截至日期",
     "history_rows": "历史行数",
     "trend_health_status": "趋势体检",
     "trend_health_reason": "趋势原因",
@@ -155,6 +157,18 @@ COLUMN_LABELS = {
     "ma60_slope_20": "60日线20日斜率",
     "is_60d_close_breakout": "突破60日高点",
     "missing_feature_names": "缺失字段",
+    "close_vs_ma_20": "相对20日线",
+    "close_vs_ma_60": "相对60日线",
+    "close_vs_ma_120": "相对120日线",
+    "close_vs_ma_250": "相对250日线",
+    "range_20": "20日区间",
+    "range_20_high": "20日收盘新高",
+    "range_20_low": "20日收盘新低",
+    "range_20_status": "20日区间状态",
+    "snapshot_status": "快照状态",
+    "snapshot_reason": "快照说明",
+    "history_reason": "历史说明",
+    "data_status": "数据状态",
 }
 
 VALUE_LABELS = {
@@ -182,6 +196,8 @@ VALUE_LABELS = {
     "normal": "正常",
     "blocked": "未通过",
     "computed": "已计算",
+    "missing_input": "缺少输入字段",
+    "calculation_failed": "计算失败",
     "partial": "部分缺失",
     "missing_valuation": "估值缺失",
     "low_percentile": "低分位",
@@ -268,17 +284,46 @@ VALUE_LABELS = {
     "SZSE": "深交所",
     "SH": "上交所",
     "SZ": "深交所",
+    "akshare_zh_em": "AkShare（东方财富指数行情）",
+    "akshare_zh_sina": "AkShare（新浪指数行情）",
+    "akshare_csindex": "AkShare（中证官网指数行情）",
+    "akshare_hk_sina": "AkShare（新浪港股指数行情）",
+    "akshare_shenwan": "AkShare（申万指数行情）",
+    "akshare_hk_em": "AkShare（东方财富港股指数行情）",
 }
 
 FIELD_VALUE_LABELS = {
     "history_status": {
         "stale": "行情滞后",
     },
+    "snapshot_status": {
+        "ready": "已验证",
+        "stale": "待重建",
+        "missing": "不存在",
+        "failed": "生成失败",
+        "computed": "已计算",
+        "insufficient_history": "历史不足",
+        "missing_input": "缺少输入字段",
+        "read_failed": "读取失败",
+        "calculation_failed": "计算失败",
+    },
+    "data_status": {
+        "computed": "已计算",
+        "insufficient_history": "历史不足",
+        "missing_input": "缺少输入字段",
+        "read_failed": "读取失败",
+        "calculation_failed": "计算失败",
+    },
     "valuation_overview_label": {
         "missing": "估值缺失",
     },
     "status": {
         "stale": "待刷新",
+        "computed": "已计算",
+        "insufficient_history": "历史不足",
+        "missing_input": "缺少输入字段",
+        "read_failed": "读取失败",
+        "calculation_failed": "计算失败",
     },
 }
 
@@ -297,6 +342,7 @@ BOOLEAN_COLUMN_LABELS = {
 }
 
 COMPACT_COLUMN_WIDTHS = {
+    "index": 156,
     "index_code": 88,
     "index_name": 116,
     "market": 72,
@@ -306,6 +352,7 @@ COMPACT_COLUMN_WIDTHS = {
     "small_trend": 100,
     "allows_new_position": 88,
     "latest_date": 104,
+    "as_of_date": 104,
     "history_rows": 88,
     "etf_code": 88,
     "etf_name": 128,
@@ -327,6 +374,14 @@ COMPACT_COLUMN_WIDTHS = {
     "current_value": 96,
     "historical_percentile": 96,
     "sample_count": 88,
+    "close_vs_ma_20": 112,
+    "close_vs_ma_60": 112,
+    "close_vs_ma_120": 120,
+    "close_vs_ma_250": 120,
+    "range_20": 92,
+    "return_20": 88,
+    "data_status": 104,
+    "snapshot_status": 104,
 }
 
 PAGINATION_LABEL = "(first, end, total) => `${first}-${end} / ${total}`"
@@ -366,6 +421,8 @@ def table_columns(rows: list[dict[str, object]], *, compact: bool = False) -> li
         return []
     columns: list[dict[str, str]] = []
     for key in rows[0].keys():
+        if key == "index_code" and "index" in rows[0]:
+            continue
         column: dict[str, str] = {"name": key, "label": COLUMN_LABELS.get(key, key), "field": key, "align": "left"}
         if compact:
             width = COMPACT_COLUMN_WIDTHS.get(key)
