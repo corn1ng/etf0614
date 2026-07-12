@@ -255,7 +255,7 @@ def market_overview(snapshot: PlatformSnapshot) -> dict[str, object]:
         "core_indexes": int((pools == "core").sum()),
         "research_indexes": int((pools == "research").sum()),
         "incomplete_history_indexes": int(
-            completeness.isin(["INCOMPLETE", "MISSING_HISTORY", "BASELINE_UNVERIFIED", "READ_FAILED", "NOT_VALIDATED"]).sum()
+            completeness.isin(["INCOMPLETE", "MISSING_HISTORY", "BASELINE_REFERENCED", "BASELINE_UNVERIFIED", "READ_FAILED", "NOT_VALIDATED"]).sum()
         ),
         "categories": categories,
     }

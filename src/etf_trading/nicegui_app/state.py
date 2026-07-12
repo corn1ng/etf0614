@@ -25,6 +25,7 @@ from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
 from etf_trading.data.quality import (
     HistoryAssessment,
     HistoryReadiness,
+    assess_index_history_completeness,
     assess_price_history,
     expected_latest_trade_date,
     history_readiness_label,
@@ -732,6 +733,11 @@ def build_index_trend_summary(
             "category": definition.category,
             "pool": definition.pool or "core",
             "index_base_date": base_text,
+            "baseline_source": definition.baseline_source,
+            "baseline_evidence_kind": definition.baseline_evidence_kind,
+            "baseline_evidence_name": definition.baseline_evidence_name,
+            "baseline_evidence_url": definition.baseline_evidence_url,
+            "baseline_checked_at": definition.baseline_checked_at.isoformat() if definition.baseline_checked_at is not None else "",
             "history_completeness_status": completeness_status,
             "history_completeness_message": upgrade_legacy_index_history_message(
                 completeness_status,
@@ -767,6 +773,15 @@ def build_index_trend_summary(
             rows.append(row)
             continue
 
+        completeness = assess_index_history_completeness(
+            prices,
+            definition.index_base_date,
+            baseline_source=definition.baseline_source,
+            index_code=definition.index_code,
+            source_kind=definition.source_kind,
+            evidence_name=definition.baseline_evidence_name,
+            evidence_kind=definition.baseline_evidence_kind,
+        )
         assessment = assess_price_history(prices, expected, min_history_rows=252, holidays=holidays)
         row.update(
             {
@@ -778,6 +793,13 @@ def build_index_trend_summary(
                 "trading_day_lag": assessment.trading_day_lag if assessment.trading_day_lag is not None else pd.NA,
             }
         )
+        if not coverage_row or definition.baseline_source in {"third_party_reference", "third_party_publication"}:
+            row.update(
+                {
+                    "history_completeness_status": completeness.status,
+                    "history_completeness_message": completeness.message,
+                }
+            )
         if prices.empty:
             rows.append(row)
             continue
@@ -822,6 +844,8 @@ def _coverage_by_index_code(coverage: pd.DataFrame | None) -> dict[str, dict[str
 
 def _allows_new_index_position(row: dict[str, object], definition: IndexDefinition, regime_allows: object) -> bool:
     if not bool(regime_allows):
+        return False
+    if row.get("history_completeness_status") in {"BASELINE_REFERENCED", "BASELINE_UNVERIFIED"}:
         return False
     if definition.pool is None:
         return True

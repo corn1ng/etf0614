@@ -175,11 +175,11 @@ def test_market_overview_counts_core_research_and_incomplete_history_separately(
         watchlist=snapshot.watchlist,
         index_summary=pd.DataFrame(
             {
-                "index_code": ["000300", "801010", "801020"],
-                "category": ["A股宽基", "A股行业", "A股行业"],
-                "pool": ["core", "research", "research"],
-                "history_completeness_status": ["COMPLETE", "INCOMPLETE", "BASELINE_UNVERIFIED"],
-                "allows_new_position": [True, False, False],
+                "index_code": ["000300", "801010", "801020", "801030"],
+                "category": ["A股宽基", "A股行业", "A股行业", "A股行业"],
+                "pool": ["core", "research", "research", "research"],
+                "history_completeness_status": ["COMPLETE", "INCOMPLETE", "BASELINE_UNVERIFIED", "BASELINE_REFERENCED"],
+                "allows_new_position": [True, False, False, False],
             }
         ),
         universe=snapshot.universe,
@@ -191,8 +191,8 @@ def test_market_overview_counts_core_research_and_incomplete_history_separately(
     overview = market_overview(snapshot)
 
     assert overview["core_indexes"] == 1
-    assert overview["research_indexes"] == 2
-    assert overview["incomplete_history_indexes"] == 2
+    assert overview["research_indexes"] == 3
+    assert overview["incomplete_history_indexes"] == 3
 
 
 def test_index_health_view_models_filter_summary_and_details():

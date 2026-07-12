@@ -195,6 +195,14 @@ def _catalog_task_message(task_type: str, rows: list[dict[str, object]]) -> str:
     if task_type == "index_source_validation":
         statuses = pd.Series([str(row.get("status", "")) for row in rows], dtype=str)
         return f"已验证 {len(rows)} 个指数：可用 {int((statuses == 'SUCCESS').sum())}，异常 {int((statuses != 'SUCCESS').sum())}"
+    if task_type == "index_baseline_evidence":
+        evidence_statuses = pd.Series([str(row.get("evidence_status", "")) for row in rows], dtype=str)
+        return (
+            f"已核验 {int((evidence_statuses == 'OFFICIAL').sum())}，"
+            f"第三方参考 {int(evidence_statuses.isin(['THIRD_PARTY_BASE_DATE', 'THIRD_PARTY_PUBLICATION']).sum())}，"
+            f"仍未确认 {int((evidence_statuses == 'UNRESOLVED').sum())}，"
+            f"拒绝 {int((evidence_statuses == 'REJECTED').sum())}"
+        )
     if task_type == "index_history_repair":
         completeness = pd.Series([str(row.get("completeness_status", "")) for row in rows], dtype=str)
         return f"已检查 {len(rows)} 个指数：历史不完整 {int((completeness == 'INCOMPLETE').sum())}"
@@ -518,7 +526,7 @@ def _index_catalog_summary(store) -> dict[str, int]:
         "research": int((pools == "research").sum()),
         "reserve": int((pools == "reserve").sum()),
         "complete": int((completeness == "COMPLETE").sum()),
-        "incomplete": int(completeness.isin(["INCOMPLETE", "BASELINE_UNVERIFIED", "SOURCE_LIMITED", "NOT_VALIDATED"]).sum()),
+        "incomplete": int(completeness.isin(["INCOMPLETE", "BASELINE_REFERENCED", "BASELINE_UNVERIFIED", "SOURCE_LIMITED", "NOT_VALIDATED"]).sum()),
         "missing": int((completeness == "MISSING_HISTORY").sum()),
         "stale": stale,
         "read_failed": read_failed,

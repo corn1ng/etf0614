@@ -1,3 +1,5 @@
+from datetime import date
+
 from etf_trading.nicegui_app.components import tables
 from etf_trading.nicegui_app.components.tables import render_table, table_columns, table_rows
 from etf_trading.nicegui_app.pages.etf_data import _atomic_filter_options, _atomic_filter_value
@@ -122,6 +124,36 @@ def test_table_rows_do_not_use_baseline_pending_verification_as_the_primary_conc
 
     assert display[0]["completeness_status"] == "历史起点无法确认"
     assert "基日待核验" not in " ".join(str(value) for value in display[0].values())
+
+
+def test_table_displays_baseline_reference_evidence_in_chinese():
+    rows = [
+        {
+            "history_completeness_status": "BASELINE_REFERENCED",
+            "baseline_evidence_kind": "publication_date",
+            "baseline_evidence_name": "聚宽",
+            "baseline_evidence_url": "https://www.joinquant.com/data/dict/indexData",
+            "baseline_checked_at": date(2026, 7, 12),
+            "evidence_status": "THIRD_PARTY_PUBLICATION",
+            "detail": "第三方仅提供发布日期，不能视为官方基日",
+        }
+    ]
+
+    assert [column["label"] for column in table_columns(rows)] == [
+        "历史完整性",
+        "起点证据",
+        "证据来源",
+        "证据链接",
+        "检索日期",
+        "核验结果",
+        "证据说明",
+    ]
+    display = table_rows(rows)
+
+    assert display[0]["history_completeness_status"] == "第三方参考起点"
+    assert display[0]["baseline_evidence_kind"] == "第三方发布日期"
+    assert display[0]["baseline_evidence_url"] == "https://www.joinquant.com/data/dict/indexData"
+    assert display[0]["evidence_status"] == "第三方参考起点"
 
 
 def test_render_table_localizes_pagination_labels(monkeypatch):

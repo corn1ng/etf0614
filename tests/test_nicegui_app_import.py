@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -67,6 +67,124 @@ def test_build_index_trend_summary_exposes_exact_stale_gap_message(tmp_path):
     )
 
     assert summary.iloc[0]["data_status_message"] == "已更新至 2026-07-09，缺少 2026-07-10 行情。"
+
+
+def test_market_snapshot_keeps_ready_quotes_for_third_party_baseline_reference(tmp_path):
+    from etf_trading.data.indexes import IndexDefinition
+    from etf_trading.data.storage import ParquetStore
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    store = ParquetStore(tmp_path)
+    dates = pd.bdate_range(end="2026-07-10", periods=300)
+    close = pd.Series(range(300), dtype=float) + 100.0
+    store.write_index_prices(
+        "000300",
+        pd.DataFrame(
+            {
+                "index_code": "000300",
+                "trade_date": dates,
+                "open": close,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": 1_000,
+                "amount": 1_000_000,
+            }
+        ),
+    )
+    definition = IndexDefinition(
+        "000300",
+        "沪深300",
+        "A股",
+        "A股宽基",
+        "000300",
+        index_base_date=date(2005, 4, 8),
+        baseline_source="third_party_publication",
+        baseline_evidence_kind="publication_date",
+        baseline_evidence_name="聚宽",
+        baseline_evidence_url="https://www.joinquant.com/data/dict/indexData",
+        baseline_checked_at=date(2026, 7, 12),
+    )
+
+    row = build_index_trend_summary(store, definitions=(definition,), today="2026-07-10").iloc[0]
+
+    assert row["data_status"] == "数据可用"
+    assert row["history_completeness_status"] == "BASELINE_REFERENCED"
+    assert row["history_completeness_message"] == (
+        "参考起点 2005-04-08（第三方：聚宽，发布日期）；"
+        "不用于长周期回测或新开仓。"
+    )
+    assert bool(row["allows_new_position"]) is False
+    assert row["baseline_evidence_url"] == "https://www.joinquant.com/data/dict/indexData"
+    assert row["baseline_checked_at"] == "2026-07-12"
+
+
+def test_market_snapshot_downgrades_persisted_complete_coverage_for_third_party_baseline():
+    from etf_trading.data.indexes import IndexDefinition
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    class FakeParquetStore:
+        def read_index_prices(self, index_code: str) -> pd.DataFrame:
+            dates = pd.bdate_range(end="2026-07-10", periods=300)
+            close = pd.Series(range(300), dtype=float) + 100.0
+            return pd.DataFrame(
+                {
+                    "index_code": index_code,
+                    "trade_date": dates,
+                    "open": close,
+                    "high": close + 1.0,
+                    "low": close - 1.0,
+                    "close": close,
+                    "volume": 1_000,
+                    "amount": 1_000_000,
+                }
+            )
+
+    definition = IndexDefinition(
+        "000300",
+        "沪深300",
+        "A股",
+        "A股宽基",
+        "000300",
+        index_base_date=date(2005, 4, 8),
+        baseline_source="third_party_publication",
+        baseline_evidence_kind="publication_date",
+        baseline_evidence_name="聚宽",
+    )
+    coverage = pd.DataFrame(
+        {
+            "index_code": ["000300"],
+            "completeness_status": ["COMPLETE"],
+            "completeness_message": ["历史从官方基日开始，数据完整。"],
+        }
+    )
+
+    row = build_index_trend_summary(
+        FakeParquetStore(),
+        definitions=(definition,),
+        coverage=coverage,
+        today="2026-07-10",
+    ).iloc[0]
+
+    assert row["data_status"] == "数据可用"
+    assert row["history_completeness_status"] == "BASELINE_REFERENCED"
+    assert bool(row["allows_new_position"]) is False
+
+
+def test_baseline_evidence_task_uses_its_dedicated_summary():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    message = maintenance._catalog_task_message(
+        "index_baseline_evidence",
+        [
+            {"evidence_status": "OFFICIAL"},
+            {"evidence_status": "THIRD_PARTY_PUBLICATION"},
+            {"evidence_status": "UNRESOLVED"},
+            {"evidence_status": "REJECTED"},
+        ],
+    )
+
+    assert message == "已核验 1，第三方参考 1，仍未确认 1，拒绝 1"
 
 
 def test_index_trend_summary_upgrades_legacy_coverage_baseline_explanation():
