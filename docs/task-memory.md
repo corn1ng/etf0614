@@ -417,3 +417,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
 - Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-workbench-baseline-green` passed with 298 tests.
 - Watch out next time:
   - When changing user-facing data-quality copy, update direct storage assertions in the same change.
+
+## 2026-07-12 - Compute index atomic indicator snapshots
+
+- Summary: Replaced the index health calculation with local-price atomic metrics for MA position/crossing, range, return/drawdown, volatility, amount, and data quality; valuation and transaction-conclusion outputs are absent.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_index_health_snapshot.py tests\test_index_valuations.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-kernel-green-final` passed with 11 tests.
+- Watch out next time:
+  - Migrate `nicegui_app.state` from the removed `build_index_health_snapshot` / `INDEX_HEALTH_*` interface before running the full suite.
+  - A moving-average cross requires an adjacent-day side switch; a persistent above/below position is not a new event.
+  - Missing `amount` is a volume-only input gap and must not invalidate price-derived atoms.
