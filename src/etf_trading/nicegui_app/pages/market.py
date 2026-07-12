@@ -20,6 +20,8 @@ from etf_trading.nicegui_app.state import (
 from etf_trading.nicegui_app.view_models import (
     IndexAtomicFilters,
     IndexAtomicOverview,
+    IndexAtomicOverviewMetric,
+    IndexAtomicTrendOverview,
     INDEX_ATOMIC_DATA_SOURCE_LABELS,
     INDEX_ATOMIC_DISPLAY_COLUMNS,
     PlatformSnapshot,
@@ -258,19 +260,33 @@ def _render_expandable_groups(groups, class_name: str) -> None:
                     ui.label("该组没有存储指标。").classes("text-sm text-slate-500")
 
 
-def _render_trend_card(trend) -> None:
+def _trend_unavailable_reason(trend: IndexAtomicTrendOverview) -> str:
+    for item in (trend.close, *trend.levels, *trend.relations):
+        if item.status != "已计算":
+            return item.reason or "数据不足"
+    return ""
+
+
+def _trend_relation_text(relation: IndexAtomicOverviewMetric) -> str:
+    level_label = relation.label.removeprefix("相对")
+    direction = "上方" if relation.value == "是" else "下方"
+    return "收盘在 {} {}".format(level_label, direction)
+
+
+def _render_trend_card(trend: IndexAtomicTrendOverview) -> None:
     with ui.element("section").classes("index-atomic-overview-card"):
         ui.label("趋势结构").classes("index-atomic-card-title")
-        if not trend.visible:
+        unavailable_reason = _trend_unavailable_reason(trend)
+        if unavailable_reason or not trend.visible:
             ui.label(trend.close.value).classes("index-atomic-card-value")
-            ui.label(trend.close.reason).classes("index-atomic-card-reason")
+            ui.label(unavailable_reason or "数据不足").classes("index-atomic-card-reason")
             return
         ui.label(trend.close.value).classes("index-atomic-card-value")
         with ui.element("div").classes("index-atomic-ma-ladder"):
             for level, relation in zip(trend.levels, trend.relations, strict=True):
                 with ui.row().classes("index-atomic-ma-row w-full justify-between"):
                     ui.label("{} {}".format(level.label, level.value))
-                    ui.label(relation.value).classes("index-atomic-ma-relation")
+                    ui.label(_trend_relation_text(relation)).classes("index-atomic-ma-relation")
 
 
 def _render_range_card(range_position) -> None:
