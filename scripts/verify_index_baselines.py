@@ -119,14 +119,20 @@ def _print_results(results: pd.DataFrame) -> None:
         print(f"{_status_label(status)}（{status}）：{int((statuses == status).sum())}")
 
     for row in results.to_dict(orient="records"):
-        code = str(row.get("index_code") or "")
-        status = str(row.get("evidence_status") or "UNRESOLVED")
-        reference_date = str(row.get("reference_date") or "未提供")
-        detail = str(row.get("detail") or "无")
+        code = _display_value(row.get("index_code"), "未提供")
+        status = _display_value(row.get("evidence_status"), "UNRESOLVED")
+        reference_date = _display_value(row.get("reference_date"), "未提供")
+        detail = _display_value(row.get("detail"), "无")
         print(
             f"{code}｜核验结果：{_status_label(status)}（{status}）"
             f"｜参考日期：{reference_date}｜说明：{detail}"
         )
+
+
+def _display_value(value: object, missing_label: str) -> str:
+    """Render scalar pandas missing values with a Chinese user-facing label."""
+
+    return missing_label if value is None or bool(pd.isna(value)) else str(value)
 
 
 def _status_label(status: str) -> str:

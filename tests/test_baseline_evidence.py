@@ -11,7 +11,7 @@ from etf_trading.data.baseline_evidence import (
     write_baseline_evidence,
 )
 from etf_trading.data.index_catalog import IndexCatalogEntry
-from scripts.verify_index_baselines import main
+from scripts.verify_index_baselines import _print_results, main
 
 
 def _official_row(index_code: str, reference_date: str) -> dict[str, str]:
@@ -106,6 +106,43 @@ def test_verify_index_baselines_cli_rejects_invalid_date_in_chinese(capsys):
     error = capsys.readouterr().err
     assert exc_info.value.code == 2
     assert "错误：--through 必须为 YYYY-MM-DD 格式的日期" in error
+
+
+def test_verify_index_baselines_cli_prints_chinese_placeholders_for_pandas_missing_values(capsys):
+    _print_results(
+        pd.DataFrame(
+            [
+                {
+                    "index_code": "000300",
+                    "evidence_status": "OFFICIAL",
+                    "reference_date": "2004-12-31",
+                    "detail": None,
+                },
+                {
+                    "index_code": "399001",
+                    "evidence_status": "THIRD_PARTY_PUBLICATION",
+                    "reference_date": "1991-04-03",
+                    "detail": "第三方仅提供发布日期，不能视为官方基日",
+                },
+                {
+                    "index_code": None,
+                    "evidence_status": "UNRESOLVED",
+                    "reference_date": pd.NaT,
+                    "detail": float("nan"),
+                },
+            ]
+        )
+    )
+
+    output = capsys.readouterr().out
+
+    assert "官方已核验（OFFICIAL）：1" in output
+    assert "第三方发布日期参考（THIRD_PARTY_PUBLICATION）：1" in output
+    assert "起点无法确认（UNRESOLVED）：1" in output
+    assert "参考日期：未提供" in output
+    assert "说明：无" in output
+    assert "nan" not in output.lower()
+    assert "nat" not in output.lower()
 
 
 def test_resolver_prefers_matching_csindex_basic_date_over_third_party_publication():

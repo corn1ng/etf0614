@@ -1121,8 +1121,21 @@ def _filter_index_picker_frame(
     return frame.reset_index(drop=True)
 
 
-def _index_gate_markers(featured_prices: pd.DataFrame) -> list[dict[str, object]]:
-    states = _entry_states_from_regime_states(_index_regime_signal_states(featured_prices))
+def _index_gate_markers(
+    featured_prices: pd.DataFrame,
+    definition: IndexDefinition,
+    *,
+    completeness_status: object,
+    data_is_ready: bool,
+) -> list[dict[str, object]]:
+    states = _entry_states_from_regime_states(
+        _index_regime_signal_states(
+            featured_prices,
+            definition,
+            completeness_status=completeness_status,
+            data_is_ready=data_is_ready,
+        )
+    )
     return _raw_index_signal_markers_from_states(states)
 
 
@@ -1159,8 +1172,21 @@ def _raw_index_signal_markers_from_states(states: list[dict[str, object]]) -> li
     return markers
 
 
-def _index_allowed_states(featured_prices: pd.DataFrame) -> list[dict[str, object]]:
-    return _entry_states_from_regime_states(_index_regime_signal_states(featured_prices))
+def _index_allowed_states(
+    featured_prices: pd.DataFrame,
+    definition: IndexDefinition,
+    *,
+    completeness_status: object,
+    data_is_ready: bool,
+) -> list[dict[str, object]]:
+    return _entry_states_from_regime_states(
+        _index_regime_signal_states(
+            featured_prices,
+            definition,
+            completeness_status=completeness_status,
+            data_is_ready=data_is_ready,
+        )
+    )
 
 
 def _entry_states_from_regime_states(states: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -1174,7 +1200,13 @@ def _entry_states_from_regime_states(states: list[dict[str, object]]) -> list[di
     ]
 
 
-def _index_regime_signal_states(featured_prices: pd.DataFrame) -> list[dict[str, object]]:
+def _index_regime_signal_states(
+    featured_prices: pd.DataFrame,
+    definition: IndexDefinition,
+    *,
+    completeness_status: object,
+    data_is_ready: bool,
+) -> list[dict[str, object]]:
     if featured_prices.empty:
         return []
 
@@ -1186,7 +1218,14 @@ def _index_regime_signal_states(featured_prices: pd.DataFrame) -> list[dict[str,
         states.append(
             {
                 "trade_date": pd.Timestamp(row["trade_date"]),
-                "entry_allowed": bool(regime.allows_new_position),
+                "entry_allowed": allows_new_index_position(
+                    regime.allows_new_position,
+                    pool=definition.pool,
+                    baseline_source=definition.baseline_source,
+                    index_base_date=definition.index_base_date,
+                    completeness_status=completeness_status,
+                    data_is_ready=data_is_ready,
+                ),
                 "hold_allowed": _index_hold_allowed(regime, row),
                 "long_hold_allowed": _index_long_hold_allowed(regime, row),
                 "price": _coerce_float(row.get("close"), 0.0),
@@ -1925,6 +1964,21 @@ def _render_index_filter_explorer(index_summary: pd.DataFrame, parquet_store: Pa
         _render_research_table(_index_trend_display_frame(index_summary), height=360)
         return
 
+    definition = get_index_definition(selected_code)
+    completeness = assess_index_history_completeness(
+        prices,
+        definition.index_base_date,
+        baseline_source=definition.baseline_source,
+        index_code=definition.index_code,
+        source_kind=definition.source_kind,
+        evidence_name=definition.baseline_evidence_name,
+        evidence_kind=definition.baseline_evidence_kind,
+    )
+    readiness = assess_price_history(
+        prices,
+        expected_latest_trade_date(),
+        min_history_rows=252,
+    )
     featured = add_trend_regime_features(prices.rename(columns={"index_code": "etf_code"}))
     last = featured.iloc[-1]
     regime = TrendRegimeClassifier().classify(last)
@@ -1965,7 +2019,12 @@ def _render_index_filter_explorer(index_summary: pd.DataFrame, parquet_store: Pa
     recent_start = pd.Timestamp(recent["trade_date"].min()).normalize()
     recent_end = pd.Timestamp(recent["trade_date"].max()).normalize()
     with st.spinner("正在计算当前指数信号..."):
-        regime_states = _index_regime_signal_states(featured)
+        regime_states = _index_regime_signal_states(
+            featured,
+            definition,
+            completeness_status=completeness.status,
+            data_is_ready=readiness.readiness == HistoryReadiness.READY,
+        )
         all_markers = _index_signal_markers_for_rule(selected_rule, regime_states)
     visible_markers = [
         marker for marker in all_markers

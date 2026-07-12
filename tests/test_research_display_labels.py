@@ -19,6 +19,7 @@ from etf_trading.ui.app import (
     _format_index_risk_names,
     _index_etf_universe_display_frame,
     _index_gate_markers,
+    _index_regime_signal_states,
     _index_trend_display_frame,
     _index_signal_diagnostic_display_frame,
     _index_signal_markers_for_rule,
@@ -421,6 +422,120 @@ def test_index_status_code_items_describe_current_index_state():
     assert [item["value"] for item in items] == ["可找买点", "上升", "转强", "回踩", "4941.60"]
 
 
+@pytest.mark.parametrize(
+    ("definition", "completeness_status", "data_is_ready", "expect_buy"),
+    [
+        (
+            IndexDefinition(
+                "399001",
+                "深证成指",
+                "A股",
+                "A股综合",
+                "399001",
+                pool="core",
+                index_base_date=date(1991, 4, 3),
+                baseline_source="third_party_publication",
+                baseline_evidence_kind="publication_date",
+            ),
+            "COMPLETE",
+            True,
+            False,
+        ),
+        (
+            IndexDefinition(
+                "399006",
+                "创业板指",
+                "A股",
+                "A股成长",
+                "399006",
+                pool="core",
+                index_base_date=date(2010, 6, 1),
+                baseline_source="third_party_publication",
+                baseline_evidence_kind="publication_date",
+            ),
+            "COMPLETE",
+            True,
+            False,
+        ),
+        (
+            IndexDefinition("UNVERIFIED", "待核验指数", "A股", "待核验", "UNVERIFIED", pool="core"),
+            "BASELINE_UNVERIFIED",
+            True,
+            False,
+        ),
+        (
+            IndexDefinition(
+                "000300",
+                "沪深300",
+                "A股",
+                "A股宽基",
+                "000300",
+                pool="core",
+                index_base_date=date(2004, 12, 31),
+                baseline_source="official_api",
+                baseline_evidence_kind="official_base_date",
+            ),
+            "COMPLETE",
+            False,
+            False,
+        ),
+        (
+            IndexDefinition(
+                "000300",
+                "沪深300",
+                "A股",
+                "A股宽基",
+                "000300",
+                pool="core",
+                index_base_date=date(2004, 12, 31),
+                baseline_source="official_api",
+                baseline_evidence_kind="official_base_date",
+            ),
+            "COMPLETE",
+            True,
+            True,
+        ),
+    ],
+    ids=["399001-third-party", "399006-third-party", "unverified", "official-stale", "official-ready"],
+)
+def test_index_signal_states_gate_raw_and_long_trend_buys_by_baseline_evidence(
+    definition,
+    completeness_status,
+    data_is_ready,
+    expect_buy,
+):
+    featured = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
+            "close": [12.0, 12.0, 12.0],
+            "ma20": [11.5, 11.5, 11.5],
+            "ma51": [11.0, 11.0, 11.0],
+            "ma120": [10.0, 10.0, 10.0],
+            "ma250": [9.0, 9.0, 9.0],
+            "ma850": [8.0, 8.0, 8.0],
+            "ma51_slope_20": [0.03, 0.03, 0.03],
+            "ma120_slope_20": [0.03, 0.03, 0.03],
+            "ma250_slope_60": [0.05, 0.05, 0.05],
+            "momentum_20": [0.08, 0.08, 0.08],
+            "momentum_60": [0.10, 0.10, 0.10],
+            "drawdown_120": [-0.02, -0.02, -0.02],
+        }
+    )
+
+    states = _index_regime_signal_states(
+        featured,
+        definition,
+        completeness_status=completeness_status,
+        data_is_ready=data_is_ready,
+    )
+    raw_markers = _index_signal_markers_for_rule("raw", states)
+    long_trend_markers = _index_signal_markers_for_rule("long_trend", states)
+
+    assert [state["entry_allowed"] for state in states] == [expect_buy] * 3
+    assert [marker["action"] for marker in raw_markers] == (["BUY"] if expect_buy else [])
+    assert [marker["action"] for marker in long_trend_markers] == (["BUY"] if expect_buy else [])
+
+
 def test_index_gate_markers_show_when_index_filter_opens_and_closes():
     frame = pd.DataFrame(
         {
@@ -440,7 +555,22 @@ def test_index_gate_markers_show_when_index_filter_opens_and_closes():
         }
     )
 
-    markers = _index_gate_markers(frame)
+    markers = _index_gate_markers(
+        frame,
+        IndexDefinition(
+            "000300",
+            "沪深300",
+            "A股",
+            "A股宽基",
+            "000300",
+            pool="core",
+            index_base_date=date(2004, 12, 31),
+            baseline_source="official_api",
+            baseline_evidence_kind="official_base_date",
+        ),
+        completeness_status="COMPLETE",
+        data_is_ready=True,
+    )
 
     assert [marker["action"] for marker in markers] == ["BUY", "SELL"]
     assert markers[0]["trade_date"] == pd.Timestamp("2024-01-03")
