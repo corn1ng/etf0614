@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import math
 
 import pandas as pd
 
@@ -777,9 +778,13 @@ def index_atomic_overview(summary: dict[str, object], details: pd.DataFrame, ind
     low_flag = _overview_metric(rows.get("range_20_low"), "20日收盘新低")
     headline = _range_headline(high_flag, low_flag, from_high, from_low)
     reason = next((item.reason for item in (from_high, from_low, high_flag, low_flag) if item.status != "已计算"), "")
+    marker = _range_marker(rows.get("close"), rows.get("range_20_from_high"), rows.get("range_20_from_low")) if headline != "数据不足" else None
+    if headline != "数据不足" and marker is None:
+        headline = "数据不足"
+        reason = "数据不足"
     return IndexAtomicOverview(
         trend=IndexAtomicTrendOverview(close, levels, relations, close.status == "已计算" and all(item.status == "已计算" for item in levels)),
-        range_position=IndexAtomicRangeOverview(headline, from_high, from_low, _range_marker(rows.get("close"), rows.get("range_20_from_high"), rows.get("range_20_from_low")) if headline != "数据不足" else None, reason),
+        range_position=IndexAtomicRangeOverview(headline, from_high, from_low, marker, reason),
         events=_overview_events(rows),
         events_empty_text="暂无已记录事件",
         quality=_overview_quality(summary),
@@ -820,9 +825,14 @@ def _range_marker(
         close_value = float(close.get("value"))
         high_offset = float(from_high.get("value"))
         low_offset = float(from_low.get("value"))
+        if not all(math.isfinite(value) for value in (close_value, high_offset, low_offset)):
+            return None
         high = close_value / (1 + high_offset)
         low = close_value / (1 + low_offset)
-        return None if high <= low else max(0.0, min(1.0, (close_value - low) / (high - low)))
+        if not all(math.isfinite(value) for value in (high, low)) or high <= low:
+            return None
+        marker = max(0.0, min(1.0, (close_value - low) / (high - low)))
+        return marker if math.isfinite(marker) else None
     except (AttributeError, TypeError, ValueError, ZeroDivisionError):
         return None
 

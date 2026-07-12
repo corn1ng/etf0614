@@ -252,6 +252,34 @@ def test_index_atomic_overview_range_marker_uses_unrounded_stored_offsets():
     assert overview.range_position.marker == pytest.approx(0.4998)
 
 
+@pytest.mark.parametrize("metric_key", ["close", "range_20_from_high", "range_20_from_low"])
+def test_index_atomic_overview_hides_computed_nonfinite_range_inputs(metric_key):
+    summary = {
+        "index_code": "000300", "snapshot_status": "computed",
+        "history_completeness_status": "COMPLETE", "history_rows": 260,
+        "latest_date": "2026-07-11", "data_source": "akshare_zh_em",
+    }
+    values = {
+        "close": 100.0,
+        "range_20_from_high": -0.05,
+        "range_20_from_low": 0.05,
+    }
+    values[metric_key] = float("nan")
+    details = pd.DataFrame([
+        _overview_detail("close", values["close"]),
+        _overview_detail("range_20_high", False), _overview_detail("range_20_low", False),
+        _overview_detail("range_20_from_high", values["range_20_from_high"]),
+        _overview_detail("range_20_from_low", values["range_20_from_low"]),
+    ])
+
+    overview = index_atomic_overview(summary, details, "000300")
+
+    assert overview is not None
+    assert overview.range_position.marker is None
+    assert overview.range_position.headline == "数据不足"
+    assert overview.range_position.reason == "数据不足"
+
+
 def test_status_metrics_are_dense_and_human_readable():
     metrics = status_metrics(_snapshot())
 
