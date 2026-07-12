@@ -63,6 +63,7 @@ class IndexCatalogEntry:
             self.pool,
             self.index_base_date,
             self.baseline_source,
+            self.source_kind,
         )
 
 

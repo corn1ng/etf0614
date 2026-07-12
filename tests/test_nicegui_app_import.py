@@ -140,6 +140,59 @@ def test_index_trend_summary_upgrades_empty_legacy_missing_history_coverage_mess
         assert summary.iloc[0]["history_completeness_message"] == "数据源未返回 000300 的历史行情。"
 
 
+def test_index_trend_summary_uses_catalog_source_kind_for_legacy_missing_history_coverage():
+    from etf_trading.data.index_catalog import default_index_catalog
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    class FakeParquetStore:
+        def read_index_prices(self, index_code: str) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    definition = next(entry.to_index_definition() for entry in default_index_catalog() if entry.index_code == "H30533")
+    for legacy_message in ("", "历史数据缺失"):
+        coverage = pd.DataFrame(
+            {
+                "index_code": ["H30533"],
+                "completeness_status": ["MISSING_HISTORY"],
+                "completeness_message": [legacy_message],
+            }
+        )
+
+        summary = build_index_trend_summary(
+            FakeParquetStore(),
+            definitions=(definition,),
+            coverage=coverage,
+            today="2026-07-10",
+        )
+
+        assert summary.iloc[0]["history_completeness_message"] == "港股数据源未返回 H30533 的历史行情。"
+
+
+def test_index_trend_summary_preserves_current_coverage_explanation():
+    from etf_trading.data.indexes import IndexDefinition
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    class FakeParquetStore:
+        def read_index_prices(self, index_code: str) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    current_message = "中证数据源未返回 000300 的历史行情。"
+    summary = build_index_trend_summary(
+        FakeParquetStore(),
+        definitions=(IndexDefinition("000300", "沪深300", "A股", "A股宽基", "000300"),),
+        coverage=pd.DataFrame(
+            {
+                "index_code": ["000300"],
+                "completeness_status": ["MISSING_HISTORY"],
+                "completeness_message": [current_message],
+            }
+        ),
+        today="2026-07-10",
+    )
+
+    assert summary.iloc[0]["history_completeness_message"] == current_message
+
+
 def test_nicegui_app_factory_imports_without_running_server():
     from etf_trading.nicegui_app.main import create_app, run
 

@@ -739,6 +739,7 @@ def build_index_trend_summary(
                 first_trade_date=coverage_row.get("local_first_trade_date"),
                 latest_trade_date=coverage_row.get("latest_trade_date"),
                 index_code=definition.index_code,
+                source_kind=definition.source_kind,
             ),
             "large_trend": "UNKNOWN",
             "medium_trend": "UNKNOWN",

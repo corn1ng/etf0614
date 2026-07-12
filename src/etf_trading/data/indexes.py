@@ -23,6 +23,7 @@ class IndexDefinition:
     pool: str | None = None
     index_base_date: date | None = None
     baseline_source: str = "unverified"
+    source_kind: str | None = None
 
 
 DEFAULT_INDEXES: tuple[IndexDefinition, ...] = catalog_definitions(default_index_catalog())
