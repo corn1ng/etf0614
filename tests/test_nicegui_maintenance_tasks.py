@@ -124,14 +124,17 @@ def _snapshot_meta(parquet_store: ParquetStore) -> dict[str, object]:
 
 def _write_previous_snapshot(parquet_store: ParquetStore) -> None:
     definitions = (_atomic_definition().to_index_definition(),)
+    coverage = _atomic_coverage()
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
     state.write_index_atomic_snapshot(
         _atomic_summary(),
         _atomic_details(),
-        "previous-snapshot",
+        source_signature,
         datetime(2026, 7, 11, 9, 0),
         parquet_store,
         definitions=definitions,
-        coverage=_atomic_coverage(),
+        coverage=coverage,
+        expected_input_signature=source_signature,
         task_result_id=99,
     )
 
@@ -159,6 +162,12 @@ def test_atomic_snapshot_runner_persists_completed_result_and_snapshot_meta(tmp_
         ],
     }
     assert _snapshot_meta(parquet_store)["task_result_id"] == task.task_id
+    definitions, coverage = state.index_atomic_snapshot_inputs(store)
+    assert _snapshot_meta(parquet_store)["source_signature"] == state._index_atomic_snapshot_source_signature(
+        parquet_store,
+        definitions,
+        coverage,
+    )
 
 
 def test_atomic_snapshot_runner_uses_local_builder_without_initialization_service(tmp_path, monkeypatch):
@@ -193,6 +202,30 @@ def test_atomic_snapshot_runner_keeps_previous_snapshot_when_rebuild_fails(tmp_p
     assert failed.state == "failed"
     assert failed.error_message == "重建指数原子指标失败：本地 Parquet 损坏"
     assert result.summary.empty is False
+
+
+def test_atomic_snapshot_runner_rejects_publish_when_local_history_changes_during_build(tmp_path, monkeypatch):
+    def build_snapshot(parquet_store, definitions, *, coverage=None, on_progress=None):
+        del definitions, coverage, on_progress
+        parquet_store.write_index_prices(
+            "000300",
+            pd.DataFrame({"trade_date": ["2026-07-12"], "close": [1.0]}),
+        )
+        return _atomic_summary("000905"), _atomic_details("000905")
+
+    runner, store, parquet_store = _atomic_runner(tmp_path, build_snapshot, monkeypatch)
+    _write_previous_snapshot(parquet_store)
+
+    task = runner.start()
+    failed = _wait_for_terminal_task(store, task.task_id)
+    definitions, coverage = state.index_atomic_snapshot_inputs(store)
+    result = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert failed.state == "failed"
+    assert failed.error_message == "重建指数原子指标失败：本地输入已变化，拒绝发布快照"
+    assert result.status == "stale"
+    assert result.summary["index_code"].tolist() == ["000300"]
+    assert _snapshot_meta(parquet_store)["task_result_id"] == 99
 
 
 def test_atomic_snapshot_runner_start_deduplicates_concurrent_calls_per_store(tmp_path, monkeypatch):

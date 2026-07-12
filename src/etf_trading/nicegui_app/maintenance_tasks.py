@@ -218,6 +218,20 @@ class IndexAtomicSnapshotMaintenanceRunner:
                 )
 
             def action() -> tuple[pd.DataFrame, datetime]:
+                expected_input_signature = _index_atomic_snapshot_source_signature(
+                    self.parquet_store,
+                    definitions,
+                    coverage,
+                )
+
+                def current_input_signature() -> str:
+                    current_definitions, current_coverage = index_atomic_snapshot_inputs(self.store)
+                    return _index_atomic_snapshot_source_signature(
+                        self.parquet_store,
+                        current_definitions,
+                        current_coverage,
+                    )
+
                 summary, details = self.build_snapshot(
                     self.parquet_store,
                     definitions,
@@ -228,11 +242,13 @@ class IndexAtomicSnapshotMaintenanceRunner:
                 self.write_snapshot(
                     summary,
                     details,
-                    _index_atomic_snapshot_source_signature(self.parquet_store, definitions, coverage),
+                    expected_input_signature,
                     generated_at,
                     self.parquet_store,
                     definitions=definitions,
                     coverage=coverage,
+                    expected_input_signature=expected_input_signature,
+                    current_input_signature=current_input_signature,
                     task_result_id=task_id,
                 )
                 return summary, generated_at

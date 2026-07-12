@@ -4,6 +4,15 @@ Use this file as the project-level memory for future Codex tasks. Read it at the
 
 Keep entries concise and reusable. Prefer lessons, constraints, verification notes, and project-specific pitfalls over a raw activity log.
 
+## 2026-07-12 - Keep index atomic rebuild inputs coherent and configured
+
+- Summary: Restored the configured non-reserve catalog order after SQLite's code-sorted read, while retaining persisted metadata and putting unknown persisted codes last deterministically. Every atomic writer now requires an expected input signature captured before calculation and re-checks the current store/catalog/coverage and local-history signature under the publish lock; a mismatch preserves the old snapshot and persists a Chinese failed result.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-final-fix-full` passed (338 tests).
+- Watch out next time:
+  - `SQLiteStore.list_index_catalog()` is code-sorted, so maintenance inputs that expose `catalog_order` must reapply `default_index_catalog()` order without replacing persisted fields.
+  - Capture an input signature before reading local histories and verify it again immediately before atomic publication; never sign an old summary with a post-build signature.
+  - The process-local publish lock detects a changed signature before publishing but is not a cross-process transaction.
+
 ## 2026-07-12 - Serialize index atomic snapshot rebuild starts
 
 - Summary: Closed the same-process race between checking for a running atomic rebuild and scheduling a new one. The runner now serializes reconciliation, claim, active-key registration, and scheduling; an injected writer also makes runner-level publication rollback regressions deterministic.

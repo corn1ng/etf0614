@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 import hashlib
@@ -239,6 +240,18 @@ def index_atomic_snapshot_inputs(store: SQLiteStore) -> tuple[tuple[IndexDefinit
     """Load the persistent non-reserve index catalogue and coverage facts."""
 
     entries = catalog_entries_from_frame(store.list_index_catalog(include_reserve=False))
+    configured_order = {
+        entry.index_code: order
+        for order, entry in enumerate(default_index_catalog())
+        if entry.pool != "reserve"
+    }
+    unknown_order = len(configured_order)
+    entries = tuple(
+        sorted(
+            entries,
+            key=lambda entry: (configured_order.get(entry.index_code, unknown_order), entry.index_code),
+        )
+    )
     return catalog_definitions(entries), store.list_index_history_coverage()
 
 
@@ -301,9 +314,16 @@ def write_index_atomic_snapshot(
     *,
     definitions: tuple[IndexDefinition, ...] = (),
     coverage: pd.DataFrame | None = None,
+    expected_input_signature: str,
+    current_input_signature: Callable[[], str] | None = None,
     task_result_id: int | None = None,
 ) -> None:
     """Persist already-calculated index atoms without rebuilding them.
+
+    ``expected_input_signature`` is mandatory and must equal
+    ``source_signature``. The current input signature is rechecked while
+    holding the publish lock, using ``current_input_signature`` when a caller
+    can reload its catalog and coverage inputs.
 
     The process-local lock prevents in-process readers from observing the
     publication window. Individual file replacements are atomic, and a failed
@@ -311,7 +331,21 @@ def write_index_atomic_snapshot(
     intentionally not claimed.
     """
 
+    expected_signature = str(expected_input_signature)
+    if str(source_signature) != expected_signature:
+        raise ValueError("期望输入签名与快照签名不一致")
+
+    def assert_expected_input_signature() -> None:
+        current_signature = (
+            str(current_input_signature())
+            if current_input_signature is not None
+            else _index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+        )
+        if current_signature != expected_signature:
+            raise ValueError("本地输入已变化，拒绝发布快照")
+
     with _INDEX_ATOMIC_SNAPSHOT_LOCK:
+        assert_expected_input_signature()
         summary_file, details_file, meta_file = _index_atomic_snapshot_cache_paths(parquet_store)
         summary_file.parent.mkdir(parents=True, exist_ok=True)
         token = f"{os.getpid()}_{time.time_ns()}"
@@ -337,6 +371,7 @@ def write_index_atomic_snapshot(
                 encoding="utf-8",
             )
             _verify_index_atomic_snapshot_temporary_files(tmp_summary, tmp_details, tmp_meta)
+            assert_expected_input_signature()
             _publish_index_atomic_snapshot(
                 (summary_file, details_file, meta_file),
                 (tmp_summary, tmp_details, tmp_meta),
