@@ -348,3 +348,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - A successful provider call is not enough: preserve `STALE` when local history still has not reached the expected trade date.
   - Persisted task polling must not overwrite another active page-local maintenance task.
   - Update task result tables and progress labels together whenever a new internal maintenance status becomes user-visible.
+
+## 2026-07-12 - Design index universe expansion
+
+- Summary: Approved a controlled A-share and Hong Kong index expansion: a 210-entry versioned candidate catalog yields 180 validated formal indexes split into a 100-index ETF-backed core pool and an 80-index research-only pool. First fetches request all history from 1990 and explicitly display incomplete history against the index base date.
+- Verification: Read-only AkShare check confirmed 31 Shenwan first-level categories, 131 second-level categories, and full daily history availability for representative first-level indices. Design and implementation plan passed placeholder scans and structural checks.
+- Watch out next time:
+  - Never infer history completeness only from a recent latest date; compare local earliest date with the configured index base date.
+  - Keep the static catalog versioned and validate it live; source enumeration alone is not an investor-suitable index universe.
+  - Treat ETF mapping as a separate gate from index history availability so research-only indexes cannot leak into strategy inputs.
