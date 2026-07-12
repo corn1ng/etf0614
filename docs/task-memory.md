@@ -1,5 +1,13 @@
 # Task Memory
 
+## 2026-07-12 - Design readable index atomic detail
+
+- Summary: Approved a detail-dialog readability redesign for `市场地图 -> 指数体检`: the renamed `状态概览` reads position, events, and evidence in that order, while expandable full groups preserve every atomic fact and data-quality audit trail. It makes no score, trend conclusion, or trading recommendation and does not change snapshot computation.
+- Verification: User approved three design sections, including the visual hybrid mockup. The specification defines read-only inputs, missing-data behavior, responsive layout, and test coverage.
+- Watch out next time:
+  - Keep interval bars and moving-average ladders as display-only transformations of stored snapshot facts; do not add or persist derived indicators.
+  - Use colour for data quality only; all direction and position states require explicit text labels.
+
 ## 2026-07-12 - Simplify the contributor guide
 
 - Summary: Replaced `AGENTS.md` with a minimal repository-specific guide covering layout, commands, style, tests, Task Memory, and review hygiene; linked extended procedures to existing documentation.
