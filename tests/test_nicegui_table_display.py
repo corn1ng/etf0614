@@ -98,6 +98,32 @@ def test_table_columns_translate_maintenance_log_headers_to_chinese():
     assert not {"dataset", "asset_code", "last_success_trade_date", "severity", "log_id"} & set(labels)
 
 
+def test_table_columns_name_maintenance_detail_as_status_explanation():
+    labels = [
+        column["label"]
+        for column in table_columns([{"error_message": "已更新至 2026-07-09，缺少 2026-07-10 行情。"}])
+    ]
+
+    assert labels == ["状态说明"]
+
+
+def test_table_rows_do_not_use_baseline_pending_verification_as_the_primary_conclusion():
+    display = table_rows(
+        [
+            {
+                "completeness_status": "BASELINE_UNVERIFIED",
+                "completeness_message": (
+                    "已有 1999-12-30 至 2026-07-09 的行情，但缺少官方基日；"
+                    "暂时无法判断是否从指数起点完整，不作为交易依据。"
+                ),
+            }
+        ]
+    )
+
+    assert display[0]["completeness_status"] == "历史起点无法确认"
+    assert "基日待核验" not in " ".join(str(value) for value in display[0].values())
+
+
 def test_render_table_localizes_pagination_labels(monkeypatch):
     captured = {}
 

@@ -23,9 +23,12 @@ from etf_trading.data.index_catalog import (
 )
 from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
 from etf_trading.data.quality import (
+    HistoryAssessment,
+    HistoryReadiness,
     assess_price_history,
     expected_latest_trade_date,
     history_readiness_label,
+    index_history_freshness_message,
     read_failed_assessment,
 )
 from etf_trading.data.storage import ParquetStore, SQLiteStore
@@ -648,6 +651,7 @@ _INDEX_HEALTH_SUMMARY_TEXT_COLUMNS = {
     "index_base_date",
     "history_completeness_status",
     "history_completeness_message",
+    "data_status_message",
     "latest_date",
     "large_trend",
     "medium_trend",
@@ -732,6 +736,7 @@ def build_index_trend_summary(
             "latest_date": "",
             "history_rows": 0,
             "data_status": "历史缺失",
+            "data_status_message": "历史缺失，无法作为趋势或买卖依据。",
             "expected_trade_date": expected.strftime("%Y-%m-%d"),
             "trading_day_lag": pd.NA,
         }
@@ -742,6 +747,7 @@ def build_index_trend_summary(
             row.update(
                 {
                     "data_status": history_readiness_label(assessment.readiness),
+                    "data_status_message": _index_data_status_message(assessment),
                     "expected_trade_date": assessment.expected_trade_date,
                     "trading_day_lag": pd.NA,
                 }
@@ -755,6 +761,7 @@ def build_index_trend_summary(
                 "latest_date": assessment.latest_trade_date,
                 "history_rows": assessment.history_rows,
                 "data_status": history_readiness_label(assessment.readiness),
+                "data_status_message": _index_data_status_message(assessment),
                 "expected_trade_date": assessment.expected_trade_date,
                 "trading_day_lag": assessment.trading_day_lag if assessment.trading_day_lag is not None else pd.NA,
             }
@@ -780,6 +787,14 @@ def build_index_trend_summary(
         )
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _index_data_status_message(assessment: HistoryAssessment) -> str:
+    if assessment.readiness == HistoryReadiness.READY:
+        return f"已更新至 {assessment.expected_trade_date}，行情可用。"
+    if assessment.readiness == HistoryReadiness.STALE:
+        return index_history_freshness_message(assessment.latest_trade_date, assessment.expected_trade_date)
+    return f"{history_readiness_label(assessment.readiness)}，无法作为趋势或买卖依据。"
 
 
 def _coverage_by_index_code(coverage: pd.DataFrame | None) -> dict[str, dict[str, object]]:

@@ -36,6 +36,39 @@ def test_index_trend_summary_exposes_chinese_data_status_and_trading_day_lag():
     assert summary.loc[0, "trading_day_lag"] == 5
 
 
+def test_build_index_trend_summary_exposes_exact_stale_gap_message(tmp_path):
+    from etf_trading.data.indexes import IndexDefinition
+    from etf_trading.data.storage import ParquetStore
+    from etf_trading.nicegui_app.state import build_index_trend_summary
+
+    store = ParquetStore(tmp_path)
+    dates = pd.bdate_range(end="2026-07-09", periods=300)
+    close = pd.Series(range(300), dtype=float) + 100.0
+    store.write_index_prices(
+        "000300",
+        pd.DataFrame(
+            {
+                "index_code": "000300",
+                "trade_date": dates,
+                "open": close,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": 1_000,
+                "amount": 1_000_000,
+            }
+        ),
+    )
+
+    summary = build_index_trend_summary(
+        store,
+        definitions=(IndexDefinition("000300", "沪深300", "A股", "A股宽基", "000300"),),
+        today="2026-07-10",
+    )
+
+    assert summary.iloc[0]["data_status_message"] == "已更新至 2026-07-09，缺少 2026-07-10 行情。"
+
+
 def test_nicegui_app_factory_imports_without_running_server():
     from etf_trading.nicegui_app.main import create_app, run
 
