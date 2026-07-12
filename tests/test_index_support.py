@@ -4,7 +4,10 @@ from datetime import date
 
 from etf_trading.data.indexes import DEFAULT_INDEXES, INDEX_HISTORY_AUTO_START, normalize_index_daily
 from etf_trading.data.providers.akshare_provider import AkShareProvider
-from etf_trading.data.quality import assess_index_history_completeness
+from etf_trading.data.quality import (
+    assess_index_history_completeness,
+    index_history_freshness_message,
+)
 from etf_trading.data.storage import ParquetStore
 
 
@@ -308,12 +311,56 @@ def test_hong_kong_index_daily_falls_back_to_sina_when_em_fails():
     assert result.iloc[0]["data_source"] == "akshare_hk_sina"
 
 
-def test_index_history_completeness_marks_unverified_base_date_without_claiming_complete():
+def test_index_history_completeness_explains_unverified_base_with_actual_range():
     assessment = assess_index_history_completeness(
-        pd.DataFrame({"trade_date": pd.to_datetime(["1999-12-30", "2026-07-10"])}),
+        pd.DataFrame({"trade_date": pd.to_datetime(["1999-12-30", "2026-07-09"])}),
         None,
         baseline_source="unverified",
+        index_code="000001",
+        source_kind="csi",
     )
 
     assert assessment.status == "BASELINE_UNVERIFIED"
-    assert assessment.message == "基日待核验，不能判定历史完整"
+    assert assessment.message == (
+        "已有 1999-12-30 至 2026-07-09 的行情，但缺少官方基日；"
+        "暂时无法判断是否从指数起点完整，不作为交易依据。"
+    )
+
+
+def test_index_history_completeness_explains_empty_source_response():
+    assessment = assess_index_history_completeness(
+        pd.DataFrame(),
+        "2014-12-31",
+        baseline_source="official_methodology",
+        index_code="L11226",
+        source_kind="csi",
+    )
+
+    assert assessment.status == "MISSING_HISTORY"
+    assert assessment.message == "中证数据源未返回 L11226 的历史行情。"
+
+
+def test_index_history_freshness_message_names_the_missing_trade_date():
+    assert index_history_freshness_message("2026-07-09", "2026-07-10") == "已更新至 2026-07-09，缺少 2026-07-10 行情。"
+
+
+def test_index_history_completeness_explains_complete_official_coverage_range():
+    assessment = assess_index_history_completeness(
+        pd.DataFrame({"trade_date": pd.to_datetime(["2014-12-31", "2026-07-09"])}),
+        "2014-12-31",
+        baseline_source="official_methodology",
+    )
+
+    assert assessment.status == "COMPLETE"
+    assert assessment.message == "历史从官方基日 2014-12-31 开始，当前覆盖 2014-12-31 至 2026-07-09，数据完整。"
+
+
+def test_index_history_completeness_explains_missing_early_history_range():
+    assessment = assess_index_history_completeness(
+        pd.DataFrame({"trade_date": pd.to_datetime(["2015-01-05", "2026-07-09"])}),
+        "2014-12-31",
+        baseline_source="official_methodology",
+    )
+
+    assert assessment.status == "INCOMPLETE"
+    assert assessment.message == "应从 2014-12-31 开始，当前仅有 2015-01-05 起的数据。"

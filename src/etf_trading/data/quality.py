@@ -184,6 +184,8 @@ def assess_index_history_completeness(
     index_base_date: date | pd.Timestamp | str | None,
     *,
     baseline_source: str,
+    index_code: str | None = None,
+    source_kind: str | None = None,
 ) -> IndexHistoryCompleteness:
     """Assess coverage against a verified index base date without guessing it.
 
@@ -198,7 +200,7 @@ def assess_index_history_completeness(
     if prices.empty:
         return IndexHistoryCompleteness(
             status="MISSING_HISTORY",
-            message="历史数据缺失",
+            message=_missing_history_message(index_code, source_kind),
             local_first_trade_date=None,
             latest_trade_date=None,
             history_rows=0,
@@ -235,7 +237,10 @@ def assess_index_history_completeness(
     if baseline_source == "unverified" or base is None:
         return IndexHistoryCompleteness(
             status="BASELINE_UNVERIFIED",
-            message="基日待核验，不能判定历史完整",
+            message=(
+                f"已有 {first_text} 至 {latest_text} 的行情，但缺少官方基日；"
+                "暂时无法判断是否从指数起点完整，不作为交易依据。"
+            ),
             local_first_trade_date=first_text,
             latest_trade_date=latest_text,
             history_rows=rows,
@@ -245,7 +250,7 @@ def assess_index_history_completeness(
     if first <= base:
         return IndexHistoryCompleteness(
             status="COMPLETE",
-            message="历史完整",
+            message=f"历史从官方基日 {base_text} 开始，当前覆盖 {first_text} 至 {latest_text}，数据完整。",
             local_first_trade_date=first_text,
             latest_trade_date=latest_text,
             history_rows=rows,
@@ -254,13 +259,41 @@ def assess_index_history_completeness(
         )
     return IndexHistoryCompleteness(
         status="INCOMPLETE",
-        message=f"应从 {base_text} 开始，本地仅从 {first_text} 开始",
+        message=f"应从 {base_text} 开始，当前仅有 {first_text} 起的数据。",
         local_first_trade_date=first_text,
         latest_trade_date=latest_text,
         history_rows=rows,
         index_base_date=base_text,
         baseline_source=baseline_source,
     )
+
+
+def index_history_freshness_message(
+    latest_trade_date: date | pd.Timestamp | str | None,
+    expected_trade_date: date | pd.Timestamp | str | None,
+) -> str:
+    """Describe the next required index trading date with normalized dates."""
+
+    return f"已更新至 {_date_text(latest_trade_date)}，缺少 {_date_text(expected_trade_date)} 行情。"
+
+
+def _missing_history_message(index_code: str | None, source_kind: str | None) -> str:
+    if index_code and source_kind:
+        return f"{_source_kind_label(source_kind)}未返回 {index_code} 的历史行情。"
+    return "数据源未返回该指数的历史行情。"
+
+
+def _source_kind_label(source_kind: str) -> str:
+    return {
+        "csi": "中证数据源",
+        "shenwan": "申万数据源",
+        "hk": "港股数据源",
+    }.get(source_kind, "数据源")
+
+
+def _date_text(value: date | pd.Timestamp | str | None) -> str:
+    parsed = _parse_date(value)
+    return parsed.strftime("%Y-%m-%d") if parsed is not None else str(value)
 
 
 def _holiday_dates(values: Iterable[date | pd.Timestamp | str]) -> set[pd.Timestamp]:
