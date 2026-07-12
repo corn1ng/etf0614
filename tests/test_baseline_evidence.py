@@ -3,6 +3,7 @@ from datetime import date
 import pandas as pd
 import yaml
 
+import etf_trading.data.baseline_evidence as baseline_evidence
 from etf_trading.data.baseline_evidence import (
     CSINDEX_BASIC_INFO_URL,
     BaselineEvidenceResolver,
@@ -155,6 +156,74 @@ def test_resolver_keeps_batch_running_for_rejected_official_responses():
     assert result["detail"].map(bool).all()
 
 
+def test_resolver_rejects_non_scalar_official_fields_and_continues_batch():
+    resolver = BaselineEvidenceResolver(
+        http_get=_fake_http_get(
+            {
+                CSINDEX_BASIC_INFO_URL.format(index_code="000300"):
+                    {"code": "200", "data": {"indexCode": ["000300", "000300"], "basicDate": "2004-12-31"}},
+                CSINDEX_BASIC_INFO_URL.format(index_code="000905"):
+                    {"code": "200", "data": {"indexCode": "000905", "basicDate": pd.Series(["2007-01-15"])}},
+                CSINDEX_BASIC_INFO_URL.format(index_code="000852"):
+                    {"code": "200", "data": {"indexCode": "000852", "basicDate": "2014-10-17"}},
+            }
+        ),
+        third_party_index_list=pd.DataFrame(),
+    )
+
+    result = resolver.collect(
+        [
+            _entry("000300", "沪深300", source_kind="csi"),
+            _entry("000905", "中证500", source_kind="csi"),
+            _entry("000852", "中证1000", source_kind="csi"),
+        ],
+        date(2026, 7, 12),
+    )
+
+    assert result["evidence_status"].tolist() == ["UNRESOLVED", "UNRESOLVED", "OFFICIAL"]
+    assert result.iloc[2]["reference_date"] == "2014-10-17"
+
+
+def test_resolver_uses_default_joinquant_loader_without_http_page_request(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        baseline_evidence,
+        "_default_third_party_loader",
+        lambda: pd.DataFrame(
+            [{"index_code": "801010", "display_name": "农林牧渔", "publish_date": "2000-01-04"}]
+        ),
+        raising=False,
+    )
+    resolver = BaselineEvidenceResolver(http_get=_fake_http_get({}, calls))
+
+    row = resolver.collect([_entry("801010", "农林牧渔", source_kind="shenwan")], date(2026, 7, 12)).iloc[0]
+
+    assert row["evidence_status"] == "THIRD_PARTY_PUBLICATION"
+    assert calls == []
+
+
+def test_resolver_uses_injected_third_party_loader_without_http_page_request():
+    calls: list[str] = []
+    loader_calls: list[None] = []
+
+    def third_party_loader() -> pd.DataFrame:
+        loader_calls.append(None)
+        return pd.DataFrame(
+            [{"index_code": "801010", "display_name": "农林牧渔", "publish_date": "2000-01-04"}]
+        )
+
+    resolver = BaselineEvidenceResolver(
+        http_get=_fake_http_get({}, calls),
+        third_party_loader=third_party_loader,
+    )
+
+    row = resolver.collect([_entry("801010", "农林牧渔", source_kind="shenwan")], date(2026, 7, 12)).iloc[0]
+
+    assert row["evidence_status"] == "THIRD_PARTY_PUBLICATION"
+    assert loader_calls == [None]
+    assert calls == []
+
+
 def test_resolver_returns_documented_columns_for_empty_entries():
     resolver = BaselineEvidenceResolver(http_get=_fake_http_get({}), third_party_index_list=pd.DataFrame())
 
@@ -175,9 +244,8 @@ def test_resolver_returns_documented_columns_for_empty_entries():
 
 def test_resolver_treats_malformed_third_party_response_as_unresolved():
     resolver = BaselineEvidenceResolver(
-        http_get=_fake_http_get(
-            {"https://www.joinquant.com/data/dict/indexData": {"data": {"index_code": "000300"}}}
-        )
+        http_get=_fake_http_get({}),
+        third_party_loader=lambda: {"data": {"index_code": "000300"}},
     )
 
     row = resolver.collect([_entry("801010", "农林牧渔", source_kind="shenwan")], date(2026, 7, 12)).iloc[0]

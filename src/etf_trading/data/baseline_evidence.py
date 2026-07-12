@@ -41,9 +41,11 @@ class BaselineEvidenceResolver:
         *,
         http_get: Callable[[str], object] | None = None,
         third_party_index_list: pd.DataFrame | None = None,
+        third_party_loader: Callable[[], object] | None = None,
     ) -> None:
         self._http_get = http_get or _default_http_get
         self._provided_third_party_index_list = third_party_index_list
+        self._third_party_loader = third_party_loader or _default_third_party_loader
 
     def collect(self, entries: Sequence[IndexCatalogEntry], as_of: date) -> pd.DataFrame:
         third_party = self._third_party_index_list()
@@ -84,7 +86,7 @@ class BaselineEvidenceResolver:
             return None, f"中证官方接口请求失败：{error}"
         if payload is None:
             return None, "中证官方接口未返回可解析结果"
-        if str(payload.get("code") or "").strip() != "200":
+        if _scalar_text(payload.get("code")) != "200":
             return None, "中证官方接口业务码非 200"
 
         data = payload.get("data")
@@ -116,7 +118,7 @@ class BaselineEvidenceResolver:
         if self._provided_third_party_index_list is not None:
             return self._provided_third_party_index_list.copy()
         try:
-            response = self._http_get(JOINQUANT_INDEX_LIST_URL)
+            response = self._third_party_loader()
         except Exception:
             return pd.DataFrame()
         return _as_frame(response)
@@ -210,6 +212,12 @@ def _default_http_get(url: str) -> object:
         return body
 
 
+def _default_third_party_loader() -> pd.DataFrame:
+    import akshare as ak
+
+    return ak.index_stock_info()
+
+
 def _as_mapping(value: object) -> Mapping[str, object] | None:
     if isinstance(value, Mapping):
         return value
@@ -249,20 +257,23 @@ def _load_evidence_mapping(path: Path) -> dict[str, dict[str, object]]:
 
 
 def _normalise_code(value: object) -> str:
-    if value is None or pd.isna(value):
+    value = _scalar_value(value)
+    if value is None:
         return ""
     text = str(value).strip()
     return text[:-2] if re.fullmatch(r"\d+\.0", text) else text
 
 
 def _normalise_name(value: object) -> str:
-    if value is None or pd.isna(value):
+    value = _scalar_value(value)
+    if value is None:
         return ""
     return re.sub(r"[\s\-_/（）()\[\]【】]", "", str(value)).casefold()
 
 
 def _iso_date(value: object) -> str | None:
-    if value is None or pd.isna(value):
+    value = _scalar_value(value)
+    if value is None:
         return None
     if isinstance(value, datetime):
         return value.date().isoformat()
@@ -271,4 +282,18 @@ def _iso_date(value: object) -> str | None:
     try:
         return date.fromisoformat(str(value).strip()).isoformat()
     except ValueError:
+        return None
+
+
+def _scalar_text(value: object) -> str:
+    value = _scalar_value(value)
+    return "" if value is None else str(value).strip()
+
+
+def _scalar_value(value: object) -> object | None:
+    if value is None or not pd.api.types.is_scalar(value):
+        return None
+    try:
+        return None if bool(pd.isna(value)) else value
+    except (TypeError, ValueError):
         return None
