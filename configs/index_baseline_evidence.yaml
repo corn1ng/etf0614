@@ -1,0 +1,625 @@
+evidence:
+  '000001':
+    reference_date: '1990-12-19'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000001
+    checked_at: '2026-07-10'
+    detail: ''
+  '000015':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000015
+    checked_at: '2026-07-10'
+    detail: ''
+  '000016':
+    reference_date: '2003-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000016
+    checked_at: '2026-07-10'
+    detail: ''
+  000029:
+    reference_date: '2002-06-28'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000029
+    checked_at: '2026-07-10'
+    detail: ''
+  '000300':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000300
+    checked_at: '2026-07-10'
+    detail: ''
+  '000510':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000510
+    checked_at: '2026-07-10'
+    detail: ''
+  000688:
+    reference_date: '2019-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000688
+    checked_at: '2026-07-10'
+    detail: ''
+  000819:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000819
+    checked_at: '2026-07-10'
+    detail: ''
+  000827:
+    reference_date: '2011-12-30'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000827
+    checked_at: '2026-07-10'
+    detail: ''
+  000852:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000852
+    checked_at: '2026-07-10'
+    detail: ''
+  000903:
+    reference_date: '2005-12-30'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000903
+    checked_at: '2026-07-10'
+    detail: ''
+  000905:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000905
+    checked_at: '2026-07-10'
+    detail: ''
+  000906:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000906
+    checked_at: '2026-07-10'
+    detail: ''
+  000919:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000919
+    checked_at: '2026-07-10'
+    detail: ''
+  000922:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000922
+    checked_at: '2026-07-10'
+    detail: ''
+  000928:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000928
+    checked_at: '2026-07-10'
+    detail: ''
+  000932:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000932
+    checked_at: '2026-07-10'
+    detail: ''
+  000933:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000933
+    checked_at: '2026-07-10'
+    detail: ''
+  000934:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000934
+    checked_at: '2026-07-10'
+    detail: ''
+  000935:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/000935
+    checked_at: '2026-07-10'
+    detail: ''
+  '399001':
+    reference_date: '1995-01-23'
+    source: third_party_publication
+    kind: publication_date
+    source_name: 聚宽
+    source_url: https://www.joinquant.com/data/dict/indexData
+    checked_at: '2026-07-10'
+    detail: 第三方仅提供发布日期，不能视为官方基日
+  '399006':
+    reference_date: '2010-06-01'
+    source: third_party_publication
+    kind: publication_date
+    source_name: 聚宽
+    source_url: https://www.joinquant.com/data/dict/indexData
+    checked_at: '2026-07-10'
+    detail: 第三方仅提供发布日期，不能视为官方基日
+  '399812':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/399812
+    checked_at: '2026-07-10'
+    detail: ''
+  '399975':
+    reference_date: '2007-06-29'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/399975
+    checked_at: '2026-07-10'
+    detail: ''
+  '399986':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/399986
+    checked_at: '2026-07-10'
+    detail: ''
+  '930050':
+    reference_date: '2014-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930050
+    checked_at: '2026-07-10'
+    detail: ''
+  '930604':
+    reference_date: '2007-06-29'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930604
+    checked_at: '2026-07-10'
+    detail: ''
+  '930633':
+    reference_date: '2008-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930633
+    checked_at: '2026-07-10'
+    detail: ''
+  '930697':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930697
+    checked_at: '2026-07-10'
+    detail: ''
+  '930707':
+    reference_date: '2011-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930707
+    checked_at: '2026-07-10'
+    detail: ''
+  '930743':
+    reference_date: '2011-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930743
+    checked_at: '2026-07-10'
+    detail: ''
+  '930782':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930782
+    checked_at: '2026-07-10'
+    detail: ''
+  '930901':
+    reference_date: '2012-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930901
+    checked_at: '2026-07-10'
+    detail: ''
+  '930955':
+    reference_date: '2005-12-30'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930955
+    checked_at: '2026-07-10'
+    detail: ''
+  '930997':
+    reference_date: '2014-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/930997
+    checked_at: '2026-07-10'
+    detail: ''
+  '931009':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931009
+    checked_at: '2026-07-10'
+    detail: ''
+  '931087':
+    reference_date: '2012-06-29'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931087
+    checked_at: '2026-07-10'
+    detail: ''
+  '931152':
+    reference_date: '2014-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931152
+    checked_at: '2026-07-10'
+    detail: ''
+  '931269':
+    reference_date: '2014-11-14'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931269
+    checked_at: '2026-07-10'
+    detail: ''
+  '931401':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931401
+    checked_at: '2026-07-10'
+    detail: ''
+  '931446':
+    reference_date: '2009-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931446
+    checked_at: '2026-07-10'
+    detail: ''
+  '931574':
+    reference_date: '2014-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931574
+    checked_at: '2026-07-10'
+    detail: ''
+  '931643':
+    reference_date: '2019-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931643
+    checked_at: '2026-07-10'
+    detail: ''
+  '931775':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931775
+    checked_at: '2026-07-10'
+    detail: ''
+  '931865':
+    reference_date: '2016-12-30'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931865
+    checked_at: '2026-07-10'
+    detail: ''
+  '931975':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931975
+    checked_at: '2026-07-10'
+    detail: ''
+  '931976':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931976
+    checked_at: '2026-07-10'
+    detail: ''
+  '931977':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931977
+    checked_at: '2026-07-10'
+    detail: ''
+  '931978':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931978
+    checked_at: '2026-07-10'
+    detail: ''
+  '931979':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931979
+    checked_at: '2026-07-10'
+    detail: ''
+  '931980':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931980
+    checked_at: '2026-07-10'
+    detail: ''
+  '931981':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931981
+    checked_at: '2026-07-10'
+    detail: ''
+  '931982':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931982
+    checked_at: '2026-07-10'
+    detail: ''
+  '931983':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931983
+    checked_at: '2026-07-10'
+    detail: ''
+  '931984':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931984
+    checked_at: '2026-07-10'
+    detail: ''
+  '931985':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931985
+    checked_at: '2026-07-10'
+    detail: ''
+  '931986':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/931986
+    checked_at: '2026-07-10'
+    detail: ''
+  '932000':
+    reference_date: '2013-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/932000
+    checked_at: '2026-07-10'
+    detail: ''
+  '932276':
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/932276
+    checked_at: '2026-07-10'
+    detail: ''
+  '932277':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/932277
+    checked_at: '2026-07-10'
+    detail: ''
+  '932278':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/932278
+    checked_at: '2026-07-10'
+    detail: ''
+  '932279':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/932279
+    checked_at: '2026-07-10'
+    detail: ''
+  '932280':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/932280
+    checked_at: '2026-07-10'
+    detail: ''
+  '932281':
+    reference_date: '2021-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/932281
+    checked_at: '2026-07-10'
+    detail: ''
+  H01164:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/H01164
+    checked_at: '2026-07-10'
+    detail: ''
+  H11052:
+    reference_date: '2014-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/H11052
+    checked_at: '2026-07-10'
+    detail: ''
+  H30015:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/H30015
+    checked_at: '2026-07-10'
+    detail: ''
+  H30105:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/H30105
+    checked_at: '2026-07-10'
+    detail: ''
+  H30269:
+    reference_date: '2005-12-30'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/H30269
+    checked_at: '2026-07-10'
+    detail: ''
+  H30533:
+    reference_date: '2007-06-29'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/H30533
+    checked_at: '2026-07-10'
+    detail: ''
+  L11220:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/L11220
+    checked_at: '2026-07-10'
+    detail: ''
+  L11221:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/L11221
+    checked_at: '2026-07-10'
+    detail: ''
+  L11222:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/L11222
+    checked_at: '2026-07-10'
+    detail: ''
+  L11223:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/L11223
+    checked_at: '2026-07-10'
+    detail: ''
+  L11224:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/L11224
+    checked_at: '2026-07-10'
+    detail: ''
+  L11227:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/L11227
+    checked_at: '2026-07-10'
+    detail: ''
+  L11228:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/L11228
+    checked_at: '2026-07-10'
+    detail: ''
+  L11229:
+    reference_date: '2004-12-31'
+    source: official_api
+    kind: official_base_date
+    source_name: 中证指数官方基础信息
+    source_url: https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/L11229
+    checked_at: '2026-07-10'
+    detail: ''

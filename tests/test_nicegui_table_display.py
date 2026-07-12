@@ -1,0 +1,409 @@
+from datetime import date
+import pandas as pd
+
+from etf_trading.nicegui_app.components import tables
+from etf_trading.nicegui_app.components.tables import render_table, table_columns, table_rows
+from etf_trading.nicegui_app.pages.etf_data import _atomic_filter_options, _atomic_filter_value
+from etf_trading.nicegui_app.view_models import IndexAtomicFilters, build_index_atomic_rows
+
+
+def test_table_columns_translate_internal_index_headers_to_chinese():
+    rows = [
+        {
+            "index_code": "000300",
+            "index_name": "沪深300",
+            "market": "A股",
+            "category": "A股宽基",
+            "large_trend": "UP",
+            "medium_trend": "RANGE",
+            "small_trend": "BROKEN",
+            "allows_new_position": False,
+            "latest_date": "2026-07-03",
+            "history_rows": 5941,
+        }
+    ]
+
+    labels = [column["label"] for column in table_columns(rows)]
+
+    assert labels == [
+        "指数代码",
+        "指数名称",
+        "市场",
+        "分类",
+        "大趋势",
+        "中趋势",
+        "小趋势",
+        "允许新开仓",
+        "最新日期",
+        "历史行数",
+    ]
+    assert "index_code" not in labels
+    assert "allows_new_position" not in labels
+
+
+def test_table_columns_translate_price_history_headers_to_chinese():
+    rows = [
+        {
+            "etf_code": "159001",
+            "trade_date": "2021-07-08",
+            "open": 100,
+            "high": 100.001,
+            "low": 99.999,
+            "close": 100,
+            "volume": 55071,
+            "amount": 550710592,
+            "pct_change": 0,
+            "change": 0,
+            "turnover_rate": 26.1,
+            "ma20": "",
+            "ma51": "",
+            "ma60": "",
+            "ma120": "",
+        }
+    ]
+
+    labels = [column["label"] for column in table_columns(rows)]
+
+    assert labels == [
+        "ETF代码",
+        "交易日",
+        "开盘",
+        "最高",
+        "最低",
+        "收盘",
+        "成交量",
+        "成交额",
+        "涨跌幅",
+        "涨跌额",
+        "换手率",
+        "20日均线",
+        "51日均线",
+        "60日均线",
+        "120日均线",
+    ]
+    assert not {"trade_date", "open", "high", "low", "close", "volume", "pct_change", "turnover_rate"} & set(labels)
+
+
+def test_table_columns_translate_maintenance_log_headers_to_chinese():
+    rows = [
+        {
+            "dataset": "index_daily_price",
+            "asset_code": "000300",
+            "last_success_trade_date": "2026-07-06",
+            "severity": "warning",
+            "message": "ok",
+            "log_id": 1,
+        }
+    ]
+
+    labels = [column["label"] for column in table_columns(rows)]
+
+    assert labels == ["数据集", "标的代码", "最近成功交易日", "级别", "消息", "日志编号"]
+    assert not {"dataset", "asset_code", "last_success_trade_date", "severity", "log_id"} & set(labels)
+
+
+def test_table_columns_name_maintenance_detail_as_status_explanation():
+    labels = [
+        column["label"]
+        for column in table_columns([{"error_message": "已更新至 2026-07-09，缺少 2026-07-10 行情。"}])
+    ]
+
+    assert labels == ["状态说明"]
+
+
+def test_table_rows_do_not_use_baseline_pending_verification_as_the_primary_conclusion():
+    display = table_rows(
+        [
+            {
+                "completeness_status": "BASELINE_UNVERIFIED",
+                "completeness_message": (
+                    "已有 1999-12-30 至 2026-07-09 的行情，但缺少官方基日；"
+                    "暂时无法判断是否从指数起点完整，不作为交易依据。"
+                ),
+            }
+        ]
+    )
+
+    assert display[0]["completeness_status"] == "历史起点无法确认"
+    assert "基日待核验" not in " ".join(str(value) for value in display[0].values())
+
+
+def test_table_displays_baseline_reference_evidence_in_chinese():
+    rows = [
+        {
+            "history_completeness_status": "BASELINE_REFERENCED",
+            "baseline_evidence_kind": "publication_date",
+            "baseline_evidence_name": "聚宽",
+            "baseline_evidence_url": "https://www.joinquant.com/data/dict/indexData",
+            "baseline_checked_at": date(2026, 7, 12),
+            "evidence_status": "THIRD_PARTY_PUBLICATION",
+            "detail": "第三方仅提供发布日期，不能视为官方基日",
+        }
+    ]
+
+    assert [column["label"] for column in table_columns(rows)] == [
+        "历史完整性",
+        "起点证据",
+        "证据来源",
+        "证据链接",
+        "检索日期",
+        "核验结果",
+        "证据说明",
+    ]
+    display = table_rows(rows)
+
+    assert display[0]["history_completeness_status"] == "第三方参考起点"
+    assert display[0]["baseline_evidence_kind"] == "第三方发布日期"
+    assert display[0]["baseline_evidence_url"] == "https://www.joinquant.com/data/dict/indexData"
+    assert display[0]["evidence_status"] == "第三方参考起点"
+
+
+def test_table_rows_localize_maintenance_baseline_evidence_result():
+    rows = [
+        {
+            "reference_date": date(2005, 4, 8),
+            "checked_at": date(2026, 7, 12),
+            "evidence_status": "THIRD_PARTY_BASE_DATE",
+            "detail": "第三方仅提供参考基日。",
+        },
+        {
+            "reference_date": date(2007, 1, 15),
+            "checked_at": date(2026, 7, 12),
+            "evidence_status": "REJECTED",
+            "detail": "证据与指数代码不匹配。",
+        },
+    ]
+
+    assert [column["label"] for column in table_columns(rows)] == ["参考日期", "检索日期", "核验结果", "证据说明"]
+    display = table_rows(rows)
+
+    assert display[0]["reference_date"] == "2005-04-08"
+    assert display[0]["checked_at"] == "2026-07-12"
+    assert display[0]["evidence_status"] == "第三方参考基日"
+    assert display[1]["evidence_status"] == "拒绝"
+
+
+def test_render_table_localizes_pagination_labels(monkeypatch):
+    captured = {}
+
+    class FakeTable:
+        def __init__(self):
+            self.props = {}
+
+    class FakeUi:
+        def table(self, **kwargs):
+            captured.update(kwargs)
+            return FakeTable()
+
+    monkeypatch.setattr(tables, "ui", FakeUi())
+
+    table = render_table(
+        [{"etf_code": "159001", "trade_date": "2021-07-08", "open": 100}],
+        pagination=10,
+    )
+
+    assert captured["pagination"] == 10
+    assert captured["columns"] == [
+        {"name": "etf_code", "label": "ETF代码", "field": "etf_code", "align": "left"},
+        {"name": "trade_date", "label": "交易日", "field": "trade_date", "align": "left"},
+        {"name": "open", "label": "开盘", "field": "open", "align": "left"},
+    ]
+    assert table.props["rows-per-page-label"] == "每页行数"
+    assert table.props[":pagination-label"] == "(first, end, total) => `${first}-${end} / ${total}`"
+    assert table.props["no-data-label"] == "暂无数据"
+    assert table.props["no-results-label"] == "没有匹配结果"
+    assert table.props["loading-label"] == "加载中..."
+
+
+def test_table_rows_translate_internal_status_codes_and_booleans_to_chinese():
+    rows = [
+        {
+            "large_trend": "UP",
+            "medium_trend": "RANGE",
+            "small_trend": "RIGHT_SIDE_START",
+            "allows_new_position": True,
+            "history_status": "stale",
+            "feature_status": "missing_features",
+            "missing_feature_names": "read_failed",
+            "valuation_overview_label": "missing",
+            "valuation_health_status": "missing_valuation",
+            "action": "BUY",
+            "status": "FAILED",
+            "note": "short_history",
+        }
+    ]
+
+    display = table_rows(rows)
+
+    assert display == [
+        {
+            "large_trend": "上升",
+            "medium_trend": "震荡",
+            "small_trend": "右侧开始",
+            "allows_new_position": "是",
+            "history_status": "行情滞后",
+            "feature_status": "特征缺失",
+            "missing_feature_names": "读取失败",
+            "valuation_overview_label": "估值缺失",
+            "valuation_health_status": "估值缺失",
+            "action": "买入",
+            "status": "失败",
+            "note": "历史不足",
+        }
+    ]
+    rendered_text = " ".join(str(value) for value in display[0].values())
+    for raw_code in ["UP", "RANGE", "RIGHT_SIDE_START", "true", "stale", "missing_features", "read_failed", "short_history", "missing", "missing_valuation", "BUY", "FAILED"]:
+        assert raw_code not in rendered_text
+    assert "正在刷新" not in rendered_text
+
+
+def test_table_rows_do_not_apply_history_lag_label_to_generic_stale_status():
+    display = table_rows([{"status": "stale", "history_status": "stale"}])
+
+    assert display[0]["history_status"] == "行情滞后"
+    assert display[0]["status"] == "待刷新"
+    assert display[0]["status"] != "行情滞后"
+    assert "正在刷新" not in " ".join(str(value) for value in display[0].values())
+
+
+def test_table_rows_translate_uppercase_stale_maintenance_status_to_chinese():
+    display = table_rows([{"index_code": "930633", "status": "STALE"}])
+
+    assert display == [{"index_code": "930633", "status": "行情仍滞后"}]
+
+
+def test_table_rows_translate_maintenance_dataset_and_job_codes_to_chinese():
+    rows = [
+        {
+            "dataset": "index_daily_price",
+            "job_type": "history",
+            "severity": "warning",
+            "status": "EMPTY",
+        }
+    ]
+
+    display = table_rows(rows)
+
+    assert display == [
+        {
+            "dataset": "指数日行情",
+            "job_type": "历史行情",
+            "severity": "警告",
+            "status": "无数据",
+        }
+    ]
+    rendered_text = " ".join(str(value) for value in display[0].values())
+    for raw_code in ["index_daily_price", "history", "warning", "EMPTY"]:
+        assert raw_code not in rendered_text
+
+
+def test_compact_table_columns_add_width_hints_for_index_summary():
+    rows = [
+        {
+            "index_code": "000300",
+            "index_name": "沪深300",
+            "market": "A股",
+            "category": "A股宽基",
+            "large_trend": "UP",
+            "medium_trend": "RANGE",
+            "small_trend": "BROKEN",
+            "allows_new_position": False,
+            "latest_date": "2026-07-03",
+            "history_rows": 5941,
+        }
+    ]
+
+    columns = table_columns(rows, compact=True)
+    by_name = {column["name"]: column for column in columns}
+
+    assert by_name["index_code"]["style"] == "width: 88px; min-width: 88px; max-width: 88px;"
+    assert by_name["index_name"]["style"] == "width: 116px; min-width: 116px; max-width: 116px;"
+    assert by_name["index_code"]["classes"] == "text-no-wrap"
+    assert by_name["index_code"]["headerClasses"] == "text-no-wrap"
+
+
+def test_index_atomic_table_columns_and_status_codes_are_chinese_and_compact():
+    rows = build_index_atomic_rows(
+        pd.DataFrame(
+            [
+                {
+                    "index_code": "000300",
+                    "index_name": "沪深300",
+                    "category": "A股宽基",
+                    "pool": "core",
+                    "catalog_order": 0,
+                    "latest_date": "2026-07-11",
+                    "close_vs_ma_20": 0.034,
+                    "close_vs_ma_60": -0.025,
+                    "range_20_high": False,
+                    "range_20_low": False,
+                    "range_20_status": "computed",
+                    "return_20": 0.018,
+                    "snapshot_status": "computed",
+                }
+            ]
+        ),
+        IndexAtomicFilters(),
+    )
+
+    columns = table_columns(rows, compact=True)
+    by_name = {column["name"]: column for column in columns}
+
+    assert [column["label"] for column in columns] == [
+        "指数",
+        "分类",
+        "最新日期",
+        "相对20日线",
+        "相对60日线",
+        "20日区间",
+        "20日收益",
+        "数据状态",
+    ]
+    assert "width:" in by_name["index"]["style"]
+    assert "width:" in by_name["close_vs_ma_20"]["style"]
+    assert "width:" in by_name["data_status"]["style"]
+
+    status_rows = table_rows(
+        [
+            {"snapshot_status": "ready", "status": "computed"},
+            {"snapshot_status": "stale", "status": "insufficient_history"},
+            {"snapshot_status": "missing", "status": "missing_input"},
+            {"snapshot_status": "failed", "status": "calculation_failed"},
+            {"status": "read_failed"},
+            {"data_source": "akshare_zh_em"},
+            {"data_source": "akshare_shenwan"},
+        ]
+    )
+
+    assert status_rows == [
+        {"snapshot_status": "已验证", "status": "已计算"},
+        {"snapshot_status": "待重建", "status": "历史不足"},
+        {"snapshot_status": "不存在", "status": "缺少输入字段"},
+        {"snapshot_status": "生成失败", "status": "计算失败"},
+        {"status": "读取失败"},
+        {"data_source": "AkShare（东方财富指数行情）"},
+        {"data_source": "AkShare（申万指数行情）"},
+    ]
+
+
+def test_atomic_status_filter_options_show_chinese_labels_but_keep_internal_values():
+    frame = {
+        "history_status": ["complete", "missing_history", "short_history", "stale"],
+    }
+
+    options = _atomic_filter_options(frame, "history_status", "全部历史状态")
+
+    assert list(options) == ["全部历史状态", "数据可用", "历史缺失", "历史不足", "行情滞后"]
+    assert _atomic_filter_value(options, "全部历史状态") == "全部历史状态"
+    assert _atomic_filter_value(options, "数据可用") == "complete"
+    assert _atomic_filter_value(options, "历史缺失") == "missing_history"
+    assert _atomic_filter_value(options, "历史不足") == "short_history"
+    assert _atomic_filter_value(options, "行情滞后") == "stale"
+
+
+def test_atomic_indicator_new_detail_labels_are_human_readable():
+    rows = [{"ma60_slope_20": 0.015, "history_rows": 520}]
+
+    labels = [column["label"] for column in table_columns(rows)]
+
+    assert labels == ["60日线20日斜率", "历史行数"]

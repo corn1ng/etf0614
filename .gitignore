@@ -1,0 +1,14 @@
+.venv/
+.venv-win/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+.superpowers/
+.worktrees/
+
+/data/
+/database/*.sqlite
+/logs/
+reports/
+.streamlit/secrets.toml
