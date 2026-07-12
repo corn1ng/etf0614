@@ -383,3 +383,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
 - Watch out next time:
   - Do not flatten core and research pools into an undifferentiated table in a trading-assistance workflow.
   - Preserve the catalog's declared order independently inside both visible pools.
+
+## 2026-07-12 - Refine index health to atomic indicators
+
+- Summary: Reframed `指数体检` as an atomic indicator panel with price/MA positions, MA crossings, range breakouts, returns, drawdowns, volatility, volume, and data quality. Removed every trend tier, gate, score, ranking, and transaction conclusion from the approved design.
+- Verification: The revised specification enumerates every first-version atomic indicator and its calculation boundary; the page remains limited to local index history.
+- Watch out next time:
+  - A crossed moving average or new range high is an atomic fact, not a transaction recommendation.
+  - Keep cross-event definitions dependent on both the current and preceding trading day so a persistent above/below state is not mislabeled as a new crossing.
+  - Mark missing amount data only on volume indicators; do not invalidate unrelated price-derived indicators.
