@@ -59,7 +59,9 @@ def test_ensure_index_history_fetches_full_history_when_missing(tmp_path):
 
     result = service.ensure_index_history("000905", through=date(2024, 1, 3))
 
-    assert provider.calls == [("000905", INDEX_HISTORY_AUTO_START, date(2024, 1, 3))]
+    assert [(call[0].index_code, call[1], call[2]) for call in provider.calls] == [
+        ("000905", INDEX_HISTORY_AUTO_START, date(2024, 1, 3))
+    ]
     assert result.status == "INITIALIZED"
     assert result.fetched_rows > 0
     stored = service.parquet_store.read_index_prices("000905")
@@ -93,7 +95,9 @@ def test_ensure_index_history_catches_up_from_last_local_date(tmp_path):
 
     result = service.ensure_index_history("000905", through=date(2024, 1, 5))
 
-    assert provider.calls == [("000905", date(2024, 1, 4), date(2024, 1, 5))]
+    assert [(call[0].index_code, call[1], call[2]) for call in provider.calls] == [
+        ("000905", date(2024, 1, 4), date(2024, 1, 5))
+    ]
     assert result.status == "UPDATED"
     assert result.fetched_rows == 2
     stored = service.parquet_store.read_index_prices("000905")

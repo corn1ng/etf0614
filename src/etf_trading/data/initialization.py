@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 
 import pandas as pd
 
-from etf_trading.data.indexes import DEFAULT_INDEXES, INDEX_HISTORY_AUTO_START
+from etf_trading.data.index_catalog import IndexCatalogEntry, default_index_catalog
+from etf_trading.data.indexes import INDEX_HISTORY_AUTO_START
 from etf_trading.data.provider import DataProvider
-from etf_trading.data.quality import expected_latest_trade_date
+from etf_trading.data.quality import (
+    IndexHistoryCompleteness,
+    assess_index_history_completeness,
+    expected_latest_trade_date,
+)
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.strategy.features import add_technical_features
 
@@ -48,6 +54,8 @@ class IndexHistoryResult:
     start_date: date | None = None
     end_date: date | None = None
     error_message: str | None = None
+    completeness_status: str | None = None
+    completeness_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,64 @@ class InitializationService:
         master = self.provider.fetch_etf_list()
         self.store.upsert_etf_master(master)
         return master
+
+    def sync_index_catalog(self, entries: Sequence[IndexCatalogEntry] | None = None) -> pd.DataFrame:
+        """Persist the versioned index catalogue for use across server restarts."""
+
+        catalog = tuple(entries or default_index_catalog())
+        self.store.initialize_schema()
+        self.store.upsert_index_catalog(catalog)
+        return self.store.list_index_catalog(include_reserve=True)
+
+    def validate_index_sources(
+        self,
+        through: date | str,
+        entries: Sequence[IndexCatalogEntry] | None = None,
+    ) -> pd.DataFrame:
+        """Probe each configured source over the last ten calendar days only."""
+
+        if self.provider is None:
+            raise ValueError("provider is required to validate index sources")
+
+        self.store.initialize_schema()
+        catalog = tuple(entries or self._formal_catalog_entries())
+        through_date = pd.Timestamp(through).date()
+        start_date = through_date - timedelta(days=9)
+        results: list[dict[str, object]] = []
+        for entry in catalog:
+            try:
+                frame = self.provider.fetch_index_daily(entry, start_date, through_date)
+                latest = _frame_latest_trade_date(frame)
+                if frame.empty or latest is None:
+                    status, message, latest_text = "EMPTY", "最近十日未返回行情", None
+                else:
+                    status, message, latest_text = "SUCCESS", "数据源可用", latest.isoformat()
+                self.store.upsert_update_state(
+                    "index_source_validation",
+                    entry.index_code,
+                    latest_text,
+                    status=status,
+                    error_message=None if status == "SUCCESS" else message,
+                )
+            except Exception as exc:  # noqa: BLE001 - validation continues for all catalogue entries
+                status, message, latest_text = "FAILED", str(exc), None
+                self.store.upsert_update_state(
+                    "index_source_validation",
+                    entry.index_code,
+                    None,
+                    status=status,
+                    error_message=message[:1000],
+                )
+            results.append(
+                {
+                    "index_code": entry.index_code,
+                    "source_kind": entry.source_kind,
+                    "status": status,
+                    "latest_trade_date": latest_text,
+                    "message": message,
+                }
+            )
+        return pd.DataFrame(results)
 
     def select_sample_etfs(self, required_categories: list[str]) -> pd.DataFrame:
         master = self.store.list_etf_master()
@@ -229,61 +295,84 @@ class InitializationService:
                 error_message=message,
             )
 
-    def ensure_index_history(self, index_code: str, through: date | str) -> IndexHistoryResult:
+    def ensure_index_history(
+        self,
+        index_code: str,
+        through: date | str,
+        *,
+        repair_history: bool = False,
+    ) -> IndexHistoryResult:
         if self.provider is None:
             raise ValueError("provider is required to fetch index history")
 
+        self.store.initialize_schema()
+        entry = self._catalog_entry(index_code)
         through_date = pd.Timestamp(through).date()
         expected_date = expected_latest_trade_date(through_date).date()
-        existing = self.parquet_store.read_index_prices(index_code)
+        existing = self.parquet_store.read_index_prices(entry.index_code)
 
         if existing.empty:
             fetch_start: date | str = INDEX_HISTORY_AUTO_START
             status = "INITIALIZED"
         else:
-            existing = _normalize_existing_index_frame(existing, index_code)
+            existing = _normalize_existing_index_frame(existing, entry.index_code)
             last_date = pd.Timestamp(existing["trade_date"].max()).date()
-            if last_date >= expected_date:
-                self.store.upsert_update_state("index_daily_price", index_code, last_date.isoformat(), status="SUCCESS")
+            if last_date >= expected_date and not repair_history:
+                completeness = self._persist_index_history_coverage(entry, existing)
+                self.store.upsert_update_state("index_daily_price", entry.index_code, last_date.isoformat(), status="SUCCESS")
                 return IndexHistoryResult(
-                    index_code=index_code,
+                    index_code=entry.index_code,
                     status="SKIPPED",
                     fetched_rows=0,
                     total_rows=len(existing),
                     start_date=pd.Timestamp(existing["trade_date"].min()).date(),
                     end_date=last_date,
+                    completeness_status=completeness.status,
+                    completeness_message=completeness.message,
                 )
-            fetch_start = last_date + timedelta(days=1)
-            status = "UPDATED"
+            fetch_start = INDEX_HISTORY_AUTO_START if repair_history else last_date + timedelta(days=1)
+            status = "REPAIRED" if repair_history else "UPDATED"
 
-        fetched = self.provider.fetch_index_daily(index_code, fetch_start, through_date)
+        fetched = self.provider.fetch_index_daily(entry, fetch_start, through_date)
         fetched_rows = len(fetched)
+        if not fetched.empty:
+            fetched = _normalize_existing_index_frame(fetched, entry.index_code)
+            fetched["index_code"] = entry.index_code
         if fetched.empty and not existing.empty:
-            return self._stale_index_result(index_code, existing, expected_date, fetched_rows)
-        if existing.empty:
-            combined = fetched
-        else:
-            combined = pd.concat([existing, fetched], ignore_index=True)
-        combined = _normalize_existing_index_frame(combined, index_code)
-        featured = add_technical_features(combined.rename(columns={"index_code": "etf_code"})).rename(columns={"etf_code": "index_code"})
-        self.parquet_store.write_index_prices(index_code, featured)
+            completeness = self._persist_index_history_coverage(entry, existing)
+            return self._stale_index_result(entry.index_code, existing, expected_date, fetched_rows, completeness)
+        combined = fetched if existing.empty else pd.concat([existing, fetched], ignore_index=True)
+        if combined.empty:
+            completeness = self._persist_index_history_coverage(entry, combined)
+            self.store.upsert_update_state("index_daily_price", entry.index_code, None, status="EMPTY")
+            return IndexHistoryResult(
+                index_code=entry.index_code,
+                status="EMPTY",
+                fetched_rows=0,
+                total_rows=0,
+                completeness_status=completeness.status,
+                completeness_message=completeness.message,
+            )
 
-        if featured.empty:
-            self.store.upsert_update_state("index_daily_price", index_code, None, status="EMPTY")
-            return IndexHistoryResult(index_code=index_code, status="EMPTY", fetched_rows=0, total_rows=0)
+        combined = _normalize_existing_index_frame(combined, entry.index_code)
+        featured = add_technical_features(combined.rename(columns={"index_code": "etf_code"})).rename(columns={"etf_code": "index_code"})
+        self.parquet_store.write_index_prices(entry.index_code, featured)
+        completeness = self._persist_index_history_coverage(entry, featured, source_frame=fetched)
 
         first_date = pd.Timestamp(featured["trade_date"].min()).date()
         last_date = pd.Timestamp(featured["trade_date"].max()).date()
         if last_date < expected_date:
-            return self._stale_index_result(index_code, featured, expected_date, fetched_rows)
-        self.store.upsert_update_state("index_daily_price", index_code, last_date.isoformat(), status="SUCCESS")
+            return self._stale_index_result(entry.index_code, featured, expected_date, fetched_rows, completeness)
+        self.store.upsert_update_state("index_daily_price", entry.index_code, last_date.isoformat(), status="SUCCESS")
         return IndexHistoryResult(
-            index_code=index_code,
+            index_code=entry.index_code,
             status=status,
             fetched_rows=fetched_rows,
             total_rows=len(featured),
             start_date=first_date,
             end_date=last_date,
+            completeness_status=completeness.status,
+            completeness_message=completeness.message,
         )
 
     def _stale_index_result(
@@ -292,6 +381,7 @@ class InitializationService:
         frame: pd.DataFrame,
         expected_date: date,
         fetched_rows: int,
+        completeness: IndexHistoryCompleteness,
     ) -> IndexHistoryResult:
         first_date = pd.Timestamp(frame["trade_date"].min()).date()
         last_date = pd.Timestamp(frame["trade_date"].max()).date()
@@ -311,6 +401,8 @@ class InitializationService:
             start_date=first_date,
             end_date=last_date,
             error_message=message,
+            completeness_status=completeness.status,
+            completeness_message=completeness.message,
         )
 
     def ensure_all_index_history(
@@ -318,14 +410,15 @@ class InitializationService:
         through: date | str,
         index_codes: list[str] | None = None,
         *,
+        repair_history: bool = False,
         on_progress: Callable[[IndexHistoryProgress], None] | None = None,
     ) -> pd.DataFrame:
-        codes = index_codes or [item.index_code for item in DEFAULT_INDEXES]
+        codes = index_codes or [entry.index_code for entry in self._formal_catalog_entries()]
         results: list[IndexHistoryResult] = []
         total = len(codes)
         for done, index_code in enumerate(codes, start=1):
             try:
-                result = self.ensure_index_history(index_code, through)
+                result = self.ensure_index_history(index_code, through, repair_history=repair_history)
             except Exception as exc:  # noqa: BLE001 - one failed index must not block the whole batch
                 self.store.upsert_update_state("index_daily_price", index_code, None, status="FAILED", error_message=str(exc))
                 result = IndexHistoryResult(
@@ -340,6 +433,45 @@ class InitializationService:
                 on_progress(IndexHistoryProgress(done=done, total=total, index_code=index_code, status=result.status))
         return pd.DataFrame([result.__dict__ for result in results])
 
+    def _formal_catalog_entries(self) -> tuple[IndexCatalogEntry, ...]:
+        self.store.initialize_schema()
+        catalog = self.store.list_index_catalog()
+        if catalog.empty:
+            self.sync_index_catalog()
+            catalog = self.store.list_index_catalog()
+        return _catalog_entries_from_frame(catalog)
+
+    def _catalog_entry(self, index_code: str) -> IndexCatalogEntry:
+        normalized_code = str(index_code)
+        catalog = self.store.list_index_catalog(include_reserve=True)
+        if not catalog.empty:
+            matched = catalog[catalog["index_code"].astype(str) == normalized_code]
+            if not matched.empty:
+                return _catalog_entries_from_frame(matched)[0]
+        for entry in default_index_catalog():
+            if entry.index_code == normalized_code:
+                return entry
+        raise KeyError(f"Unknown index code: {normalized_code}")
+
+    def _persist_index_history_coverage(
+        self,
+        entry: IndexCatalogEntry,
+        frame: pd.DataFrame,
+        *,
+        source_frame: pd.DataFrame | None = None,
+    ) -> IndexHistoryCompleteness:
+        completeness = assess_index_history_completeness(
+            frame,
+            entry.index_base_date,
+            baseline_source=entry.baseline_source,
+        )
+        source_first = _frame_first_trade_date(source_frame) if source_frame is not None else None
+        self.store.upsert_index_history_coverage(
+            entry.index_code,
+            **completeness.to_storage_values(source_first_trade_date=source_first),
+        )
+        return completeness
+
 
 def _normalize_existing_index_frame(frame: pd.DataFrame, index_code: str) -> pd.DataFrame:
     result = frame.copy()
@@ -349,6 +481,53 @@ def _normalize_existing_index_frame(frame: pd.DataFrame, index_code: str) -> pd.
     result["trade_date"] = pd.to_datetime(result["trade_date"])
     result = result.drop_duplicates(subset=["index_code", "trade_date"], keep="last")
     return result.sort_values("trade_date").reset_index(drop=True)
+
+
+def _catalog_entries_from_frame(frame: pd.DataFrame) -> tuple[IndexCatalogEntry, ...]:
+    entries: list[IndexCatalogEntry] = []
+    for row in frame.itertuples(index=False):
+        base_value = getattr(row, "index_base_date", None)
+        base_date = None if base_value is None or pd.isna(base_value) else pd.Timestamp(base_value).date()
+        aliases_value = getattr(row, "aliases_json", "[]")
+        try:
+            aliases = tuple(str(value) for value in json.loads(aliases_value or "[]"))
+        except (TypeError, json.JSONDecodeError):
+            aliases = ()
+        entries.append(
+            IndexCatalogEntry(
+                index_code=str(row.index_code),
+                name=str(row.name),
+                market=str(row.market),
+                category_level_1=str(row.category_level_1),
+                category_level_2=str(row.category_level_2),
+                index_type=str(row.index_type),
+                pool=str(row.pool),  # type: ignore[arg-type]
+                index_base_date=base_date,
+                baseline_source=str(row.baseline_source),  # type: ignore[arg-type]
+                source_kind=str(row.source_kind),  # type: ignore[arg-type]
+                provider_symbol=str(row.provider_symbol),
+                aliases=aliases,
+            )
+        )
+    return tuple(entries)
+
+
+def _frame_first_trade_date(frame: pd.DataFrame | None) -> str | None:
+    if frame is None or frame.empty or "trade_date" not in frame:
+        return None
+    dates = pd.to_datetime(frame["trade_date"], errors="coerce").dropna()
+    if dates.empty:
+        return None
+    return pd.Timestamp(dates.min()).strftime("%Y-%m-%d")
+
+
+def _frame_latest_trade_date(frame: pd.DataFrame | None) -> date | None:
+    if frame is None or frame.empty or "trade_date" not in frame:
+        return None
+    dates = pd.to_datetime(frame["trade_date"], errors="coerce").dropna()
+    if dates.empty:
+        return None
+    return pd.Timestamp(dates.max()).date()
 
 
 def _active_master_etf_codes(master: pd.DataFrame) -> list[str]:

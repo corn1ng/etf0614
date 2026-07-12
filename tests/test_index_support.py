@@ -4,6 +4,7 @@ from datetime import date
 
 from etf_trading.data.indexes import DEFAULT_INDEXES, INDEX_HISTORY_AUTO_START, normalize_index_daily
 from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.quality import assess_index_history_completeness
 from etf_trading.data.storage import ParquetStore
 
 
@@ -305,3 +306,14 @@ def test_hong_kong_index_daily_falls_back_to_sina_when_em_fails():
     assert len(result) == 1
     assert result.iloc[0]["index_code"] == "HSTECH"
     assert result.iloc[0]["data_source"] == "akshare_hk_sina"
+
+
+def test_index_history_completeness_marks_unverified_base_date_without_claiming_complete():
+    assessment = assess_index_history_completeness(
+        pd.DataFrame({"trade_date": pd.to_datetime(["1999-12-30", "2026-07-10"])}),
+        None,
+        baseline_source="unverified",
+    )
+
+    assert assessment.status == "BASELINE_UNVERIFIED"
+    assert assessment.message == "基日待核验，不能判定历史完整"

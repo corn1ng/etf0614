@@ -32,6 +32,31 @@ class HistoryAssessment:
     reason_codes: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class IndexHistoryCompleteness:
+    """Evidence for whether an index starts at its verified official base date."""
+
+    status: str
+    message: str
+    local_first_trade_date: str | None
+    latest_trade_date: str | None
+    history_rows: int
+    index_base_date: str | None
+    baseline_source: str
+
+    def to_storage_values(self, *, source_first_trade_date: str | None = None) -> dict[str, object]:
+        return {
+            "index_base_date": self.index_base_date,
+            "baseline_source": self.baseline_source,
+            "local_first_trade_date": self.local_first_trade_date,
+            "source_first_trade_date": source_first_trade_date or self.local_first_trade_date,
+            "latest_trade_date": self.latest_trade_date,
+            "history_rows": self.history_rows,
+            "completeness_status": self.status,
+            "completeness_message": self.message,
+        }
+
+
 _READINESS_LABELS = {
     HistoryReadiness.READY: "数据可用",
     HistoryReadiness.STALE: "行情滞后",
@@ -152,6 +177,90 @@ def history_readiness_label(readiness: HistoryReadiness | str) -> str:
     except ValueError:
         return str(readiness)
     return _READINESS_LABELS[normalized]
+
+
+def assess_index_history_completeness(
+    prices: pd.DataFrame,
+    index_base_date: date | pd.Timestamp | str | None,
+    *,
+    baseline_source: str,
+) -> IndexHistoryCompleteness:
+    """Assess coverage against a verified index base date without guessing it.
+
+    An unknown base date is deliberately not treated as complete even when the
+    provider returns a long history. This prevents research-only catalogue rows
+    from becoming tradeable through a false completeness claim.
+    """
+
+    base = _parse_date(index_base_date)
+    base_text = base.strftime("%Y-%m-%d") if base is not None else None
+    rows = int(len(prices))
+    if prices.empty:
+        return IndexHistoryCompleteness(
+            status="MISSING_HISTORY",
+            message="历史数据缺失",
+            local_first_trade_date=None,
+            latest_trade_date=None,
+            history_rows=0,
+            index_base_date=base_text,
+            baseline_source=baseline_source,
+        )
+    if "trade_date" not in prices:
+        return IndexHistoryCompleteness(
+            status="READ_FAILED",
+            message="历史数据缺少交易日字段",
+            local_first_trade_date=None,
+            latest_trade_date=None,
+            history_rows=rows,
+            index_base_date=base_text,
+            baseline_source=baseline_source,
+        )
+
+    dates = pd.to_datetime(prices["trade_date"], errors="coerce").dropna()
+    if dates.empty:
+        return IndexHistoryCompleteness(
+            status="READ_FAILED",
+            message="历史数据交易日无效",
+            local_first_trade_date=None,
+            latest_trade_date=None,
+            history_rows=rows,
+            index_base_date=base_text,
+            baseline_source=baseline_source,
+        )
+
+    first = pd.Timestamp(dates.min()).normalize()
+    latest = pd.Timestamp(dates.max()).normalize()
+    first_text = first.strftime("%Y-%m-%d")
+    latest_text = latest.strftime("%Y-%m-%d")
+    if baseline_source == "unverified" or base is None:
+        return IndexHistoryCompleteness(
+            status="BASELINE_UNVERIFIED",
+            message="基日待核验，不能判定历史完整",
+            local_first_trade_date=first_text,
+            latest_trade_date=latest_text,
+            history_rows=rows,
+            index_base_date=base_text,
+            baseline_source=baseline_source,
+        )
+    if first <= base:
+        return IndexHistoryCompleteness(
+            status="COMPLETE",
+            message="历史完整",
+            local_first_trade_date=first_text,
+            latest_trade_date=latest_text,
+            history_rows=rows,
+            index_base_date=base_text,
+            baseline_source=baseline_source,
+        )
+    return IndexHistoryCompleteness(
+        status="INCOMPLETE",
+        message=f"应从 {base_text} 开始，本地仅从 {first_text} 开始",
+        local_first_trade_date=first_text,
+        latest_trade_date=latest_text,
+        history_rows=rows,
+        index_base_date=base_text,
+        baseline_source=baseline_source,
+    )
 
 
 def _holiday_dates(values: Iterable[date | pd.Timestamp | str]) -> set[pd.Timestamp]:

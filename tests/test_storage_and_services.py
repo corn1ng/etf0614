@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 
 from etf_trading.data.index_catalog import IndexCatalogEntry
@@ -364,3 +366,89 @@ def test_sqlite_store_persists_catalog_coverage_and_etf_mappings(tmp_path):
     assert catalog.iloc[0]["baseline_source"] == "unverified"
     assert coverage.iloc[0]["completeness_status"] == "BASELINE_UNVERIFIED"
     assert mappings.iloc[0]["is_tradable"] == 1
+
+
+class _PartialIndexHistoryProvider(_FakeEtfBatchProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.index_calls: list[tuple[object, object, object]] = []
+
+    def fetch_index_daily(self, index, start_date, end_date) -> pd.DataFrame:
+        self.index_calls.append((index, start_date, end_date))
+        index_code = getattr(index, "index_code", str(index))
+        return pd.DataFrame(
+            {
+                "index_code": [index_code, index_code],
+                "trade_date": pd.to_datetime(["2005-01-04", "2026-07-10"]),
+                "open": [100.0, 101.0],
+                "high": [101.0, 102.0],
+                "low": [99.0, 100.0],
+                "close": [100.5, 101.5],
+                "volume": [1000, 1100],
+                "amount": [2000, 2100],
+                "data_source": ["fake", "fake"],
+            }
+        )
+
+
+def test_ensure_index_history_marks_incomplete_when_verified_base_date_is_not_covered(tmp_path):
+    entry = IndexCatalogEntry(
+        index_code="801010",
+        name="农林牧渔",
+        market="A股",
+        category_level_1="申万一级行业",
+        category_level_2="一级行业",
+        index_type="行业",
+        pool="research",
+        index_base_date=date(1999, 12, 30),
+        baseline_source="official_methodology",
+        source_kind="shenwan",
+        provider_symbol="801010",
+    )
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    provider = _PartialIndexHistoryProvider()
+    service = InitializationService(store, provider=provider, parquet_store=ParquetStore(tmp_path / "parquet"))
+
+    service.sync_index_catalog([entry])
+    result = service.ensure_index_history("801010", "2026-07-10")
+
+    assert provider.index_calls == [(entry, date(1990, 1, 1), date(2026, 7, 10))]
+    assert result.status == "INITIALIZED"
+    assert result.completeness_status == "INCOMPLETE"
+    coverage = store.list_index_history_coverage().iloc[0]
+    assert coverage["local_first_trade_date"] == "2005-01-04"
+    assert coverage["completeness_message"] == "应从 1999-12-30 开始，本地仅从 2005-01-04 开始"
+
+
+def test_validate_index_sources_uses_only_latest_ten_calendar_days_and_persists_result(tmp_path):
+    entry = IndexCatalogEntry(
+        index_code="801010",
+        name="农林牧渔",
+        market="A股",
+        category_level_1="申万一级行业",
+        category_level_2="一级行业",
+        index_type="行业",
+        pool="research",
+        index_base_date=date(1999, 12, 30),
+        baseline_source="official_methodology",
+        source_kind="shenwan",
+        provider_symbol="801010",
+    )
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    provider = _PartialIndexHistoryProvider()
+    service = InitializationService(store, provider=provider, parquet_store=ParquetStore(tmp_path / "parquet"))
+
+    result = service.validate_index_sources("2026-07-10", [entry])
+
+    assert [(call[0].index_code, call[1], call[2]) for call in provider.index_calls] == [
+        ("801010", date(2026, 7, 1), date(2026, 7, 10))
+    ]
+    assert result.iloc[0]["status"] == "SUCCESS"
+    with store.connect() as conn:
+        state = pd.read_sql_query(
+            "SELECT status, last_success_trade_date FROM data_update_state "
+            "WHERE dataset='index_source_validation' AND asset_code='801010'",
+            conn,
+        ).iloc[0]
+    assert state["status"] == "SUCCESS"
+    assert state["last_success_trade_date"] == "2026-07-10"
