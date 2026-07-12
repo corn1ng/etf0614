@@ -4,6 +4,15 @@ Use this file as the project-level memory for future Codex tasks. Read it at the
 
 Keep entries concise and reusable. Prefer lessons, constraints, verification notes, and project-specific pitfalls over a raw activity log.
 
+## 2026-07-12 - Add durable index atomic snapshot maintenance task
+
+- Summary: Added a persisted, local-only maintenance runner and `数据维护 -> 指数目录与完整性` entry point for rebuilding index atomic indicators. The task records per-index progress, published snapshot metadata, and its result so it restores after a page reload.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-maintenance-full` passed (318 tests).
+- Watch out next time:
+  - Keep index atomic rebuilds local-only: use persisted catalogue/coverage plus Parquet histories; never construct an initialization service, provider, or page-time builder.
+  - Pass the maintenance task ID into the atomic writer and only mark the run successful after its three-file snapshot publication succeeds.
+  - Progress callbacks belong after each index's local calculation, so a restart can distinguish an interrupted rebuild from a completed snapshot.
+
 ## 2026-07-12 - Harden index atomic snapshot publication
 
 - Summary: Added a process-local read/write lock plus a backup-and-rollback publish protocol for the three index atomic snapshot files. Coverage metadata is now required and verified independently before a snapshot can be ready.

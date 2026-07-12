@@ -49,6 +49,12 @@ def test_nicegui_layout_exports_shell_renderer():
     assert callable(render_shell)
 
 
+def test_index_atomic_snapshot_maintenance_runner_is_importable():
+    from etf_trading.nicegui_app.maintenance_tasks import IndexAtomicSnapshotMaintenanceRunner
+
+    assert callable(IndexAtomicSnapshotMaintenanceRunner)
+
+
 def test_nicegui_run_sets_longer_connection_timeouts(monkeypatch):
     from etf_trading.nicegui_app import main
 

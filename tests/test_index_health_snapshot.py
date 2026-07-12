@@ -92,6 +92,23 @@ def test_build_index_atomic_snapshot_calculates_price_ma_cross_range_return_and_
     )
 
 
+def test_build_index_atomic_snapshot_reports_progress_after_each_local_index(tmp_path):
+    store = _store_with_index_prices(tmp_path, "000300", _price_history(260))
+    store.write_index_prices("000905", _price_history(260).assign(index_code="000905"))
+    progress = []
+
+    build_index_atomic_snapshot(
+        store,
+        (_definition("000300"), _definition("000905")),
+        on_progress=progress.append,
+    )
+
+    assert [(item.done, item.total, item.index_code) for item in progress] == [
+        (1, 2, "000300"),
+        (2, 2, "000905"),
+    ]
+
+
 def test_cross_is_true_only_when_current_and_previous_day_switch_sides(tmp_path):
     store = _store_with_index_prices(tmp_path, "000300", _crossing_history())
 

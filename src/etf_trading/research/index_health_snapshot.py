@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -90,6 +91,15 @@ _METRIC_SPECS = (
 )
 
 
+@dataclass(frozen=True)
+class IndexAtomicSnapshotProgress:
+    """One completed local index in an atomic snapshot build."""
+
+    done: int
+    total: int
+    index_code: str
+
+
 def build_index_atomic_snapshot(
     parquet_store,
     definitions: Sequence[IndexDefinition] = DEFAULT_INDEXES,
@@ -97,6 +107,7 @@ def build_index_atomic_snapshot(
     coverage: pd.DataFrame | None = None,
     as_of_date: pd.Timestamp | str | None = None,
     min_history_rows: int = 252,
+    on_progress: Callable[[IndexAtomicSnapshotProgress], None] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return summary and long-form local price indicators for each index.
 
@@ -121,6 +132,14 @@ def build_index_atomic_snapshot(
                 summary, details = _snapshot_from_prices(identity, prices, max_date, min_history_rows)
         summary_rows.append(summary)
         detail_rows.extend(details)
+        if on_progress is not None:
+            on_progress(
+                IndexAtomicSnapshotProgress(
+                    done=catalog_order + 1,
+                    total=len(definitions),
+                    index_code=definition.index_code,
+                )
+            )
 
     summary = pd.DataFrame(summary_rows, columns=INDEX_ATOMIC_SUMMARY_COLUMNS)
     for column in ("close_above_ma_20", "close_above_ma_60", "close_above_ma_120", "close_above_ma_250"):
