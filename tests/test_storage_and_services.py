@@ -417,7 +417,7 @@ def test_ensure_index_history_marks_incomplete_when_verified_base_date_is_not_co
     assert result.completeness_status == "INCOMPLETE"
     coverage = store.list_index_history_coverage().iloc[0]
     assert coverage["local_first_trade_date"] == "2005-01-04"
-    assert coverage["completeness_message"] == "应从 1999-12-30 开始，本地仅从 2005-01-04 开始"
+    assert coverage["completeness_message"] == "应从 1999-12-30 开始，当前仅有 2005-01-04 起的数据。"
 
 
 def test_validate_index_sources_uses_only_latest_ten_calendar_days_and_persists_result(tmp_path):

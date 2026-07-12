@@ -410,3 +410,10 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Do not reuse `index_health_snapshot*` caches because their schema contains valuation and trend-era fields.
   - Treat `stale`, `missing`, and `failed` snapshots as persistent, user-visible data-quality states; only the maintenance task may write a replacement snapshot.
   - Keep atomic facts independent: missing amount invalidates only volume metrics, and a moving-average crossing is never a trading conclusion.
+
+## 2026-07-12 - Restore index-worktree baseline
+
+- Summary: Synced the verified-base-date coverage assertion to the current Chinese completeness message; no production behavior changed.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-workbench-baseline-green` passed with 298 tests.
+- Watch out next time:
+  - When changing user-facing data-quality copy, update direct storage assertions in the same change.
