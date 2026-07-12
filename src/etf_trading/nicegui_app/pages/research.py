@@ -534,6 +534,10 @@ def _index_pool_labels(universe: pd.DataFrame) -> list[str]:
     if universe.empty or "is_top_sample" not in universe:
         return []
     top = universe[universe["is_top_sample"].fillna(False).astype(bool)].copy()
+    if "pool" in top:
+        top = top[top["pool"].fillna("").astype(str) == "core"]
+    if "is_tradable" in top:
+        top = top[top["is_tradable"].fillna(False).astype(bool)]
     if top.empty:
         return []
     counts = top.groupby(["index_code", "index_name"], as_index=False).agg(etf_count=("etf_code", "nunique"))

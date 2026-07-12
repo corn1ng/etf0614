@@ -60,11 +60,30 @@ def _render_overview(snapshot: PlatformSnapshot) -> None:
 
 
 def _render_index_reference(snapshot: PlatformSnapshot) -> None:
-    rows = snapshot.index_summary.fillna("").to_dict("records") if not snapshot.index_summary.empty else []
-    if rows:
+    frame = snapshot.index_summary.copy()
+    if not frame.empty:
         ui.label(index_data_status_notice(snapshot)).classes("workbench-chart-note")
-        ui.label("这里只看趋势过滤：大趋势 / 中趋势 / 小趋势对齐时，才允许新开仓。").classes("workbench-chart-note")
-        render_table(rows, row_key="index_code", compact=True, ui_module=ui).classes("workbench-data-table workbench-data-table--compact")
+        ui.label("核心池同时满足历史完整、数据新鲜和趋势条件时，才允许新开仓；研究池只供观察。").classes("workbench-chart-note")
+
+        def render_pool(pool: str) -> None:
+            table_area.clear()
+            data = frame.copy()
+            if "pool" in data:
+                data = data[data["pool"].fillna("").astype(str) == pool]
+            if pool == "research" and "allows_new_position" in data:
+                data["allows_new_position"] = False
+            rows = data.fillna("").to_dict("records")
+            with table_area:
+                if rows:
+                    render_table(rows, row_key="index_code", compact=True, ui_module=ui).classes("workbench-data-table workbench-data-table--compact")
+                else:
+                    empty_state("当前池没有指数", "请先在数据维护页同步目录并完成相应数据任务。")
+
+        if "pool" in frame:
+            toggle = ui.toggle({"core": "核心交易池", "research": "研究池"}, value="core").props("dense")
+            toggle.on_value_change(lambda event: render_pool(str(event.value)))
+        table_area = ui.column().classes("w-full")
+        render_pool("core")
     else:
         empty_state("暂无指数买卖参考", "先补齐指数历史。")
     _render_audit("market")

@@ -449,12 +449,15 @@ def code_from_option(option: str | None) -> str:
     return str(option).strip().split(maxsplit=1)[0]
 
 
-def index_choice_options(index_summary: pd.DataFrame) -> list[str]:
+def index_choice_options(index_summary: pd.DataFrame, *, include_research: bool = False) -> list[str]:
     if index_summary.empty:
         return []
 
+    frame = index_summary
+    if "pool" in frame and not include_research:
+        frame = frame[frame["pool"].fillna("").astype(str) == "core"]
     options: list[str] = []
-    for row in index_summary.fillna("").to_dict("records"):
+    for row in frame.fillna("").to_dict("records"):
         code = str(row.get("index_code", "")).strip()
         if not code:
             continue

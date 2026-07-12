@@ -265,6 +265,21 @@ def test_choice_options_keep_codes_readable_for_chart_selectors():
     assert code_from_option(None) == ""
 
 
+def test_index_choice_options_default_to_core_pool_and_can_include_research():
+    frame = pd.DataFrame(
+        [
+            {"index_code": "000300", "index_name": "沪深300", "pool": "core"},
+            {"index_code": "801010", "index_name": "农林牧渔", "pool": "research"},
+        ]
+    )
+
+    assert index_choice_options(frame) == ["000300 沪深300 · 观察"]
+    assert index_choice_options(frame, include_research=True) == [
+        "000300 沪深300 · 观察",
+        "801010 农林牧渔 · 观察",
+    ]
+
+
 def test_etf_search_filters_by_query_category_and_limit():
     rows = etf_overview_rows(_snapshot())
 

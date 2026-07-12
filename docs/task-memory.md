@@ -357,3 +357,12 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Never infer history completeness only from a recent latest date; compare local earliest date with the configured index base date.
   - Keep the static catalog versioned and validate it live; source enumeration alone is not an investor-suitable index universe.
   - Treat ETF mapping as a separate gate from index history availability so research-only indexes cannot leak into strategy inputs.
+
+## 2026-07-12 - Expand index universe and data-maintenance workflows
+
+- Summary: Added a 210-entry A-share/Hong Kong index catalog (100 core, 80 research, 30 reserve), source-aware CSI/Shenwan/Hong Kong history pulls, strict base-date completeness assessment, core-only ETF research samples, and five resumable index-maintenance operations. Market pages now default to the core pool and explicitly label the research pool as observation-only.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-universe-full-final` passed with 294 tests. Browser QA on `http://127.0.0.1:8504/page/market/指数买卖参考` verified the core/research toggle, the research-only state, no console errors, and no horizontal overflow at 1440px or 390px; the temporary QA server was stopped afterward.
+- Watch out next time:
+  - `IndexCatalogEntry.baseline_source == "unverified"` must always stay `BASELINE_UNVERIFIED`; never turn a long provider history into an unverified "历史完整" claim.
+  - Keep page control containers before their dynamic table containers in NiceGUI; otherwise controls can be rendered below a long table.
+  - Add new task, pool, and completeness codes to `VALUE_LABELS` and validate both persisted task summaries and table output in Chinese.
