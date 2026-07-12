@@ -20,6 +20,7 @@ from etf_trading.nicegui_app.state import (
 from etf_trading.nicegui_app.view_models import (
     IndexAtomicFilters,
     INDEX_ATOMIC_DATA_SOURCE_LABELS,
+    INDEX_ATOMIC_DISPLAY_COLUMNS,
     PlatformSnapshot,
     build_index_atomic_rows,
     code_from_option,
@@ -152,7 +153,7 @@ def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
         counts = _snapshot_status_counts(result.summary)
         with status_area:
             with ui.row().classes("w-full items-center gap-2 flex-wrap"):
-                ui.label(f"快照状态：{_SNAPSHOT_STATUS_LABELS.get(result.status, result.status)}").classes("index-atomic-status")
+                ui.label(f"快照状态：{_status_text(result.status, '未知状态')}").classes("index-atomic-status")
                 ui.label(f"生成时间：{generated_at}").classes("index-atomic-status")
                 ui.label(f"当前输入最新日期：{current_date}").classes("index-atomic-status")
                 ui.label(f"指标状态计数：{counts}").classes("index-atomic-status")
@@ -177,9 +178,10 @@ def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
             result.summary,
             IndexAtomicFilters(pool=str(pool.value or "core"), query=str(query.value or "")),
         )
+        table_rows = _index_atomic_table_rows(rows)
         with table_area:
-            if rows:
-                render_table(rows, row_key="index_code", pagination=15, compact=True, ui_module=ui).classes(
+            if table_rows:
+                render_table(table_rows, row_key="index_code", pagination=15, compact=True, ui_module=ui).classes(
                     "workbench-data-table workbench-data-table--compact w-full"
                 ).on("rowClick", lambda event: _open_index_atomic_dialog(holder["result"], _event_row_code(event, "index_code")))
             else:
@@ -201,6 +203,17 @@ def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
     render_alert()
     refresh_table()
     _render_audit("market")
+
+
+def _index_atomic_table_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Keep the table contract fixed while retaining the hidden click key."""
+
+    result: list[dict[str, object]] = []
+    for row in rows:
+        projected = {column: row.get(column, "") for column in INDEX_ATOMIC_DISPLAY_COLUMNS}
+        projected["index_code"] = row.get("index_code", "")
+        result.append(projected)
+    return result
 
 
 def _open_index_atomic_dialog(result, index_code: str) -> None:
@@ -240,14 +253,14 @@ def _key_metric_rows(groups, summary: dict[str, object]) -> list[tuple[str, str,
             high = items_by_key.get("range_20_high")
             low = items_by_key.get("range_20_low")
             value = _range_20_text(high.value if high is not None else "", low.value if low is not None else "")
-            status = high.status if high is not None else (low.status if low is not None else "")
+            status = _status_text(high.status if high is not None else (low.status if low is not None else ""), "数据不足")
         elif key == "data_status":
             value = _status_text(summary.get("snapshot_status"), "数据不足")
             status = ""
         else:
             item = items_by_key.get(key)
-            value = item.value if item is not None else "数据不足"
-            status = item.status if item is not None else ""
+            value = _detail_metric_value(item) if item is not None else "数据不足"
+            status = _status_text(item.status, "数据不足") if item is not None else "数据不足"
         rows.append((label, value, status))
     return rows
 
@@ -268,7 +281,7 @@ def _render_all_atomic_groups(groups) -> None:
             with ui.element("section").classes("index-atomic-detail-group"):
                 ui.label(group.title).classes("index-atomic-detail-title")
                 if group.items:
-                    _render_metric_grid([(item.label, item.value, item.status) for item in group.items])
+                    _render_metric_grid(_detail_metric_rows(group.items))
                 else:
                     ui.label("该组没有存储指标。").classes("text-sm text-slate-500")
 
@@ -285,7 +298,7 @@ def _render_snapshot_quality(result, summary: dict[str, object]) -> None:
     _render_metric_grid(
         [
             ("快照生成时间", _datetime_text(result.generated_at), ""),
-            ("快照状态", _SNAPSHOT_STATUS_LABELS.get(result.status, result.status), ""),
+            ("快照状态", _status_text(result.status, "未知状态"), ""),
             ("原始历史状态", _status_text(summary.get("history_status"), "暂无"), ""),
             ("历史行数", _text(summary.get("history_rows"), "0"), ""),
             ("历史覆盖", coverage, ""),
@@ -295,14 +308,30 @@ def _render_snapshot_quality(result, summary: dict[str, object]) -> None:
     )
 
 
+def _detail_metric_rows(items) -> list[tuple[str, str, str]]:
+    return [
+        (item.label, _detail_metric_value(item), _status_text(item.status, "数据不足"))
+        for item in items
+    ]
+
+
+def _detail_metric_value(item) -> str:
+    if item.metric_key == "data_source":
+        return _data_source_text(item.value)
+    if item.metric_key in {"history_status", "history_completeness_status", "snapshot_status"}:
+        return _status_text(item.value, "数据不足")
+    return _text(item.value, "数据不足")
+
+
 def _render_metric_grid(rows: list[tuple[str, str, str]]) -> None:
     with ui.element("div").classes("index-atomic-detail-grid"):
         for label, value, status in rows:
             with ui.element("div").classes("index-atomic-detail-item"):
                 ui.label(label).classes("index-atomic-detail-label")
                 ui.label(value).classes("index-atomic-detail-value")
-                if status:
-                    ui.label(status).classes("index-atomic-detail-status")
+                display_status = _status_text(status, "")
+                if display_status:
+                    ui.label(display_status).classes("index-atomic-detail-status")
 
 
 def _summary_row(summary: pd.DataFrame, index_code: str) -> dict[str, object]:
@@ -333,7 +362,7 @@ def _snapshot_status_counts(summary: pd.DataFrame) -> str:
     counts = summary["snapshot_status"].fillna("").astype(str).value_counts()
     if counts.empty:
         return "暂无"
-    return "、".join(f"{_SNAPSHOT_STATUS_LABELS.get(key, key)} {count}" for key, count in counts.items())
+    return "、".join(f"{_status_text(key, '未知状态')} {count}" for key, count in counts.items())
 
 
 def _datetime_text(value: datetime | None) -> str:
@@ -348,13 +377,25 @@ def _text(value: object, fallback: str) -> str:
 
 
 def _status_text(value: object, fallback: str) -> str:
-    text = _text(value, fallback)
-    return _SNAPSHOT_STATUS_LABELS.get(text, text)
+    text = _text(value, "")
+    if not text:
+        return fallback
+    if text in _SNAPSHOT_STATUS_LABELS:
+        return _SNAPSHOT_STATUS_LABELS[text]
+    if text in _SNAPSHOT_STATUS_LABELS.values() or text in {"数据不足", "暂无"}:
+        return text
+    return "未知状态"
 
 
 def _data_source_text(value: object) -> str:
-    text = _text(value, "暂无")
-    return INDEX_ATOMIC_DATA_SOURCE_LABELS.get(text, text)
+    text = _text(value, "")
+    if not text:
+        return "数据不足"
+    if text in INDEX_ATOMIC_DATA_SOURCE_LABELS:
+        return INDEX_ATOMIC_DATA_SOURCE_LABELS[text]
+    if text in INDEX_ATOMIC_DATA_SOURCE_LABELS.values():
+        return text
+    return "未知数据源"
 
 
 def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
@@ -371,17 +412,22 @@ def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
             if not selected:
                 empty_state("暂无指数K线", "请选择一个指数。")
                 return
+
             payload = index_chart_payload(parquet_store, selected)
             if not payload[0]["series"]:
                 empty_state("暂无指数K线", "先补齐该指数历史。")
                 return
+
             render_ranged_lightweight_chart(payload, element_id=f"index-chart-{selected}", title=f"指数：{selected}")
 
     with ui.row().classes("workbench-chart-selector w-full"):
-        ui.select(options, value=options[0], label="选择指数").props("dense outlined").classes("w-96").on_value_change(
-            lambda event: draw_chart(event.value)
-        )
-        ui.label("指数只做市场状态判断，ETF交易载体在ETF数据页处理。").classes("workbench-chart-note")
+        ui.select(
+            options,
+            value=options[0],
+            label="选择指数",
+            on_change=lambda event: draw_chart(event.value),
+        ).props("dense outlined").classes("w-96")
+        ui.label("指数只做市场状态判断，ETF 交易载体在 ETF 数据页处理。").classes("workbench-chart-note")
     chart_area = ui.column().classes("w-full gap-2")
     draw_chart(options[0])
     _render_audit("market")
@@ -389,16 +435,16 @@ def _render_index_chart(snapshot: PlatformSnapshot, parquet_store) -> None:
 
 def _metric(label: str, value: object, detail: str) -> None:
     with ui.column().classes("workbench-metric"):
-        ui.label(str(label)).classes("workbench-metric-label")
+        ui.label(label).classes("workbench-metric-label")
         ui.label(str(value)).classes("workbench-metric-value")
-        ui.label(str(detail)).classes("workbench-metric-detail")
+        ui.label(detail).classes("text-xs text-slate-400")
 
 
 def _event_row_code(event, key: str) -> str:
-    args = getattr(event, "args", event)
+    args = getattr(event, "args", None)
     if isinstance(args, dict):
         row = args.get("row", args)
-    elif isinstance(args, (list, tuple)) and len(args) > 1 and isinstance(args[1], dict):
+    elif isinstance(args, list) and len(args) >= 2 and isinstance(args[1], dict):
         row = args[1]
     else:
         row = {}
@@ -411,6 +457,6 @@ def _render_audit(page_slug: str) -> None:
     expansion = getattr(ui, "expansion", None)
     if not callable(expansion):
         return
-    with expansion("页面审计", icon="fact_check").classes("w-full"):
+    with expansion("本页 UI 修正点", icon="rule").classes("w-full text-sm"):
         for item in findings:
-            ui.label(f"{item.problem} → {item.fix}").classes("text-xs text-slate-500")
+            ui.label(f"{item.problem} -> {item.fix}").classes("text-xs text-slate-500")

@@ -22,6 +22,14 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - A page reload may only read the snapshot again. Keep rebuild actions in data maintenance and retain the last successful rows when the snapshot is stale.
   - Validate the missing, stale, and corrupt-meta failed states with local fixtures; none may fabricate table rows.
 
+## 2026-07-12 - Close atomic workbench review findings
+
+- Summary: Sanitized every Task 5 status and source display boundary so unknown values render as `未知状态` or `未知数据源`; projected the index workbench table to its exact eight visible Task 4 columns while retaining the hidden row key. Restored the unrelated index-chart event binding, metric, event-normalization, and audit-copy changes to the pre-Task-5 baseline.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-atomic-market-review-full` passed (334 tests). Seeded regular Playwright asserted the exact eight headers, hidden `index_code`, no visible `computed` or unknown provider code, and no console errors/warnings; evidence is `C:\Users\cjj\AppData\Local\Temp\index-atomic-market-browser-seeded\review-result.json`.
+- Watch out next time:
+  - A view-model formatter may use a raw-code fallback. Page render boundaries still need safe Chinese fallbacks for unknown status and source codes.
+  - Generic table inference is insufficient for a fixed UX contract; explicitly project display fields before passing rows to the shared table helper.
+
 ## 2026-07-12 - Add durable index atomic snapshot maintenance task
 
 - Summary: Added a persisted, local-only maintenance runner and `数据维护 -> 指数目录与完整性` entry point for rebuilding index atomic indicators. The task records per-index progress, published snapshot metadata, and its result so it restores after a page reload.

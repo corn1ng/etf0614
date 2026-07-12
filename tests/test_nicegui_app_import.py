@@ -71,6 +71,70 @@ def test_market_key_metrics_use_stored_atoms_for_range_and_snapshot_data_status(
     assert rows["数据状态"] == "已计算"
 
 
+def test_market_atomic_presentation_uses_chinese_known_and_unknown_fallbacks():
+    from etf_trading.nicegui_app.pages import market
+    from etf_trading.nicegui_app.view_models import IndexAtomicDetailItem
+
+    items = [
+        IndexAtomicDetailItem("close", "收盘价", "1,001.00", "computed", "测试", "2026-07-12", "300", "akshare_zh_em"),
+        IndexAtomicDetailItem("data_source", "数据源", "unknown_provider", "mystery_status", "测试", "2026-07-12", "300", "unknown_provider"),
+    ]
+
+    rows = {label: (value, status) for label, value, status in market._detail_metric_rows(items)}
+
+    assert market._status_text("computed", "") == "已计算"
+    assert market._status_text("mystery_status", "") == "未知状态"
+    assert market._data_source_text("akshare_zh_em") == "AkShare（东方财富指数行情）"
+    assert market._data_source_text("unknown_provider") == "未知数据源"
+    assert rows["收盘价"][1] == "已计算"
+    assert rows["数据源"] == ("未知数据源", "未知状态")
+
+
+def test_market_atomic_table_projection_keeps_exactly_eight_visible_columns_and_hidden_row_key():
+    from etf_trading.nicegui_app.components.tables import table_columns
+    from etf_trading.nicegui_app.pages import market
+
+    rows = market._index_atomic_table_rows(
+        [
+            {
+                "index_code": "000300",
+                "index": "000300 沪深300",
+                "category": "A股宽基",
+                "latest_date": "2026-07-12",
+                "close_vs_ma_20": "高于 1.0%",
+                "close_vs_ma_60": "高于 2.0%",
+                "range_20": "区间内",
+                "return_20": "1.2%",
+                "data_status": "已计算",
+                "unexpected": "不得显示",
+            }
+        ]
+    )
+
+    assert rows[0]["index_code"] == "000300"
+    assert list(rows[0]) == [
+        "index",
+        "category",
+        "latest_date",
+        "close_vs_ma_20",
+        "close_vs_ma_60",
+        "range_20",
+        "return_20",
+        "data_status",
+        "index_code",
+    ]
+    assert [column["label"] for column in table_columns(rows, compact=True)] == [
+        "指数",
+        "分类",
+        "最新日期",
+        "相对20日线",
+        "相对60日线",
+        "20日区间",
+        "20日收益",
+        "数据状态",
+    ]
+
+
 def test_index_trend_summary_exposes_chinese_data_status_and_trading_day_lag():
     from etf_trading.data.indexes import IndexDefinition
     from etf_trading.nicegui_app.state import build_index_trend_summary
