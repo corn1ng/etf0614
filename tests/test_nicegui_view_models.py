@@ -280,6 +280,30 @@ def test_index_atomic_overview_hides_computed_nonfinite_range_inputs(metric_key)
     assert overview.range_position.reason == "数据不足"
 
 
+@pytest.mark.parametrize("metric_key", ["close", "ma_60"])
+def test_index_atomic_overview_hides_trend_for_computed_nonfinite_close_or_ma(metric_key):
+    summary = {
+        "index_code": "000300", "snapshot_status": "computed",
+        "history_completeness_status": "COMPLETE", "history_rows": 260,
+        "latest_date": "2026-07-11", "data_source": "akshare_zh_em",
+    }
+    values = {"close": 100.0, "ma_20": 102.0, "ma_60": 98.0, "ma_120": 96.0, "ma_250": 90.0}
+    values[metric_key] = float("nan")
+    details = pd.DataFrame([
+        _overview_detail("close", values["close"]),
+        _overview_detail("ma_20", values["ma_20"]), _overview_detail("ma_60", values["ma_60"]),
+        _overview_detail("ma_120", values["ma_120"]), _overview_detail("ma_250", values["ma_250"]),
+    ])
+
+    overview = index_atomic_overview(summary, details, "000300")
+
+    assert overview is not None
+    broken_metric = overview.trend.close if metric_key == "close" else overview.trend.levels[1]
+    assert broken_metric.status == "数据不足"
+    assert broken_metric.reason == "快照中该原子指标不是有限数值"
+    assert overview.trend.visible is False
+
+
 def test_status_metrics_are_dense_and_human_readable():
     metrics = status_metrics(_snapshot())
 
