@@ -275,7 +275,32 @@ def _trend_relation_text(relation: IndexAtomicOverviewMetric) -> str:
 
 
 def _trend_ladder_marker_rows(trend: IndexAtomicTrendOverview) -> tuple[tuple[str, float], ...]:
-    return tuple((marker.label, marker.position * 100) for marker in trend.markers)
+    return tuple((marker.label, (1 - marker.position) * 100) for marker in trend.markers)
+
+
+def _trend_ladder_marker_layout(trend: IndexAtomicTrendOverview) -> tuple[tuple[str, float], ...]:
+    ladder_height = 124.0
+    marker_height = 14.0
+    minimum_gap = 15.0
+    maximum_top = ladder_height - marker_height
+    desired = [
+        (index, label, min(max(top / 100 * ladder_height - marker_height / 2, 0.0), maximum_top))
+        for index, (label, top) in enumerate(_trend_ladder_marker_rows(trend))
+    ]
+    ordered = sorted(desired, key=lambda item: (item[2], item[0]))
+    displayed: list[float] = []
+    for _index, _label, top in ordered:
+        displayed.append(max(top, displayed[-1] + minimum_gap if displayed else 0.0))
+    if displayed and displayed[-1] > maximum_top:
+        displayed[-1] = maximum_top
+        for index in range(len(displayed) - 2, -1, -1):
+            displayed[index] = min(displayed[index], displayed[index + 1] - minimum_gap)
+    top_by_index = {item[0]: round(top, 3) for item, top in zip(ordered, displayed)}
+    return tuple((label, top_by_index[index]) for index, label, _top in desired)
+
+
+def _trend_ladder_marker_style(top: float) -> str:
+    return "top: {}px".format(top)
 
 
 def _render_trend_card(trend: IndexAtomicTrendOverview) -> None:
@@ -289,8 +314,8 @@ def _render_trend_card(trend: IndexAtomicTrendOverview) -> None:
         ui.label("收盘：{}".format(trend.close.value)).classes("index-atomic-card-value")
         with ui.element("div").classes("index-atomic-ma-ladder"):
             marker_values = {"收盘": trend.close.value, **{level.label: level.value for level in trend.levels}}
-            for label, bottom in _trend_ladder_marker_rows(trend):
-                with ui.element("div").classes("index-atomic-ma-marker").style("bottom: {}%".format(bottom)):
+            for label, top in _trend_ladder_marker_layout(trend):
+                with ui.element("div").classes("index-atomic-ma-marker").style(_trend_ladder_marker_style(top)):
                     ui.label(label).classes("index-atomic-ma-marker-label")
                     ui.label(marker_values[label]).classes("index-atomic-ma-marker-value")
         with ui.element("div").classes("index-atomic-ma-relations"):

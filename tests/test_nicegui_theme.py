@@ -79,6 +79,11 @@ def test_theme_contains_positioned_index_atomic_ma_ladder_markers():
     ]:
         assert css_class in WORKBENCH_CSS
     assert "bottom: 0;" in WORKBENCH_CSS
+    ladder_rule = WORKBENCH_CSS.split(".index-atomic-ma-ladder {", 1)[1].split("}", 1)[0]
+    assert "\n  height: 124px;" in ladder_rule
+    marker_rule = WORKBENCH_CSS.split(".index-atomic-ma-marker {", 1)[1].split("}", 1)[0]
+    assert "\n  height: 14px;" in marker_rule
+    assert "transform:" not in marker_rule
     assert ".index-atomic-ma-marker-label { position: relative; z-index: 1; }" in WORKBENCH_CSS
 
 

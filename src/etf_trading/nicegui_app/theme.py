@@ -656,8 +656,9 @@ body {
 }
 .index-atomic-ma-ladder {
   position: relative;
+  height: 124px;
   min-height: 124px;
-  padding: 8px 0;
+  padding: 0;
   overflow: hidden;
 }
 .index-atomic-ma-ladder::before {
@@ -673,12 +674,12 @@ body {
   position: absolute;
   left: 0;
   right: 0;
+  height: 14px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 0 4px;
-  transform: translateY(50%);
   color: #334155;
   font-size: 11px;
   line-height: 14px;

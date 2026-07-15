@@ -587,3 +587,11 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Do not call `load_snapshot_cached()` from generic shell rendering before deciding which page section is active; page routes must declare whether they need full, maintenance-only, or atomic-index data.
   - Do not render full ETF/master lists as select options on first paint; use searchable inputs or bounded filtered results.
   - Legacy maintenance task results can be large and old; display-time upgrades must cache static catalog data and preview rows instead of reparsing or rendering everything.
+
+## 2026-07-14 - Keep index atomic ladder labels readable
+
+- Summary: Fixed the index atomic overview ladder so endpoint markers stay inside the 124px scale and clustered moving-average labels receive a collision-safe 15px display gap while preserving their real value order and printed values.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\etf0614-index-dialog-layout-full-20260714` passed with 430 tests. Chrome DevTools validation on `http://127.0.0.1:8503/page/market/指数体检` opened the 000300 detail dialog at 1440×900 and 390×844; all five markers stayed within the ladder, marker overlap count was zero, the overview used 4/1 columns respectively, and no console error or warning remained.
+- Watch out next time:
+  - A normalized market value is not directly usable as an absolutely positioned text row: account for half the label height at 0%/100% and spread labels whose pixel distance is smaller than their line height.
+  - Collision avoidance may adjust display spacing only; keep the actual stored values, ordering, and factual relation text unchanged.

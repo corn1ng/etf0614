@@ -110,10 +110,54 @@ def test_market_trend_ladder_rendering_uses_named_normalized_markers():
         levels=(metric,),
         relations=(metric,),
         visible=True,
-        markers=(IndexAtomicTrendMarker("收盘", 0.5), IndexAtomicTrendMarker("MA20", 0.75)),
+        markers=(
+            IndexAtomicTrendMarker("收盘", 0.5),
+            IndexAtomicTrendMarker("MA20", 0.75),
+            IndexAtomicTrendMarker("MA60", 0.0),
+            IndexAtomicTrendMarker("MA250", 1.0),
+        ),
     )
 
-    assert market._trend_ladder_marker_rows(trend) == (("收盘", 50.0), ("MA20", 75.0))
+    assert market._trend_ladder_marker_rows(trend) == (
+        ("收盘", 50.0),
+        ("MA20", 25.0),
+        ("MA60", 100.0),
+        ("MA250", 0.0),
+    )
+    assert market._trend_ladder_marker_style(0.0) == "top: 0.0px"
+    assert market._trend_ladder_marker_style(110.0) == "top: 110.0px"
+    source = Path("src/etf_trading/nicegui_app/pages/market.py").read_text(encoding="utf-8")
+    assert ".style(_trend_ladder_marker_style(top))" in source
+
+
+def test_market_trend_ladder_spreads_clustered_labels_inside_fixed_height():
+    from etf_trading.nicegui_app.pages import market
+    from etf_trading.nicegui_app.view_models import (
+        IndexAtomicOverviewMetric,
+        IndexAtomicTrendMarker,
+        IndexAtomicTrendOverview,
+    )
+
+    metric = IndexAtomicOverviewMetric("收盘价", "100.00", "已计算", "已从本地指数历史计算")
+    trend = IndexAtomicTrendOverview(
+        close=metric,
+        levels=(metric,),
+        relations=(metric,),
+        visible=True,
+        markers=(
+            IndexAtomicTrendMarker("MA20", 1.0),
+            IndexAtomicTrendMarker("MA60", 0.95),
+            IndexAtomicTrendMarker("MA120", 0.90),
+            IndexAtomicTrendMarker("MA250", 0.0),
+        ),
+    )
+
+    rows = market._trend_ladder_marker_layout(trend)
+    tops = sorted(top for _label, top in rows)
+
+    assert tops[0] >= 0.0
+    assert tops[-1] <= 110.0
+    assert all(right - left >= 15.0 for left, right in zip(tops, tops[1:]))
 
 
 def test_market_trend_helper_reports_unavailable_relation_reason():
