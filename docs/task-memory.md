@@ -1,5 +1,13 @@
 # Task Memory
 
+## 2026-07-19 - Implement Tushare-primary data access
+
+- Summary: Added a Tushare-first provider factory with explicit AkShare fallback, shared configuration/rate limiting/redaction, ETF/index/calendar adapters, durable NiceGUI completed-with-fallback warnings, CLI warning summaries, and an opt-in live proxy smoke test. Tokens remain environment-only.
+- Verification: Installed Tushare 1.4.29 into the workspace virtual environment; full offline suite passed 448 tests with one opt-in live test skipped because `TUSHARE_TOKEN` was unset.
+- Watch out next time:
+  - Set `TUSHARE_TOKEN` in the process environment before starting an app or running the live smoke test; do not put it in source, YAML, or shell history.
+  - Unsupported Shenwan and Hong Kong index routes intentionally report a known capability gap and use AkShare.
+
 ## 2026-07-19 - Plan Tushare-primary data access
 
 - Summary: Split the approved Tushare-primary integration into eight TDD deliverables covering runtime contracts, ETF data, index symbols/calendar, fallback/factory behavior, CLI wiring, NiceGUI persistence, Streamlit notices, and opt-in live verification.

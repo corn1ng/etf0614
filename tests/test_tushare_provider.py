@@ -3,14 +3,17 @@ import pytest
 import warnings
 
 from etf_trading.data.provider_runtime import ProviderCallError, ProviderCapabilityError, ProviderSettings
+from etf_trading.data.index_catalog import IndexCatalogEntry
 from etf_trading.data.providers.tushare_provider import TushareProvider
 
 
 class _FakePro:
     def __init__(self, responses):
         self.responses = responses
+        self.calls = []
 
     def query(self, api_name, fields="", **params):
+        self.calls.append((api_name, fields, params))
         response = self.responses[api_name]
         if isinstance(response, Exception):
             raise response
@@ -80,3 +83,13 @@ def test_index_daily_normalizes_tushare_prices():
     result = provider.fetch_index_daily("000300", "2026-07-01", "2026-07-01")
     assert result.loc[0, "index_code"] == "000300"
     assert result.loc[0, "amount"] == 2000.0
+
+
+def test_index_daily_uses_catalog_provider_symbol():
+    pro = _FakePro({"index_daily": pd.DataFrame({"ts_code": ["399001.SZ"], "trade_date": ["20260701"], "open": [1.0], "high": [1.1], "low": [0.9], "close": [1.0], "vol": [10.0], "amount": [2.0]})})
+    provider = TushareProvider(ProviderSettings(token="test", attempts=1), pro_client=pro)
+    entry = IndexCatalogEntry("custom", "custom", "A股", "broad", "broad", "broad", "core", None, "unverified", "csi", "399001.SZ")
+
+    provider.fetch_index_daily(entry, "2026-07-01", "2026-07-01")
+
+    assert pro.calls[-1][2]["ts_code"] == "399001.SZ"

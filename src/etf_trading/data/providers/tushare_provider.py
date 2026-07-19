@@ -136,8 +136,11 @@ class TushareProvider(DataProvider):
         index_code = str(getattr(code, "index_code", code))
         if getattr(code, "source_kind", "csi") in {"shenwan", "hk"}:
             raise ProviderCapabilityError(f"Tushare index route is unsupported: {index_code}")
-        suffix = "SZ" if index_code.startswith("399") else "SH"
-        raw = self._query("index_daily", fields="ts_code,trade_date,open,high,low,close,vol,amount", ts_code=f"{index_code}.{suffix}", start_date=_fmt_date(start_date), end_date=_fmt_date(end_date))
+        symbol = str(getattr(code, "provider_symbol", "")).strip()
+        if not symbol:
+            suffix = "SZ" if index_code.startswith("399") else "SH"
+            symbol = f"{index_code}.{suffix}"
+        raw = self._query("index_daily", fields="ts_code,trade_date,open,high,low,close,vol,amount", ts_code=symbol, start_date=_fmt_date(start_date), end_date=_fmt_date(end_date))
         frame = raw.copy()
         if frame.empty:
             return pd.DataFrame(columns=["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount", "data_source"])

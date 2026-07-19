@@ -65,6 +65,15 @@ class ProviderOperationResult(Generic[T]):
     notices: tuple[ProviderNotice, ...] = ()
 
 
+def consume_provider_notices(provider: object) -> tuple[ProviderNotice, ...]:
+    """Drain fallback notices from a provider when it exposes that capability."""
+
+    drain = getattr(provider, "drain_notices", None)
+    if not callable(drain):
+        return ()
+    return tuple(drain())
+
+
 def load_provider_settings(
     path: str | Path = DEFAULT_DATA_SOURCE_CONFIG,
     environ: Mapping[str, str] | None = None,

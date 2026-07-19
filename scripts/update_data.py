@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 from etf_trading.data.initialization import InitializationService
+from etf_trading.data.provider_runtime import consume_provider_notices, summarize_provider_notices
 from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 
@@ -11,9 +12,16 @@ def main() -> None:
     provider = create_data_provider()
     parquet = ParquetStore()
     service = InitializationService(store=store, provider=provider, parquet_store=parquet)
+
+    def report_fallbacks() -> None:
+        message = summarize_provider_notices(consume_provider_notices(provider))
+        if message:
+            print(f"WARNING: {message}")
+
     if store.list_etf_master().empty:
         master = service.initialize_master()
         print(f"Initialized ETF master: {len(master)} rows")
+        report_fallbacks()
     watchlist = store.list_watchlist()
     if watchlist.empty:
         print("Watchlist is empty; select ETFs in the Streamlit workbench first.")
@@ -28,8 +36,10 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             store.upsert_update_state("etf_daily_price", row.etf_code, None, status="FAILED", error_message=str(exc))
             print(f"{row.etf_code}: failed: {exc}")
+            report_fallbacks()
             continue
         print(f"{row.etf_code}: stored {len(frame)} rows")
+        report_fallbacks()
 
 
 if __name__ == "__main__":

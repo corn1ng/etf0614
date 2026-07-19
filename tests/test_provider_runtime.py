@@ -3,6 +3,7 @@ from pathlib import Path
 from etf_trading.data.provider_runtime import (
     ProviderNotice,
     RequestRateLimiter,
+    consume_provider_notices,
     load_provider_settings,
     redact_provider_text,
     summarize_provider_notices,
@@ -56,6 +57,16 @@ def test_notice_summary_aggregates_codes():
     assert summarize_provider_notices(notices, example_limit=1) == (
         "Tushare 异常后已使用 AkShare：2 次；示例：510300；原因：network"
     )
+
+
+def test_consume_provider_notices_uses_provider_drain_method():
+    notice = ProviderNotice("fetch_etf_daily", "510300", "network", "timeout", "akshare")
+
+    class Provider:
+        def drain_notices(self):
+            return (notice,)
+
+    assert consume_provider_notices(Provider()) == (notice,)
 
 
 def test_rate_limiter_waits_for_configured_interval():

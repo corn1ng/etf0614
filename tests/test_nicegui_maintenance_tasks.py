@@ -180,7 +180,7 @@ def test_atomic_snapshot_runner_uses_local_builder_without_initialization_servic
     )
     monkeypatch.setattr(
         maintenance_tasks,
-        "AkShareProvider",
+        "create_data_provider",
         lambda *args, **kwargs: pytest.fail("原子快照重建不能创建数据提供方"),
     )
     runner, store, _ = _atomic_runner(tmp_path, _successful_atomic_builder(), monkeypatch)
@@ -1132,6 +1132,31 @@ def test_task_status_from_persisted_running_run_shows_chinese_progress():
     assert status.progress_total == 49
     assert status.progress_detail == "930633 行情仍滞后"
     assert status.started_at == datetime(2026, 7, 12, 10, 0, 0)
+
+
+def test_task_status_from_run_preserves_provider_fallback_warning():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    run = MaintenanceTaskRun(
+        task_id=1,
+        task_type="index_history_batch",
+        state="warning",
+        progress_done=1,
+        progress_total=1,
+        progress_detail="",
+        result_json="[]",
+        error_message="Tushare 异常后已使用 AkShare：1 次",
+        started_at="2026-07-19 10:00:00",
+        finished_at="2026-07-19 10:01:00",
+        updated_at="2026-07-19 10:01:00",
+    )
+
+    status = maintenance._task_status_from_run(run)
+
+    assert status.state == "warning"
+    assert status.error == "Tushare 异常后已使用 AkShare：1 次"
+    assert maintenance._task_state_label("warning") == "已完成（已回退）"
+    assert maintenance._task_state_tone("warning") == "warning"
 
 
 def test_persisted_baseline_evidence_task_uses_the_dedicated_chinese_title():

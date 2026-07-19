@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from etf_trading.data.initialization import InitializationService
+from etf_trading.data.provider_runtime import consume_provider_notices, summarize_provider_notices
 from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.ui.data_coverage import expected_latest_trade_date
@@ -75,7 +76,17 @@ def main() -> None:
         "empty": 0,
         "failed": 0,
         "failures": [],
+        "provider_warnings": [],
     }
+
+    def report_fallbacks() -> None:
+        message = summarize_provider_notices(consume_provider_notices(provider))
+        if not message:
+            return
+        warnings = list(summary["provider_warnings"])
+        warnings.append(message)
+        summary["provider_warnings"] = warnings
+        print(f"WARNING: {message}", flush=True)
 
     def save_summary() -> None:
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -86,6 +97,7 @@ def main() -> None:
         try:
             refreshed = service.initialize_master()
             print(f"MASTER refreshed rows={len(refreshed)}", flush=True)
+            report_fallbacks()
         except Exception as exc:  # noqa: BLE001 - fall back to local master for this operational task
             print(f"MASTER refresh failed; using local master: {exc}", flush=True)
 
@@ -162,6 +174,7 @@ def main() -> None:
                 summary["failures"] = failures
                 store.upsert_update_state("etf_daily_price", code, None, status="FAILED", error_message=message[:1000])
                 print(f"FAILED {index}/{len(codes)} {code} error={message}", flush=True)
+            report_fallbacks()
             save_summary()
             time.sleep(args.sleep)
     finally:
