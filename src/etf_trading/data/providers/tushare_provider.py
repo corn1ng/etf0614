@@ -136,7 +136,20 @@ class TushareProvider(DataProvider):
         raise ProviderCapabilityError("index_daily is not implemented yet")
 
     def fetch_trade_calendar(self, market: str, start_date: date | str, end_date: date | str) -> pd.DataFrame:
-        raise ProviderCapabilityError("trade_cal is not implemented yet")
+        raw = self._query(
+            "trade_cal",
+            fields="exchange,cal_date,is_open,pretrade_date",
+            exchange=market,
+            start_date=_fmt_date(start_date),
+            end_date=_fmt_date(end_date),
+        )
+        frame = raw.rename(columns={"cal_date": "trade_date"}).copy()
+        if "exchange" not in frame:
+            frame["exchange"] = market
+        frame["market"] = frame["exchange"]
+        frame["trade_date"] = pd.to_datetime(frame.get("trade_date"), errors="coerce")
+        frame["is_open"] = pd.to_numeric(frame.get("is_open"), errors="coerce").fillna(0).astype(int)
+        return frame[["market", "trade_date", "is_open"]].dropna(subset=["trade_date"]).sort_values("trade_date").reset_index(drop=True)
 
 
 def _etf_ts_code(code: str) -> str:

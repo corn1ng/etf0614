@@ -1,14 +1,14 @@
 from datetime import date, timedelta
 
 from etf_trading.data.initialization import InitializationService
-from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 
 
 def main() -> None:
     store = SQLiteStore()
     store.initialize_schema()
-    provider = AkShareProvider()
+    provider = create_data_provider()
     parquet = ParquetStore()
     service = InitializationService(store=store, provider=provider, parquet_store=parquet)
     if store.list_etf_master().empty:

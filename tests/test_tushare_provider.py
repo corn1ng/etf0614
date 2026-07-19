@@ -67,3 +67,9 @@ def test_missing_adjustment_factor_fails():
     })
     with pytest.raises(ProviderCallError, match="adjustment factors"):
         provider.fetch_etf_daily("510300", "2026-07-01", "2026-07-01", adjust="qfq")
+
+
+def test_trade_calendar_normalizes_tushare_dates():
+    provider = _provider({"trade_cal": pd.DataFrame({"exchange": ["SSE"], "cal_date": ["20260701"], "is_open": [1]})})
+    result = provider.fetch_trade_calendar("SSE", "2026-07-01", "2026-07-01")
+    assert result["trade_date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-07-01"]

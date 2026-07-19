@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from etf_trading.data.initialization import InitializationService
-from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.ui.data_coverage import expected_latest_trade_date
 
@@ -53,7 +53,7 @@ def main() -> None:
     store = SQLiteStore()
     store.initialize_schema()
     parquet = ParquetStore()
-    provider = AkShareProvider()
+    provider = create_data_provider()
     service = InitializationService(store=store, provider=provider, parquet_store=parquet)
     summary_path = Path(args.summary)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
