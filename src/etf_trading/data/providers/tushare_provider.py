@@ -134,12 +134,13 @@ class TushareProvider(DataProvider):
 
     def fetch_index_daily(self, code, start_date, end_date) -> pd.DataFrame:
         index_code = str(getattr(code, "index_code", code))
-        if getattr(code, "source_kind", "csi") in {"shenwan", "hk"}:
-            raise ProviderCapabilityError(f"Tushare index route is unsupported: {index_code}")
         symbol = str(getattr(code, "provider_symbol", "")).strip()
         if not symbol:
             suffix = "SZ" if index_code.startswith("399") else "SH"
             symbol = f"{index_code}.{suffix}"
+        elif "." not in symbol:
+            suffix = "CSI" if symbol[:1].isalpha() else ("SZ" if index_code.startswith("399") else "SH")
+            symbol = f"{symbol}.{suffix}"
         raw = self._query("index_daily", fields="ts_code,trade_date,open,high,low,close,vol,amount", ts_code=symbol, start_date=_fmt_date(start_date), end_date=_fmt_date(end_date))
         frame = raw.copy()
         if frame.empty:

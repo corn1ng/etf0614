@@ -93,3 +93,13 @@ def test_index_daily_uses_catalog_provider_symbol():
     provider.fetch_index_daily(entry, "2026-07-01", "2026-07-01")
 
     assert pro.calls[-1][2]["ts_code"] == "399001.SZ"
+
+
+def test_index_daily_uses_csi_symbol_for_hk_catalog_entry():
+    pro = _FakePro({"index_daily": pd.DataFrame()})
+    provider = TushareProvider(ProviderSettings(token="test", attempts=1), pro_client=pro)
+    entry = IndexCatalogEntry("H30533", "China Internet 50", "HK", "theme", "theme", "broad", "core", None, "official", "hk", "H30533.CSI")
+
+    provider.fetch_index_daily(entry, "2026-07-01", "2026-07-01")
+
+    assert pro.calls[-1][2]["ts_code"] == "H30533.CSI"
