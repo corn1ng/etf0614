@@ -1,4 +1,9 @@
-default_provider: akshare
+primary_provider: tushare
+fallback_provider: akshare
+tushare:
+  api_url: https://ts.gyzcloud.top/api
+  requests_per_minute: 120
+  attempts: 3
 storage:
   sqlite_path: database/etf_system.sqlite
   parquet_root: data/parquet

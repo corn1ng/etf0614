@@ -14,7 +14,7 @@ import streamlit as st
 from etf_trading.backtest.engine import BacktestEngine
 from etf_trading.data.indexes import DEFAULT_INDEXES, INDEX_HISTORY_AUTO_START, IndexDefinition, get_index_definition, index_options
 from etf_trading.data.initialization import InitializationService
-from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.quality import (
     HistoryReadiness,
     allows_new_index_position,
@@ -2341,8 +2341,8 @@ def _research_job_manager() -> ResearchJobManager:
     return ResearchJobManager()
 
 
-def _provider() -> AkShareProvider:
-    return AkShareProvider()
+def _provider():
+    return create_data_provider()
 
 
 def _platform_status(store: SQLiteStore, parquet_store: ParquetStore) -> dict[str, object]:

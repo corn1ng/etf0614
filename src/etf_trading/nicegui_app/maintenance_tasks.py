@@ -12,7 +12,8 @@ import pandas as pd
 from nicegui import background_tasks, run
 
 from etf_trading.data.initialization import IndexHistoryProgress, InitializationService
-from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.provider_runtime import consume_provider_notices, summarize_provider_notices
+from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.storage import MaintenanceTaskRun, ParquetStore, SQLiteStore
 from etf_trading.nicegui_app.state import (
     _index_atomic_snapshot_source_signature,
@@ -92,8 +93,9 @@ class IndexCatalogMaintenanceRunner:
                     progress_detail=f"{progress.index_code} {progress.status}",
                 )
 
+            service = self.service_factory()
+
             def action() -> pd.DataFrame:
-                service = self.service_factory()
                 if task_type == "index_catalog_sync":
                     return service.sync_index_catalog()
                 if task_type == "index_source_validation":
@@ -113,13 +115,15 @@ class IndexCatalogMaintenanceRunner:
 
             result = await run.io_bound(action)
             result_json = result.to_json(orient="records", date_format="iso")
+            warning_message = summarize_provider_notices(consume_provider_notices(getattr(service, "provider", None)))
             task = self.store.get_maintenance_task_run(task_id)
             self.store.update_maintenance_task_run(
                 task_id,
-                state="success",
+                state="warning" if warning_message else "success",
                 progress_done=len(result),
                 progress_total=max(task.progress_total if task is not None else 0, len(result)),
                 result_json=result_json,
+                error_message=warning_message or None,
             )
             invalidate_snapshot_cache(self.store, self.parquet_store)
         except Exception as exc:  # noqa: BLE001 - persist failures for recovery after a page reload
@@ -143,7 +147,7 @@ class IndexCatalogMaintenanceRunner:
         return int(len(catalog))
 
     def _default_service(self) -> InitializationService:
-        return InitializationService(self.store, provider=AkShareProvider(), parquet_store=self.parquet_store)
+        return InitializationService(self.store, provider=create_data_provider(), parquet_store=self.parquet_store)
 
     def _task_key(self, task_type: str, task_id: int) -> tuple[str, str, int]:
         return (str(Path(self.store.db_path).resolve()), task_type, task_id)
@@ -356,18 +360,22 @@ class IndexHistoryBatchRunner:
                     progress_detail=f"{progress.index_code} {progress.status}",
                 )
 
+            service = self.service_factory()
+
             def action() -> pd.DataFrame:
-                return self.service_factory().ensure_all_index_history(through, on_progress=on_progress)
+                return service.ensure_all_index_history(through, on_progress=on_progress)
 
             result = await run.io_bound(action)
             result_json = result.to_json(orient="records", date_format="iso")
+            warning_message = summarize_provider_notices(consume_provider_notices(getattr(service, "provider", None)))
             task = self.store.get_maintenance_task_run(task_id)
             self.store.update_maintenance_task_run(
                 task_id,
-                state="success",
+                state="warning" if warning_message else "success",
                 progress_done=len(result),
                 progress_total=max(task.progress_total if task is not None else 0, len(result)),
                 result_json=result_json,
+                error_message=warning_message or None,
             )
             invalidate_snapshot_cache(self.store, self.parquet_store)
         except Exception as exc:  # noqa: BLE001 - persist the provider/storage failure for the next page session
@@ -376,7 +384,7 @@ class IndexHistoryBatchRunner:
             _ACTIVE_INDEX_TASK_KEYS.discard(self._task_key(task_id))
 
     def _default_service(self) -> InitializationService:
-        return InitializationService(self.store, provider=AkShareProvider(), parquet_store=self.parquet_store)
+        return InitializationService(self.store, provider=create_data_provider(), parquet_store=self.parquet_store)
 
     def _task_key(self, task_id: int) -> tuple[str, int]:
         return (str(Path(self.store.db_path).resolve()), task_id)

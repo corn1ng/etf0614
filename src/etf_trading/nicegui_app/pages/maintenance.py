@@ -13,7 +13,7 @@ from nicegui import run, ui
 from etf_trading.data.index_catalog import default_index_catalog
 from etf_trading.data.indexes import index_options
 from etf_trading.data.initialization import EtfHistoryProgress, InitializationService
-from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.quality import upgrade_legacy_index_history_message
 from etf_trading.data.storage import MaintenanceTaskRun
 from etf_trading.nicegui_app.components.alerts import empty_state
@@ -66,6 +66,7 @@ def _task_state_label(state: str) -> str:
         "idle": "空闲",
         "running": "运行中",
         "success": "成功",
+        "warning": "已完成（已回退）",
         "failed": "失败",
         "interrupted": "已中断",
         "cancelled": "取消",
@@ -77,6 +78,7 @@ def _task_state_tone(state: str) -> str:
         "idle": "neutral",
         "running": "info",
         "success": "success",
+        "warning": "warning",
         "failed": "danger",
         "interrupted": "warning",
         "cancelled": "warning",
@@ -788,7 +790,7 @@ def _service(store, parquet_store) -> InitializationService:
 def _service_with_provider(store, parquet_store) -> InitializationService:
     if store is None:
         raise ValueError("当前页面没有可用数据库连接")
-    return InitializationService(store=store, provider=AkShareProvider(), parquet_store=parquet_store)
+    return InitializationService(store=store, provider=create_data_provider(), parquet_store=parquet_store)
 
 
 def _render_audit() -> None:
