@@ -1,5 +1,13 @@
 # Task Memory
 
+## 2026-07-19 - Plan Tushare-primary data access
+
+- Summary: Split the approved Tushare-primary integration into eight TDD deliverables covering runtime contracts, ETF data, index symbols/calendar, fallback/factory behavior, CLI wiring, NiceGUI persistence, Streamlit notices, and opt-in live verification.
+- Verification: Plan self-review checks provider interfaces, QFQ semantics, durable warning state, secret handling, exact commands, and offline/live test separation.
+- Watch out next time:
+  - Complete provider boundaries before replacing application constructors so every entry point receives the same tested behavior.
+  - Keep live proxy tests opt-in and pass credentials through the process environment only.
+
 ## 2026-07-19 - Design Tushare-primary data access
 
 - Summary: Approved a centralized `TushareProvider` plus `PrimaryFallbackProvider`: Tushare is attempted first, every unsupported or failed call produces a visible and durable warning, and AkShare can complete the operation without hiding the actual source.
