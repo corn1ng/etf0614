@@ -12,7 +12,7 @@ import pandas as pd
 from nicegui import background_tasks, run
 
 from etf_trading.data.initialization import IndexHistoryProgress, InitializationService
-from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.storage import MaintenanceTaskRun, ParquetStore, SQLiteStore
 from etf_trading.nicegui_app.state import (
     _index_atomic_snapshot_source_signature,
@@ -143,7 +143,7 @@ class IndexCatalogMaintenanceRunner:
         return int(len(catalog))
 
     def _default_service(self) -> InitializationService:
-        return InitializationService(self.store, provider=AkShareProvider(), parquet_store=self.parquet_store)
+        return InitializationService(self.store, provider=create_data_provider(), parquet_store=self.parquet_store)
 
     def _task_key(self, task_type: str, task_id: int) -> tuple[str, str, int]:
         return (str(Path(self.store.db_path).resolve()), task_type, task_id)
@@ -376,7 +376,7 @@ class IndexHistoryBatchRunner:
             _ACTIVE_INDEX_TASK_KEYS.discard(self._task_key(task_id))
 
     def _default_service(self) -> InitializationService:
-        return InitializationService(self.store, provider=AkShareProvider(), parquet_store=self.parquet_store)
+        return InitializationService(self.store, provider=create_data_provider(), parquet_store=self.parquet_store)
 
     def _task_key(self, task_id: int) -> tuple[str, int]:
         return (str(Path(self.store.db_path).resolve()), task_id)

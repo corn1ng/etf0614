@@ -133,7 +133,22 @@ class TushareProvider(DataProvider):
         return frame[(frame["trade_date"] >= start) & (frame["trade_date"] <= end)].reset_index(drop=True)
 
     def fetch_index_daily(self, code, start_date, end_date) -> pd.DataFrame:
-        raise ProviderCapabilityError("index_daily is not implemented yet")
+        index_code = str(getattr(code, "index_code", code))
+        if getattr(code, "source_kind", "csi") in {"shenwan", "hk"}:
+            raise ProviderCapabilityError(f"Tushare index route is unsupported: {index_code}")
+        suffix = "SZ" if index_code.startswith("399") else "SH"
+        raw = self._query("index_daily", fields="ts_code,trade_date,open,high,low,close,vol,amount", ts_code=f"{index_code}.{suffix}", start_date=_fmt_date(start_date), end_date=_fmt_date(end_date))
+        frame = raw.copy()
+        if frame.empty:
+            return pd.DataFrame(columns=["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount", "data_source"])
+        frame["index_code"] = index_code
+        frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
+        for column in ("open", "high", "low", "close", "vol", "amount"):
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame["volume"] = frame["vol"]
+        frame["amount"] = frame["amount"] * 1000
+        frame["data_source"] = "tushare_index_daily"
+        return frame[["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount", "data_source"]].sort_values("trade_date").reset_index(drop=True)
 
     def fetch_trade_calendar(self, market: str, start_date: date | str, end_date: date | str) -> pd.DataFrame:
         raw = self._query(

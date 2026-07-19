@@ -13,7 +13,7 @@ from nicegui import run, ui
 from etf_trading.data.index_catalog import default_index_catalog
 from etf_trading.data.indexes import index_options
 from etf_trading.data.initialization import EtfHistoryProgress, InitializationService
-from etf_trading.data.providers.akshare_provider import AkShareProvider
+from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.quality import upgrade_legacy_index_history_message
 from etf_trading.data.storage import MaintenanceTaskRun
 from etf_trading.nicegui_app.components.alerts import empty_state
@@ -788,7 +788,7 @@ def _service(store, parquet_store) -> InitializationService:
 def _service_with_provider(store, parquet_store) -> InitializationService:
     if store is None:
         raise ValueError("当前页面没有可用数据库连接")
-    return InitializationService(store=store, provider=AkShareProvider(), parquet_store=parquet_store)
+    return InitializationService(store=store, provider=create_data_provider(), parquet_store=parquet_store)
 
 
 def _render_audit() -> None:

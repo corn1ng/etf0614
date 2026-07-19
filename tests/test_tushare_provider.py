@@ -73,3 +73,10 @@ def test_trade_calendar_normalizes_tushare_dates():
     provider = _provider({"trade_cal": pd.DataFrame({"exchange": ["SSE"], "cal_date": ["20260701"], "is_open": [1]})})
     result = provider.fetch_trade_calendar("SSE", "2026-07-01", "2026-07-01")
     assert result["trade_date"].dt.strftime("%Y-%m-%d").tolist() == ["2026-07-01"]
+
+
+def test_index_daily_normalizes_tushare_prices():
+    provider = _provider({"index_daily": pd.DataFrame({"ts_code": ["000300.SH"], "trade_date": ["20260701"], "open": [1.0], "high": [1.1], "low": [0.9], "close": [1.0], "vol": [10.0], "amount": [2.0]})})
+    result = provider.fetch_index_daily("000300", "2026-07-01", "2026-07-01")
+    assert result.loc[0, "index_code"] == "000300"
+    assert result.loc[0, "amount"] == 2000.0
