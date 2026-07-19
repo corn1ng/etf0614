@@ -8,6 +8,13 @@
   - Complete provider boundaries before replacing application constructors so every entry point receives the same tested behavior.
   - Keep live proxy tests opt-in and pass credentials through the process environment only.
 
+## 2026-07-19 - Add Chinese Tushare implementation plan
+
+- Summary: Added a Chinese plan companion covering the approved Tushare-first integration, explicit AkShare fallback, data contracts, delivery stages, and acceptance criteria.
+- Verification: Checked the document for placeholder markers, secret values, and whitespace errors.
+- Watch out next time:
+  - Keep source-code identifiers and shell commands unchanged when translating operational documentation.
+
 ## 2026-07-19 - Design Tushare-primary data access
 
 - Summary: Approved a centralized `TushareProvider` plus `PrimaryFallbackProvider`: Tushare is attempted first, every unsupported or failed call produces a visible and durable warning, and AkShare can complete the operation without hiding the actual source.
