@@ -1,5 +1,14 @@
 # Task Memory
 
+## 2026-07-19 - Design Tushare-primary data access
+
+- Summary: Approved a centralized `TushareProvider` plus `PrimaryFallbackProvider`: Tushare is attempted first, every unsupported or failed call produces a visible and durable warning, and AkShare can complete the operation without hiding the actual source.
+- Verification: Documentation-only design; checked the specification for secret handling, adjustment semantics, provider provenance, persistent warning behavior, explicit scope, and placeholders.
+- Watch out next time:
+  - Never treat unadjusted `fund_daily` prices as `qfq`; a missing or unauthorized `fund_adj` response must trigger an explicit fallback.
+  - Keep Tushare index symbols separate from AkShare `provider_symbol`; ambiguous mappings must fall back instead of relying on prefix guesses.
+  - A successful fallback is neither pure success nor failure: persist and render a completed-with-warning state, and keep provider notices out of market-data Parquet columns.
+
 ## 2026-07-13 - Final-review readability fixes
 
 - TDD evidence: the final-review regression wave first ran with the worktree interpreter and `PYTHONPATH` set to `src`; it failed as expected with 7 missing-marker/helper/CSS failures. After the display-only implementation, the same focused selection passed 7 tests. A follow-up CSS stacking regression first failed for the missing foreground marker label rule and then passed after the rule was added.
