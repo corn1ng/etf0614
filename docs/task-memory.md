@@ -1,5 +1,11 @@
 # Task Memory
 
+## 2026-07-19 - Unified Tushare index routing
+
+- Summary: Removed category-based Tushare skips so every index history request reaches Tushare first; AkShare remains the fallback for empty, unsupported, permission, or network failures.
+- Verification: `PYTHONPATH=src .venv-win\\Scripts\\python.exe -m pytest tests\\test_tushare_provider.py tests\\test_primary_fallback_provider.py tests\\test_provider_factory.py -q` passed 12 tests.
+- Caution: Do not persist Tushare Tokens. The actual `data_source` remains the authoritative record of whether Tushare or AkShare supplied a row.
+
 ## 2026-07-19 - Implement Tushare-primary data access
 
 - Summary: Added a Tushare-first provider factory with explicit AkShare fallback, shared configuration/rate limiting/redaction, ETF/index/calendar adapters, durable NiceGUI completed-with-fallback warnings, CLI warning summaries, and an opt-in live proxy smoke test. Tokens remain environment-only.
