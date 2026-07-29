@@ -161,12 +161,16 @@ def _execute_pending(
     weight_before = 0.0 if portfolio_value == 0 else current_value / portfolio_value
     if buying:
         trade_value = portfolio_value / (1 + costs.commission_rate)
-        shares += (trade_value - current_value) / execution_price
+        purchased_shares = (trade_value - current_value) / execution_price
+        shares += purchased_shares
         cash -= trade_value - current_value + abs(trade_value - current_value) * costs.commission_rate
+        slippage_cost = purchased_shares * (execution_price - open_price)
     else:
         trade_value = current_value
+        sold_shares = shares
         shares = 0.0
         cash += trade_value * (1 - costs.commission_rate)
+        slippage_cost = sold_shares * (open_price - execution_price)
     commission = abs(trade_value - current_value) * costs.commission_rate if buying else trade_value * costs.commission_rate
     after_value = cash + shares * execution_price
     weight_after = 0.0 if after_value == 0 else shares * execution_price / after_value
@@ -182,6 +186,8 @@ def _execute_pending(
         delay_days=(trade_date - pd.Timestamp(signal.trade_date).normalize()).days,
         reason=signal.reason,
         trigger_rules=list(signal.trigger_rules),
+        reference_price=open_price,
+        slippage_cost=slippage_cost,
     )
     return cash, shares, trade
 

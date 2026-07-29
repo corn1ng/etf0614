@@ -76,6 +76,21 @@ def test_drawdown_episode_reports_peak_trough_and_recovery():
     assert metrics["recovery_trading_days"] == 2
 
 
+def test_drawdown_uses_the_most_recent_equal_peak_before_its_trough():
+    metrics = summarize_index_result(result_with_nav([1.0, 1.2, 1.2, 0.9, 1.2]))
+
+    assert metrics["drawdown_start"] == "2024-01-04"
+    assert metrics["drawdown_trough"] == "2024-01-05"
+    assert metrics["drawdown_recovery"] == "2024-01-08"
+    assert metrics["recovery_trading_days"] == 2
+
+
+def test_max_drawdown_is_rounded_to_six_decimal_places():
+    metrics = summarize_index_result(result_with_nav([1.0, 3.0, 2.0]))
+
+    assert metrics["max_drawdown"] == -0.333333
+
+
 def test_losing_round_trip_within_twenty_trading_days_is_whipsaw():
     result = result_with_round_trip(entry_index=2, exit_index=12, entry_price=100, exit_price=97)
 

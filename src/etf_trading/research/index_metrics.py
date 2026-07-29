@@ -30,7 +30,14 @@ def summarize_index_result(
     result: IndexBacktestResult,
     whipsaw_max_holding_days: int = 20,
 ) -> dict[str, object]:
-    """Summarize one index result without treating an open position as a completed trade."""
+    """Summarize one index result without treating an open position as a completed trade.
+
+    Annualized return is a 252-observed-period CAGR, volatility uses daily returns
+    with ``ddof=0``, and Sharpe is CAGR divided by that volatility.  Recovery days
+    run from the most recent peak before the selected trough to its recovery.
+    ``cost_drag`` is cumulative explicit transaction cost in NAV/cash units, not
+    the final-NAV difference between costed and uncosted portfolios.
+    """
 
     if whipsaw_max_holding_days < 0:
         raise ValueError("whipsaw_max_holding_days must be non-negative")
@@ -105,6 +112,7 @@ def _nav_metrics(nav: pd.DataFrame) -> dict[str, object]:
         "calmar": round(calmar, 6),
         "avg_exposure": round(float(nav["weight"].mean()), 6),
         **drawdown_metrics,
+        "max_drawdown": round(max_drawdown, 6),
     }
 
 
@@ -142,8 +150,9 @@ def _drawdown_metrics(nav: pd.DataFrame) -> dict[str, object]:
             "recovery_trading_days": 0,
         }
 
-    peak_index = int(nav["nav"].iloc[: trough_index + 1].idxmax())
-    peak_nav = float(nav["nav"].iloc[peak_index])
+    peak_nav = float(running_max.iloc[trough_index])
+    peak_candidates = nav.index[(nav.index <= trough_index) & (nav["nav"] == peak_nav)]
+    peak_index = int(peak_candidates[-1])
     recovered_indices = nav.index[(nav.index > trough_index) & (nav["nav"] >= peak_nav)]
     recovered = len(recovered_indices) > 0
     recovery_index = int(recovered_indices[0]) if recovered else None
@@ -218,7 +227,11 @@ def _trade_metrics(
     )
     reentry_count = _atr_reentry_count(trades)
     annualized_trade_count = 0.0 if len(nav) < 2 else len(trades) * TRADING_DAYS_PER_YEAR / (len(nav) - 1)
-    cost_drag = sum(max(float(trade.commission), 0.0) for trade in trades)
+    commission_cost = sum(max(float(trade.commission), 0.0) for trade in trades)
+    slippage_cost = sum(max(float(trade.slippage_cost), 0.0) for trade in trades)
+    commission_cost = round(commission_cost, 6)
+    slippage_cost = round(slippage_cost, 6)
+    explicit_transaction_cost = commission_cost + slippage_cost
 
     return {
         "trade_count": len(trades),
@@ -229,8 +242,10 @@ def _trade_metrics(
         "avg_holding_days": round(sum(holding_days) / closed_count, 6) if closed_count else 0.0,
         "annualized_trade_count": round(annualized_trade_count, 6),
         "trades_per_year": round(annualized_trade_count, 6),
-        "cost_drag": round(cost_drag, 6),
-        "commission_cost": round(cost_drag, 6),
+        "cost_drag": explicit_transaction_cost,
+        "explicit_transaction_cost": explicit_transaction_cost,
+        "commission_cost": commission_cost,
+        "slippage_cost": slippage_cost,
         "atr_exit_count": atr_exit_count,
         "reentry_count": reentry_count,
         "atr_reentry_count": reentry_count,

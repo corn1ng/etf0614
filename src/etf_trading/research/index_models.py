@@ -71,7 +71,7 @@ class IndexBacktestCosts:
 
 @dataclass(frozen=True)
 class IndexBacktestTrade:
-    """One auditable T+1 index trade."""
+    """One auditable T+1 index trade, including explicit execution costs."""
 
     index_code: str
     signal_date: pd.Timestamp
@@ -84,6 +84,8 @@ class IndexBacktestTrade:
     delay_days: int
     reason: str
     trigger_rules: list[str] = field(default_factory=list)
+    reference_price: float | None = None
+    slippage_cost: float = 0.0
 
 
 @dataclass(frozen=True)

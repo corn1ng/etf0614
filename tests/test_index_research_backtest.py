@@ -8,6 +8,7 @@ from etf_trading.research.index_backtest import (
     run_index_backtest,
 )
 from etf_trading.research.index_models import IndexBacktestCosts, load_index_research_config
+from etf_trading.research.index_metrics import summarize_index_result
 from etf_trading.research.index_trend_v1 import IndexTrendV1
 from etf_trading.strategy.models import StrategySignal
 
@@ -204,6 +205,36 @@ def test_commission_is_deducted_and_nav_tracks_only_the_actual_position():
     assert result.trades[0].commission == pytest.approx(0.01 / 1.01)
     assert result.nav.iloc[-1]["nav"] == pytest.approx(1 / 1.01)
     assert result.nav.iloc[-1]["weight"] == pytest.approx(1.0)
+
+
+def test_trade_record_and_metrics_audit_buy_and_sell_slippage_costs_once():
+    costs = IndexBacktestCosts(commission_rate=0.01, slippage_rate=0.02)
+    result = run_index_backtest(
+        "000300",
+        prices(
+            [
+                {"trade_date": "2024-01-02", "open": 100.0, "close": 100.0},
+                {"trade_date": "2024-01-03", "open": 100.0, "close": 100.0},
+                {"trade_date": "2024-01-04", "open": 100.0, "close": 100.0},
+            ]
+        ),
+        BuyThenSellStrategy(),
+        costs,
+    )
+
+    buy, sell = result.trades
+    assert buy.reference_price == 100.0
+    assert sell.reference_price == 100.0
+    assert buy.execution_price == pytest.approx(102.0)
+    assert sell.execution_price == pytest.approx(98.0)
+    assert buy.slippage_cost > 0
+    assert sell.slippage_cost == pytest.approx(buy.slippage_cost)
+
+    metrics = summarize_index_result(result)
+    assert metrics["commission_cost"] == pytest.approx(round(buy.commission + sell.commission, 6))
+    assert metrics["slippage_cost"] == pytest.approx(round(buy.slippage_cost + sell.slippage_cost, 6))
+    assert metrics["cost_drag"] == pytest.approx(metrics["commission_cost"] + metrics["slippage_cost"])
+    assert metrics["explicit_transaction_cost"] == metrics["cost_drag"]
 
 
 def test_highest_close_starts_on_actual_entry_execution_date():
