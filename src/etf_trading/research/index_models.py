@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+import math
+from dataclasses import dataclass, field, fields
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,55 @@ class IndexAdmissionResult:
     frames: dict[str, pd.DataFrame]
     metadata: pd.DataFrame
     exclusions: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class IndexBacktestCosts:
+    """Frozen execution costs for an index-trend backtest."""
+
+    commission_rate: float
+    slippage_rate: float
+
+    def __post_init__(self) -> None:
+        for name, value in (("commission_rate", self.commission_rate), ("slippage_rate", self.slippage_rate)):
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be a finite non-negative number")
+
+    @classmethod
+    def from_config(cls, config: IndexResearchConfig, *, stress: bool = False) -> IndexBacktestCosts:
+        """Build locked default costs or the config's doubled stress costs."""
+
+        multiplier = config.stress_multiplier if stress else 1.0
+        return cls(
+            commission_rate=config.commission_rate * multiplier,
+            slippage_rate=config.slippage_rate * multiplier,
+        )
+
+
+@dataclass(frozen=True)
+class IndexBacktestTrade:
+    """One auditable T+1 index trade."""
+
+    index_code: str
+    signal_date: pd.Timestamp
+    trade_date: pd.Timestamp
+    action: str
+    execution_price: float
+    weight_before: float
+    weight_after: float
+    commission: float
+    delay_days: int
+    reason: str
+    trigger_rules: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class IndexBacktestResult:
+    """Trades, close-valued NAV, and explicit signal cancellations."""
+
+    trades: list[IndexBacktestTrade] = field(default_factory=list)
+    nav: pd.DataFrame = field(default_factory=pd.DataFrame)
+    cancelled_signals: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 _LOCKED_CONFIG = IndexResearchConfig(
