@@ -1,0 +1,23 @@
+strategy:
+  version: index_trend_v1
+  locked_at: 2026-07-30
+  ma_window: 60
+  slope_lookback: 20
+  buffer_rate: 0.02
+  atr_window: 20
+  atr_multiple: 3.0
+  buffer_ablation: [0.0, 0.02, 0.03]
+costs:
+  commission_rate: 0.00015
+  slippage_rate: 0.0002
+  stress_multiplier: 2.0
+validation:
+  min_valid_rows: 1000
+  rolling_years: 5
+  rolling_step_years: 1
+  whipsaw_max_holding_days: 20
+  stage_years: [2015, 2018, 2020, 2022]
+effectiveness:
+  min_drawdown_win_rate: 0.60
+  min_median_drawdown_reduction: 0.20
+  max_median_annual_return_lag: 0.02
