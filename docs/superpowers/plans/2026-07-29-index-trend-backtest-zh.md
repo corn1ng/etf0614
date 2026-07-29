@@ -46,7 +46,7 @@
 
 ---
 
-### 任务1：锁定配置、数据分层准入与指标
+### Task 1: 锁定配置、数据分层准入与指标
 
 **文件：**
 
@@ -180,7 +180,7 @@ git commit -m "feat: admit index data for locked trend research"
 
 ---
 
-### 任务2：V1 状态机与严格成交
+### Task 2: V1 状态机与严格成交
 
 **文件：**
 
@@ -317,7 +317,7 @@ git commit -m "feat: execute buffered index trend v1"
 
 ---
 
-### 任务3：绩效、回撤和假突破指标
+### Task 3: 绩效、回撤和假突破指标
 
 **文件：**
 
@@ -371,7 +371,7 @@ git commit -m "feat: measure index trend risk and whipsaws"
 
 ---
 
-### 任务4：全历史、五年滚动和六项门槛
+### Task 4: 全历史、五年滚动和六项门槛
 
 **文件：**
 
@@ -471,7 +471,7 @@ git commit -m "feat: validate locked index trend v1"
 
 ---
 
-### 任务5：版本化原子发布、中文报告和 CLI
+### Task 5: 版本化原子发布、中文报告和 CLI
 
 **文件：**
 
@@ -563,7 +563,7 @@ git commit -m "feat: publish versioned index trend evidence"
 
 ---
 
-### 任务6：后台重算、过期检测与策略页面
+### Task 6: 后台重算、过期检测与策略页面
 
 **文件：**
 
@@ -656,7 +656,7 @@ git commit -m "feat: rerun index trend research from strategy lab"
 
 ---
 
-### 任务7：全指数运行、交叉校验和项目记忆
+### Task 7: 全指数运行、交叉校验和项目记忆
 
 **文件：**
 
