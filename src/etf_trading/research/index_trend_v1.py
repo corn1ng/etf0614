@@ -74,13 +74,15 @@ class IndexTrendV1:
             )
         return None
 
-    def entry_is_valid(self, current: pd.Series) -> bool:
-        """Return whether an unfilled V1 entry still qualifies at this close."""
+    def entry_is_valid(self, current: pd.Series) -> bool | None:
+        """Confirm, reject, or defer an unfilled entry when its close inputs are missing."""
 
         close = _finite(current.get("close"))
         ma60 = _finite(current.get("ma60"))
         slope = _finite(current.get("ma60_slope_20"))
-        return close is not None and ma60 is not None and slope is not None and close > ma60 * (1 + self.buffer_rate) and slope > 0
+        if None in (close, ma60, slope):
+            return None
+        return close > ma60 * (1 + self.buffer_rate) and slope > 0
 
 
 def _finite(value: object) -> float | None:

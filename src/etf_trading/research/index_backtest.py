@@ -188,7 +188,7 @@ def _execute_pending(
 
 def _entry_invalidated(strategy: CloseStrategy, current: pd.Series) -> bool:
     checker = getattr(strategy, "entry_is_valid", None)
-    return callable(checker) and not bool(checker(current))
+    return callable(checker) and checker(current) is False
 
 
 def _target_changed(old: StrategySignal, new: StrategySignal) -> bool:

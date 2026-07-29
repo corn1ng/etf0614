@@ -36,6 +36,15 @@ class BuyThenSellStrategy:
         return StrategySignal("", current["trade_date"], action, weight, f"always_{action.lower()}", ["test"])
 
 
+class BuyThenSingleSellStrategy:
+    def evaluate_close(self, previous, current, *, in_position, highest_close=None):
+        if not in_position:
+            return StrategySignal("", current["trade_date"], "BUY", 1.0, "buy", ["test"])
+        if bool(current.get("request_exit", False)):
+            return StrategySignal("", current["trade_date"], "SELL", 0.0, "single_sell", ["test"])
+        return None
+
+
 class ReplacingTargetStrategy:
     def evaluate_close(self, previous, current, *, in_position, highest_close=None):
         action = str(current["target"])
@@ -104,23 +113,49 @@ def test_pending_buy_is_cancelled_when_entry_condition_invalidates():
     assert result.cancelled_signals.iloc[0]["reason"] == "entry_invalidated_before_execution"
 
 
-def test_pending_sell_is_not_cancelled_by_rebound_and_is_audited_at_period_end():
+@pytest.mark.parametrize("missing_field", ["close", "ma60", "ma60_slope_20"])
+def test_pending_buy_waits_when_entry_revalidation_data_is_missing(missing_field):
+    missing_row = {"trade_date": "2024-01-04", "open": float("nan"), "close": 103.0, "ma60": 100.0, "ma60_slope_20": 0.01, "atr20": 2.0}
+    missing_row[missing_field] = float("nan")
     result = run_index_backtest(
         "000300",
         prices(
             [
-                {"trade_date": "2024-01-02", "open": 100.0, "close": 100.0},
-                {"trade_date": "2024-01-03", "open": 100.0, "close": 100.0},
-                {"trade_date": "2024-01-04", "open": float("nan"), "close": 120.0},
+                {"trade_date": "2024-01-02", "open": 100.0, "close": 101.9, "ma60": 100.0, "ma60_slope_20": 0.01, "atr20": 2.0},
+                {"trade_date": "2024-01-03", "open": 100.0, "close": 103.0, "ma60": 100.0, "ma60_slope_20": 0.01, "atr20": 2.0},
+                missing_row,
+                {"trade_date": "2024-01-05", "open": 104.0, "close": 104.0, "ma60": 100.0, "ma60_slope_20": 0.01, "atr20": 2.0},
             ]
         ),
-        BuyThenSellStrategy(),
+        IndexTrendV1(),
         default_costs(),
     )
 
-    assert [trade.action for trade in result.trades] == ["BUY"]
-    assert result.cancelled_signals.iloc[-1]["reason"] == "no_future_valid_open"
-    assert result.cancelled_signals.iloc[-1]["action"] == "SELL"
+    assert len(result.trades) == 1
+    assert result.trades[0].trade_date == pd.Timestamp("2024-01-05")
+    assert result.cancelled_signals.empty
+
+
+def test_pending_sell_is_not_cancelled_by_rebound_and_executes_original_signal():
+    result = run_index_backtest(
+        "000300",
+        prices(
+            [
+                {"trade_date": "2024-01-02", "open": 100.0, "close": 100.0, "request_exit": False},
+                {"trade_date": "2024-01-03", "open": 100.0, "close": 100.0, "request_exit": True},
+                {"trade_date": "2024-01-04", "open": float("nan"), "close": 120.0, "request_exit": False},
+                {"trade_date": "2024-01-05", "open": 110.0, "close": 110.0, "request_exit": False},
+            ]
+        ),
+        BuyThenSingleSellStrategy(),
+        default_costs(),
+    )
+
+    sell = result.trades[-1]
+    assert sell.action == "SELL"
+    assert sell.signal_date == pd.Timestamp("2024-01-03")
+    assert sell.trade_date == pd.Timestamp("2024-01-05")
+    assert "replaced_before_execution" not in set(result.cancelled_signals["reason"])
 
 
 def test_pending_signal_at_period_end_is_cancelled_with_no_future_valid_open():
@@ -176,11 +211,12 @@ def test_highest_close_starts_on_actual_entry_execution_date():
         "000300",
         prices(
             [
-                {"trade_date": "2024-01-02", "open": 101.9, "close": 101.9, "ma60": 100.0, "ma60_slope_20": 0.01, "atr20": 2.0},
-                {"trade_date": "2024-01-03", "open": 103.0, "close": 103.0, "ma60": 100.0, "ma60_slope_20": 0.01, "atr20": 2.0},
-                {"trade_date": "2024-01-04", "open": 100.0, "close": 100.0, "ma60": 100.0, "ma60_slope_20": 0.01, "atr20": 2.0},
-                {"trade_date": "2024-01-05", "open": 94.0, "close": 94.0, "ma60": 100.0, "ma60_slope_20": 0.01, "atr20": 2.0},
-                {"trade_date": "2024-01-06", "open": 93.0, "close": 93.0, "ma60": 100.0, "ma60_slope_20": 0.01, "atr20": 2.0},
+                {"trade_date": "2024-01-02", "open": 203.9, "close": 203.9, "ma60": 200.0, "ma60_slope_20": 0.01, "atr20": 2.0},
+                {"trade_date": "2024-01-03", "open": 205.0, "close": 205.0, "ma60": 200.0, "ma60_slope_20": 0.01, "atr20": 2.0},
+                {"trade_date": "2024-01-04", "open": 200.0, "close": 200.0, "ma60": 200.0, "ma60_slope_20": 0.01, "atr20": 2.0},
+                {"trade_date": "2024-01-05", "open": 197.0, "close": 197.0, "ma60": 200.0, "ma60_slope_20": 0.01, "atr20": 2.0},
+                {"trade_date": "2024-01-06", "open": 194.0, "close": 194.0, "ma60": 200.0, "ma60_slope_20": 0.01, "atr20": 2.0},
+                {"trade_date": "2024-01-07", "open": 193.0, "close": 193.0, "ma60": 200.0, "ma60_slope_20": 0.01, "atr20": 2.0},
             ]
         ),
         IndexTrendV1(),
@@ -188,6 +224,7 @@ def test_highest_close_starts_on_actual_entry_execution_date():
     )
 
     assert [trade.action for trade in result.trades] == ["BUY", "SELL"]
+    assert result.trades[-1].trade_date == pd.Timestamp("2024-01-07")
     assert result.trades[-1].reason == "atr_emergency_exit"
 
 
