@@ -105,20 +105,22 @@ def load_index_research_config(path: str | Path) -> IndexResearchConfig:
     config = IndexResearchConfig(
         strategy_version=strategy["version"],
         locked_at=locked_at,
-        ma_window=int(strategy["ma_window"]),
-        slope_lookback=int(strategy["slope_lookback"]),
+        ma_window=_strict_int(strategy["ma_window"], "ma_window"),
+        slope_lookback=_strict_int(strategy["slope_lookback"], "slope_lookback"),
         buffer_rate=float(strategy["buffer_rate"]),
-        atr_window=int(strategy["atr_window"]),
+        atr_window=_strict_int(strategy["atr_window"], "atr_window"),
         atr_multiple=float(strategy["atr_multiple"]),
         buffer_ablation=tuple(float(value) for value in strategy["buffer_ablation"]),
         commission_rate=float(costs["commission_rate"]),
         slippage_rate=float(costs["slippage_rate"]),
         stress_multiplier=float(costs["stress_multiplier"]),
-        min_valid_rows=int(validation["min_valid_rows"]),
-        rolling_years=int(validation["rolling_years"]),
-        rolling_step_years=int(validation["rolling_step_years"]),
-        whipsaw_max_holding_days=int(validation["whipsaw_max_holding_days"]),
-        stage_years=tuple(int(value) for value in validation["stage_years"]),
+        min_valid_rows=_strict_int(validation["min_valid_rows"], "min_valid_rows"),
+        rolling_years=_strict_int(validation["rolling_years"], "rolling_years"),
+        rolling_step_years=_strict_int(validation["rolling_step_years"], "rolling_step_years"),
+        whipsaw_max_holding_days=_strict_int(
+            validation["whipsaw_max_holding_days"], "whipsaw_max_holding_days"
+        ),
+        stage_years=tuple(_strict_int(value, "stage_years") for value in validation["stage_years"]),
         min_drawdown_win_rate=float(effectiveness["min_drawdown_win_rate"]),
         min_median_drawdown_reduction=float(effectiveness["min_median_drawdown_reduction"]),
         max_median_annual_return_lag=float(effectiveness["max_median_annual_return_lag"]),
@@ -127,3 +129,9 @@ def load_index_research_config(path: str | Path) -> IndexResearchConfig:
         if getattr(config, field.name) != getattr(_LOCKED_CONFIG, field.name):
             raise ValueError(f"locked index research config differs: {field.name}")
     return config
+
+
+def _strict_int(value: Any, field_name: str) -> int:
+    if type(value) is not int:
+        raise ValueError(f"{field_name} must be an integer")
+    return value

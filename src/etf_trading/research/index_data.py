@@ -61,6 +61,7 @@ def load_index_frames(
             continue
 
         prepared = _prepare_frame(frame, entry.index_base_date)
+        prepared = _normalize_price_columns(prepared)
         raw_dates = pd.to_datetime(frame["trade_date"], errors="coerce")
         featured = add_index_trend_features(prepared)
         frames[entry.index_code] = featured
@@ -133,6 +134,13 @@ def _prepare_frame(frame: pd.DataFrame, index_base_date: object) -> pd.DataFrame
     result = frame.copy()
     result["trade_date"] = pd.to_datetime(result["trade_date"], errors="coerce")
     return result.loc[result["trade_date"] >= pd.Timestamp(index_base_date)].sort_values("trade_date").copy()
+
+
+def _normalize_price_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy()
+    for column in ("open", "high", "low", "close"):
+        result[column] = pd.to_numeric(result[column], errors="coerce")
+    return result
 
 
 def _exclude(exclusions: list[dict[str, object]], entry: IndexCatalogEntry, reason_code: str) -> None:

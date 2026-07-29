@@ -149,6 +149,23 @@ def test_missing_open_is_allowed_but_present_open_must_be_positive(tmp_path):
     assert set(result.frames) == {"TEST"}
 
 
+def test_numeric_string_ohlc_is_normalized_before_features_are_calculated(tmp_path):
+    frame = valid_prices(1100)
+    for column in ("open", "high", "low", "close"):
+        frame[column] = frame[column].astype(str)
+    ParquetStore(tmp_path).write_index_prices("TEST", frame)
+
+    result = load_index_frames(
+        tmp_path,
+        (catalog_entry("TEST", "official_base_date"),),
+        locked_config(),
+    )
+
+    admitted = result.frames["TEST"]
+    assert all(pd.api.types.is_numeric_dtype(admitted[column]) for column in ("open", "high", "low", "close"))
+    assert admitted["atr20"].notna().any()
+
+
 def test_add_index_trend_features_uses_only_ma60_slope_and_atr20():
     frame = valid_prices(80).iloc[::-1].reset_index(drop=True)
 
@@ -161,12 +178,19 @@ def test_add_index_trend_features_uses_only_ma60_slope_and_atr20():
     assert {"ma50", "ma70", "atr14", "momentum", "rs_rank"}.isdisjoint(result.columns)
 
 
-def test_config_rejects_changed_locked_strategy_values(tmp_path):
+@pytest.mark.parametrize(
+    ("locked_value", "changed_value", "field_name"),
+    [
+        ("ma_window: 60", "ma_window: 60.9", "ma_window"),
+        ("min_valid_rows: 1000", "min_valid_rows: 1000.5", "min_valid_rows"),
+    ],
+)
+def test_config_rejects_fractional_integer_values(tmp_path, locked_value, changed_value, field_name):
     path = tmp_path / "index_research.yaml"
     source = Path("configs/index_research.yaml").read_text(encoding="utf-8")
-    path.write_text(source.replace("ma_window: 60", "ma_window: 50"), encoding="utf-8")
+    path.write_text(source.replace(locked_value, changed_value), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="ma_window"):
+    with pytest.raises(ValueError, match=field_name):
         load_index_research_config(path)
 
 
