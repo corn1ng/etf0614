@@ -33,3 +33,10 @@ Implemented `_open_index_profile_dialog(result, index_code)` as a read-only proj
 - Close button and NiceGUI tab accessibility are preserved.
 - No external work is registered by opening or switching tabs.
 - Browser visual QA was not performed; Task 10 owns it.
+
+## Review Follow-up: Empty Compact Momentum/Risk Panel
+
+- RED: Added a renderer-level regression for all four `trend_risk_sections` being empty. It failed because the panel emitted only its title.
+- GREEN: The compact overview renderer now emits `数据不足` with the existing scoped `index-profile-reason` class when every section has no items. It remains display-only and does not alter layout, data access, or tab behavior.
+- Verification: Task 8 focused tests passed (59); related view-model/snapshot tests passed (81, 2 existing pandas warnings); full suite passed (514, 1 skipped, 2 existing pandas warnings) using `C:\Users\cjj\AppData\Local\Temp\index-profile-compact-empty-*` basetemps.
+- Follow-up commit: `fix: explain empty unified profile risk panel`.

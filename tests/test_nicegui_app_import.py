@@ -19,6 +19,41 @@ def test_market_dialog_uses_five_profile_tabs_and_no_builder_import():
     assert "OfficialIndexValuationSyncService" not in source
 
 
+def test_market_profile_overview_compact_risk_panel_explains_all_empty_sections(monkeypatch):
+    from etf_trading.nicegui_app.pages import market
+    from etf_trading.nicegui_app.view_models import IndexProfileMetricSection
+
+    class FakeElement:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def classes(self, _classes):
+            return self
+
+    class FakeUi:
+        labels: list[str] = []
+
+        def element(self, _tag):
+            return FakeElement()
+
+        def label(self, value):
+            self.labels.append(value)
+            return FakeElement()
+
+    fake_ui = FakeUi()
+    monkeypatch.setattr(market, "ui", fake_ui)
+
+    market._render_index_profile_compact_sections(
+        tuple(IndexProfileMetricSection(title, ()) for title in ("趋势结构", "动量与收益", "回撤与风险", "成交活跃度"))
+    )
+
+    assert "动量与风险" in fake_ui.labels
+    assert "数据不足" in fake_ui.labels
+
+
 def test_market_page_uses_readonly_atomic_snapshot_and_no_legacy_health_builder():
     source = Path("src/etf_trading/nicegui_app/pages/market.py").read_text(encoding="utf-8")
 

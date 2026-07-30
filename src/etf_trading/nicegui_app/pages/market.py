@@ -319,6 +319,9 @@ def _render_index_profile_trend_row(item) -> None:
 def _render_index_profile_compact_sections(sections) -> None:
     with ui.element("section").classes("index-profile-panel index-profile-compact-panel"):
         ui.label("动量与风险").classes("index-profile-panel-title")
+        if not any(section.items for section in sections):
+            ui.label("数据不足").classes("index-profile-reason")
+            return
         for section in sections:
             for item in section.items:
                 _render_index_profile_trend_row(item)
