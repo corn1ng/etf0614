@@ -246,9 +246,9 @@ def _bind_index_profile_row_click(table, result) -> None:
     """Open a stored profile from QTable's supported row-click event only."""
 
     table.on(
-        "row-click",
-        lambda event: _open_index_profile_dialog(result, str(getattr(event, "args", "") or "")),
-        js_handler="(_event, row) => emit(row.index_code)",
+        "rowClick",
+        lambda event: _open_index_profile_dialog(result, _event_row_code(event, "index_code")),
+        args=[[], ["index_code"], None],
     )
 
 
