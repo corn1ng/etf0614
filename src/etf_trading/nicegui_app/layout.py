@@ -24,9 +24,14 @@ def render_shell(page_slug: str | None = None, section: str | None = None) -> No
     apply_theme()
     page = get_page_by_slug(page_slug)
     active_section = active_section_for_route(page, section)
-    store = state.create_store()
-    parquet_store = state.create_parquet_store()
-    snapshot = _load_snapshot_for_route(snapshot_mode_for_route(page.slug, active_section), store, parquet_store)
+    mode = snapshot_mode_for_route(page.slug, active_section)
+    if mode == ATOMIC_INDEX_SNAPSHOT_MODE:
+        store = None
+        parquet_store = state.create_index_atomic_snapshot_reader()
+    else:
+        store = state.create_store()
+        parquet_store = state.create_parquet_store()
+    snapshot = _load_snapshot_for_route(mode, store, parquet_store)
 
     with ui.row().classes("workbench-shell w-full no-wrap"):
         _render_sidebar(page.slug)

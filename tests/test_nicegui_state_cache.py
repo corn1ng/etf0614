@@ -64,6 +64,15 @@ def test_load_index_atomic_shell_snapshot_is_readonly_projection(monkeypatch):
     assert snapshot.coverage.empty
 
 
+def test_create_index_atomic_snapshot_reader_does_not_create_root(tmp_path):
+    root = tmp_path / "missing" / "parquet"
+
+    reader = state.create_index_atomic_snapshot_reader(root)
+
+    assert reader.root == root
+    assert not root.exists()
+
+
 def _atomic_master() -> pd.DataFrame:
     return pd.DataFrame(
         {

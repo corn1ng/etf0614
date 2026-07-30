@@ -88,6 +88,13 @@ class IndexAtomicSnapshotCacheResult:
     task_result_id: int | None = None
 
 
+@dataclass(frozen=True)
+class IndexAtomicSnapshotReader:
+    """Root-only reader handle that never creates the atomic snapshot directory."""
+
+    root: Path
+
+
 # Temporary UI compatibility while Task 5 migrates the market page.  The
 # legacy trend/valuation cache contract is deliberately not retained.
 IndexHealthSnapshotCacheResult = IndexAtomicSnapshotCacheResult
@@ -99,6 +106,10 @@ def create_store(db_path: str | Path | None = None) -> SQLiteStore:
 
 def create_parquet_store(root: str | Path | None = None) -> ParquetStore:
     return ParquetStore() if root is None else ParquetStore(root)
+
+
+def create_index_atomic_snapshot_reader(root: str | Path | None = None) -> IndexAtomicSnapshotReader:
+    return IndexAtomicSnapshotReader(Path("data/parquet") if root is None else Path(root))
 
 
 def load_snapshot(store: SQLiteStore, parquet_store: ParquetStore) -> PlatformSnapshot:

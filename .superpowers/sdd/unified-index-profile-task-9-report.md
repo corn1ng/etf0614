@@ -75,3 +75,23 @@ Atomic-index shell rendering now uses a dedicated published-snapshot projection 
 ### Follow-up Commit
 
 fix: make index valuation shell snapshot readonly
+
+## Third Review Follow-up
+
+### RED
+
+Added a real empty-temporary-directory lifecycle regression without replacing either store constructor. Rendering “指数估值” created the database parent before the atomic mode loader ran. Added a root-only reader regression; the reader factory did not exist. Focused RED: 2 failures, 78 passes.
+
+### GREEN
+
+The shell now resolves its snapshot mode before constructing stores. Atomic-index routes construct neither SQLiteStore nor ParquetStore; they use an IndexAtomicSnapshotReader carrying only the existing root path, which never calls mkdir. The published atomic snapshot remains readable when present, while ordinary and maintenance routes retain their normal constructors and index health remains on the atomic route policy.
+
+### Verification
+
+- Focused GREEN: tests/test_nicegui_app_import.py + tests/test_nicegui_state_cache.py — 80 passed.
+- Related: navigation, app import, view models, state cache, and index health snapshot tests — 167 passed, 2 existing pandas warnings.
+- Full: 523 passed, 1 skipped, 2 existing pandas warnings.
+
+### Follow-up Commit
+
+fix: avoid creating stores for index valuation

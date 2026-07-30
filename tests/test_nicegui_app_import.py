@@ -980,6 +980,44 @@ def test_render_shell_uses_atomic_index_snapshot_for_index_valuation(monkeypatch
     assert writes == []
 
 
+def test_render_shell_index_valuation_does_not_create_sqlite_or_parquet_paths(tmp_path, monkeypatch):
+    from etf_trading.nicegui_app import layout
+
+    rendered = []
+
+    class FakeElement:
+        def classes(self, value):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def row(self):
+            return FakeElement()
+
+        def column(self):
+            return FakeElement()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(layout, "ui", FakeUi())
+    monkeypatch.setattr(layout, "apply_theme", lambda: None)
+    monkeypatch.setattr(layout, "_render_sidebar", lambda active_slug: None)
+    monkeypatch.setattr(layout, "_render_topbar", lambda snapshot: None)
+    monkeypatch.setattr(layout, "_render_page_header", lambda page, active_section: None)
+    monkeypatch.setattr(layout, "_render_page", lambda *args, **kwargs: rendered.append(kwargs["parquet_store"]))
+
+    layout.render_shell("market", "指数估值")
+
+    assert rendered
+    assert not (tmp_path / "database").exists()
+    assert not (tmp_path / "database" / "etf_system.sqlite").exists()
+    assert not (tmp_path / "data" / "parquet").exists()
+
+
 def test_sidebar_links_maintenance_to_task_page(monkeypatch):
     from etf_trading.nicegui_app import layout
 
