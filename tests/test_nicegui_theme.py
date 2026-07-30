@@ -5,6 +5,19 @@ from etf_trading.nicegui_app import layout
 from etf_trading.nicegui_app.theme import WORKBENCH_CSS, tone_class
 
 
+def test_theme_scopes_profile_width_grid_and_mobile_rules():
+    css = WORKBENCH_CSS
+
+    assert ".index-profile-dialog" in css
+    assert "width: min(1180px, 92vw)" in css
+    assert ".index-profile-summary-grid" in css
+    assert ".index-profile-trend-row" in css
+    assert "@media (max-width: 720px)" in css
+    mobile = css.split("@media (max-width: 720px)", 1)[1]
+    assert ".index-profile-dialog" in mobile
+    assert "grid-template-columns: minmax(0, 1fr)" in mobile
+
+
 def test_theme_contains_dense_professional_workbench_rules():
     assert ".workbench-shell" in WORKBENCH_CSS
     assert ".workbench-sidebar" in WORKBENCH_CSS

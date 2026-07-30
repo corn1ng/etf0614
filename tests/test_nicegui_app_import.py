@@ -1,8 +1,22 @@
 from datetime import date, datetime
+import inspect
 from pathlib import Path
 
 import pandas as pd
 import pytest
+
+
+def test_market_dialog_uses_five_profile_tabs_and_no_builder_import():
+    from etf_trading.nicegui_app.pages import market
+
+    source = inspect.getsource(market)
+    for label in ("画像总览", "估值详情", "趋势与风险", "全部指标", "数据质量"):
+        assert f'ui.tab("{label}")' in source
+    assert "_open_index_profile_dialog" in source
+    assert "index_profile_view" in source
+    assert "build_index_atomic_snapshot" not in source
+    assert "fetch_index_official_valuations" not in source
+    assert "OfficialIndexValuationSyncService" not in source
 
 
 def test_market_page_uses_readonly_atomic_snapshot_and_no_legacy_health_builder():
@@ -19,7 +33,7 @@ def test_market_page_declares_pool_search_and_tabbed_detail_dialog():
 
     for text in ("核心池", "研究池", "搜索指数", "状态概览", "全部原子指标", "数据质量"):
         assert text in source
-    for forbidden in ("大趋势", "中趋势", "小趋势", "允许开仓", "估值"):
+    for forbidden in ("大趋势", "中趋势", "小趋势", "允许开仓", "综合分", "建议", "市场宽度"):
         assert forbidden not in source
 
 
