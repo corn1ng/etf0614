@@ -1544,7 +1544,7 @@ def _format_index_atomic_detail_value(metric_key: str, value: object) -> str:
         return "数据不足"
     if metric_key in {"history_status", "history_completeness_status"}:
         return _index_atomic_status_label(value)
-    if metric_key == "data_source":
+    if metric_key in {"data_source", "valuation_source"}:
         return _index_atomic_data_source_label(value)
     if metric_key in {"latest_date", "as_of_date"}:
         return _format_index_atomic_date(value)

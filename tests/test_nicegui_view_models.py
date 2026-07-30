@@ -273,6 +273,77 @@ def test_index_profile_view_exposes_stale_dates_without_relabeling_old_value():
     assert view.valuation_as_of_date == "2026-07-20"
 
 
+def test_index_profile_quality_formats_official_valuation_source_label():
+    details = pd.concat([_profile_details(), pd.DataFrame([
+        _profile_detail("valuation_source", "tushare_index_dailybasic"),
+    ])], ignore_index=True)
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    source = next(item for item in view.quality if item.label == "valuation_source")
+    assert source.value == "Tushare（官方指数每日指标）"
+
+
+def test_index_profile_marks_not_synced_valuation_without_empty_tracks():
+    summary = _profile_summary() | {
+        "valuation_support_status": "not_synced", "valuation_freshness_status": "",
+        "valuation_as_of_date": "",
+    }
+    details = pd.concat([_profile_details(), pd.DataFrame([{
+        **_profile_detail("valuation_support_status", "not_synced", status="not_synced", reason="尚未同步官方估值"),
+    }])], ignore_index=True)
+
+    view = index_profile_view(summary, details, "000300")
+
+    assert view.valuation.visible is False
+    assert view.valuation.status == "官方估值尚未同步"
+    assert view.valuation.reason == "尚未同步官方估值"
+    assert view.valuation.pe_ttm is None
+
+
+@pytest.mark.parametrize(
+    ("status", "status_label"),
+    [("insufficient_history", "历史不足"), ("calculation_failed", "计算失败")],
+)
+def test_index_profile_keeps_empty_atomic_values_and_statuses(status, status_label):
+    details = _profile_details()
+    details.loc[details["metric_key"] == "drawdown_250", ["value", "status", "reason"]] = [pd.NA, status, "原子指标不可用"]
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    risk = next(section for section in view.trend_risk_sections if section.title == "回撤与风险")
+    drawdown = next(item for item in risk.items if item.metric_key == "drawdown_250")
+    assert (drawdown.value, drawdown.status, drawdown.reason) == ("数据不足", status_label, "原子指标不可用")
+
+
+def test_index_profile_all_groups_cover_every_nonquality_price_atom_in_stable_group_order():
+    details = pd.DataFrame([
+        _profile_detail("pe_ttm", 11.6),
+        _profile_detail("history_rows", 1000, group_key="data_quality"),
+        _profile_detail("close", 4569.52, group_key="price_ma"),
+        _profile_detail("ma_20", 4743.52, group_key="price_ma"),
+        _profile_detail("ma_cross_up_20", True, group_key="ma_cross"),
+        _profile_detail("range_20_from_high", -0.04, group_key="range_position"),
+        _profile_detail("return_20", 0.03, group_key="return_drawdown"),
+        _profile_detail("annualized_volatility_20", 0.146, group_key="volatility_volume"),
+        _profile_detail("rsi_14", 41.2, group_key="momentum_return"),
+        _profile_detail("max_drawdown_250", -0.20, group_key="drawdown_risk"),
+        _profile_detail("amount_avg_20", 100_000_000, group_key="trading_activity"),
+    ])
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    assert [group.title for group in view.all_groups] == [
+        "价格与均线", "均线穿越", "区间位置与突破", "收益与回撤", "波动与量能",
+        "动量与收益", "回撤与风险", "成交活跃度",
+    ]
+    assert [item.metric_key for group in view.all_groups for item in group.items] == [
+        "close", "ma_20", "ma_cross_up_20", "range_20_from_high", "return_20",
+        "annualized_volatility_20", "rsi_14", "max_drawdown_250", "amount_avg_20",
+    ]
+    assert all(item.metric_key != "history_rows" for group in view.all_groups for item in group.items)
+
+
 def test_index_atomic_overview_reads_stored_atoms_without_conclusions():
     summary = {
         "index_code": "000300", "snapshot_status": "computed",
