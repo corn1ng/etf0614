@@ -903,7 +903,21 @@ body {
   .index-atomic-overview-grid { grid-template-columns: 1fr; }
   .index-atomic-dialog { overflow-x: clip; }
   .index-atomic-detail-grid { grid-template-columns: 1fr; }
-  .index-profile-dialog { width: 96vw; max-width: 96vw !important; height: 96vh; max-height: 96vh; padding: 12px; }
+  .index-profile-dialog {
+    width: calc(100vw - 48px);
+    max-width: calc(100vw - 48px) !important;
+    height: 96vh;
+    max-height: 96vh;
+    padding: 12px;
+  }
+  .index-profile-header-copy { max-width: calc(100% - 64px); }
+  .index-profile-title,
+  .index-profile-as-of {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
   .index-profile-summary-grid,
   .index-profile-primary-grid,
   .index-profile-secondary-grid,
