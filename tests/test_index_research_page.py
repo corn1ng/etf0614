@@ -110,6 +110,54 @@ def test_page_controller_polls_jobs_without_reloading_evidence_until_completed_t
     assert calls == {"loader": 2, "stale": 2}
 
 
+def test_index_research_poll_timer_cancels_once_when_client_disconnects():
+    from etf_trading.nicegui_app.pages.research import _create_index_research_poll_timer
+
+    class FakeTimer:
+        def __init__(self):
+            self.cancel_calls = 0
+
+        def cancel(self):
+            self.cancel_calls += 1
+
+    class FakeClient:
+        def __init__(self):
+            self.disconnect_handlers = []
+
+        def on_disconnect(self, handler):
+            self.disconnect_handlers.append(handler)
+
+        def disconnect(self):
+            for handler in self.disconnect_handlers:
+                handler(self)
+
+    timer = FakeTimer()
+    client = FakeClient()
+    created = _create_index_research_poll_timer(
+        lambda: None,
+        timer_factory=lambda interval, callback: timer,
+        client_getter=lambda: client,
+    )
+
+    assert created is timer
+    assert len(client.disconnect_handlers) == 1
+    client.disconnect()
+    client.disconnect()
+    assert timer.cancel_calls == 1
+
+
+def test_index_research_poll_timer_is_safe_without_a_current_client():
+    from etf_trading.nicegui_app.pages.research import _create_index_research_poll_timer
+
+    timer = SimpleNamespace(cancel=lambda: pytest.fail("timer should not be cancelled"))
+
+    assert _create_index_research_poll_timer(
+        lambda: None,
+        timer_factory=lambda interval, callback: timer,
+        client_getter=lambda: None,
+    ) is timer
+
+
 def test_page_controller_reloads_each_completed_job_identity_once_and_refresh_marks_it_loaded():
     from etf_trading.nicegui_app.pages.research import IndexResearchPageController
 

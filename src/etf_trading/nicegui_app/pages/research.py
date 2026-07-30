@@ -620,7 +620,38 @@ def render_index_trend_research(report_root: str | Path, parquet_store, job_mana
 
     update_job_widgets()
     # This timer does not call the loader, stale scan, or rebuild the evidence area.
-    ui.timer(1.0, update_job_widgets)
+    _create_index_research_poll_timer(update_job_widgets)
+
+
+def _create_index_research_poll_timer(callback, *, timer_factory=None, client_getter=None):
+    """Create a page poll timer and stop it when its NiceGUI client disconnects."""
+
+    timer = (timer_factory or ui.timer)(1.0, callback)
+    get_client = client_getter or _current_nicegui_client
+    client = get_client()
+    if client is None:
+        return timer
+
+    cancelled = False
+
+    def cancel_timer(*_) -> None:
+        nonlocal cancelled
+        if cancelled:
+            return
+        cancelled = True
+        timer.cancel()
+
+    client.on_disconnect(cancel_timer)
+    return timer
+
+
+def _current_nicegui_client():
+    """Return the active NiceGUI client, if this code runs outside a page context."""
+
+    try:
+        return ui.context.client
+    except RuntimeError:
+        return None
 
 
 def _load_index_research_for_page(report_root: str | Path, *, loader=None) -> tuple[LoadedIndexResearch | None, str, str]:
