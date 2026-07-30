@@ -506,6 +506,7 @@ class IndexResearchPageController:
         self._limited = False
         self.last_loaded_completed_job_id: str | None = None
         self.last_loaded_completed_run_id: str | None = None
+        self.last_attempted_completed_identity: tuple[str | None, str | None] | None = None
 
     @property
     def state(self) -> IndexResearchPageState:
@@ -531,6 +532,8 @@ class IndexResearchPageController:
         self._diagnostic = diagnostic
         self._limited = bool(loaded is not None and loaded.run_meta.get("limited_run"))
         current_completed_identity = _current_completed_identity(self.job_manager.snapshot())
+        if expected_completed_identity is not None and current_completed_identity == expected_completed_identity:
+            self.last_attempted_completed_identity = expected_completed_identity
         if (
             loaded is not None
             and expected_completed_identity is not None
@@ -545,13 +548,13 @@ class IndexResearchPageController:
 
         snapshot = self.job_manager.snapshot()
         completed_identity = _completed_job_identity(snapshot)
-        is_new_completed_job = (
+        needs_evidence_attempt = (
             getattr(snapshot, "status", "idle") == "completed"
-            and completed_identity != (self.last_loaded_completed_job_id, self.last_loaded_completed_run_id)
+            and completed_identity != self.last_attempted_completed_identity
         )
-        if is_new_completed_job:
+        if needs_evidence_attempt:
             self.load_evidence()
-        return is_new_completed_job
+        return needs_evidence_attempt
 
 
 def _completed_job_identity(snapshot) -> tuple[str | None, str | None]:

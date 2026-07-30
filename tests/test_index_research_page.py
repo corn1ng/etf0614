@@ -164,8 +164,10 @@ def test_evidence_load_does_not_mark_new_completed_job_when_loader_returns_old_r
     controller.load_evidence()
 
     assert (controller.last_loaded_completed_job_id, controller.last_loaded_completed_run_id) != ("b", "run-b")
+    assert controller.last_attempted_completed_identity is None
     assert controller.poll() is True
     assert calls == {"loader": 2}
+    assert controller.last_attempted_completed_identity == ("b", "run-b")
     assert controller.poll() is False
 
 
@@ -184,6 +186,31 @@ def test_matching_completed_identity_and_loaded_run_do_not_reload_on_later_polls
     assert controller.poll() is False
     assert controller.poll() is False
     assert calls == {"loader": 1}
+
+
+def test_completed_invalid_evidence_is_attempted_once_until_explicit_refresh():
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    manager = SimpleNamespace(snapshot=lambda: SimpleNamespace(status="completed", job_id="a", run_id="run-a"))
+    calls = {"loader": 0}
+
+    def loader(_root):
+        calls["loader"] += 1
+        raise ValueError("latest index research pointer is missing")
+
+    controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=lambda *_: False)
+
+    assert controller.poll() is True
+    assert controller.poll() is False
+    assert controller.poll() is False
+    assert calls == {"loader": 1}
+    assert controller.last_loaded_completed_job_id is None
+    assert controller.last_attempted_completed_identity == ("a", "run-a")
+
+    controller.load_evidence()
+    assert calls == {"loader": 2}
+    assert controller.poll() is False
+    assert calls == {"loader": 2}
 
 
 @pytest.mark.parametrize("exc", [ValueError("latest index research pointer is missing"), OSError("unavailable")])
