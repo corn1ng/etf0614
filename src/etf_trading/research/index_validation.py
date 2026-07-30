@@ -52,12 +52,20 @@ def build_rolling_windows(frame: pd.DataFrame, *, years: int = 5, step_years: in
     if dates.empty:
         return []
     first_year = int(dates.min().year)
-    last = pd.Timestamp(dates.max()).normalize()
-    last_complete_year = last.year if last == pd.Timestamp(last.year, 12, 31) else last.year - 1
+    last_year = int(dates.max().year)
+    # There is no exchange calendar in this layer.  January+December observations
+    # for every consecutive year are a conservative, reproducible coverage proxy;
+    # December's final trading day need not literally be the 31st.
+    covered_years = {
+        year
+        for year, observations in pd.DataFrame({"trade_date": dates}).groupby(dates.dt.year)
+        if {1, 12}.issubset(set(observations["trade_date"].dt.month))
+    }
     windows: list[RollingWindow] = []
-    for start_year in range(first_year, last_complete_year - years + 2, step_years):
+    for start_year in range(first_year, last_year - years + 2, step_years):
         end_year = start_year + years - 1
-        windows.append(RollingWindow(pd.Timestamp(start_year, 1, 1), pd.Timestamp(end_year, 12, 31)))
+        if all(year in covered_years for year in range(start_year, end_year + 1)):
+            windows.append(RollingWindow(pd.Timestamp(start_year, 1, 1), pd.Timestamp(end_year, 12, 31)))
     return windows
 
 
@@ -154,7 +162,11 @@ def run_index_research(
             prospective_rows.append({**context, "status": "no_evaluable_history", "reason": "no_complete_indicator_row"})
         if progress is not None:
             progress(done, total, code, "completed")
+        if should_stop is not None and should_stop():
+            raise IndexResearchCancelled("index research cancelled before publishing a partial output")
 
+    if should_stop is not None and should_stop():
+        raise IndexResearchCancelled("index research cancelled before publishing a partial output")
     result_frame = _stable_frame(results, _RESULT_COLUMNS)
     buffer_frame = _stable_frame(buffer_rows, ["index_code", "cohort", "buffer_rate"])
     stress_frame = _stable_frame(stress_rows, _RESULT_COLUMNS)
@@ -195,6 +207,9 @@ def evaluate_effectiveness(
         "buffer_reduces_whipsaw_rate_and_trades": _buffer_gate(buffer_comparison, config, reasons, values),
         "stress_keeps_first_four_gates": _stress_gate(stress_results, config, reasons, values),
     }
+    for gate_name, passed in gates.items():
+        if not passed and not any(reason.startswith(f"{gate_name}:") for reason in reasons):
+            reasons.append(f"{gate_name}:evidence_unavailable")
     values["official_index_count"] = int(len(official))
     return EffectivenessAssessment(
         status="passed" if all(gates.values()) else "failed",
@@ -313,12 +328,17 @@ def _stable_frame(rows: list[dict[str, object]], leading_columns: list[str]) -> 
     return frame.loc[:, ordered].sort_values(sort_columns, kind="stable").reset_index(drop=True) if sort_columns else frame.loc[:, ordered]
 
 
-def _paired_full_history(results: pd.DataFrame, reasons: list[str]) -> pd.DataFrame:
+def _paired_full_history(
+    results: pd.DataFrame,
+    reasons: list[str],
+    *,
+    period_type: str = "full_history",
+) -> pd.DataFrame:
     required = {"index_code", "cohort", "period_type", "strategy_name", "max_drawdown", "calmar", "annualized_return"}
     if results.empty or not required.issubset(results.columns):
         reasons.append("no_official_full_history_pairs")
         return pd.DataFrame()
-    rows = results[(results["cohort"] == "official") & (results["period_type"] == "full_history")]
+    rows = results[(results["cohort"] == "official") & (results["period_type"] == period_type)]
     rows = rows[rows["strategy_name"].isin(["index_trend_v1", "buy_hold"])]
     if rows.empty:
         reasons.append("no_official_full_history_pairs")
@@ -369,34 +389,60 @@ def _first_four_gates(pairs: pd.DataFrame, config: IndexResearchConfig, reasons:
         "median_annual_return_v1": v1_return,
         "median_annual_return_buy_hold": buy_return,
     }
-    return {
+    gates = {
         "drawdown_win_rate": drawdown_win_rate >= config.min_drawdown_win_rate,
         "median_drawdown_reduction": reduction >= config.min_median_drawdown_reduction,
         "median_calmar_improves": v1_calmar > buy_calmar,
         "median_return_is_retained": v1_return >= buy_return - config.max_median_annual_return_lag,
-    }, values_out
+    }
+    if not gates["drawdown_win_rate"]:
+        reasons.append(f"drawdown_win_rate:value={drawdown_win_rate:g};threshold>={config.min_drawdown_win_rate:g}")
+    if not gates["median_drawdown_reduction"]:
+        reasons.append(f"median_drawdown_reduction:value={reduction:g};threshold>={config.min_median_drawdown_reduction:g}")
+    if not gates["median_calmar_improves"]:
+        reasons.append(f"median_calmar_improves:v1={v1_calmar:g};buy_hold={buy_calmar:g}")
+    if not gates["median_return_is_retained"]:
+        reasons.append(f"median_return_is_retained:v1={v1_return:g};minimum={buy_return - config.max_median_annual_return_lag:g}")
+    return gates, values_out
 
 
 def _buffer_gate(buffer: pd.DataFrame, config: IndexResearchConfig, reasons: list[str], values: dict[str, object]) -> bool:
-    needed = {"cohort", "buffer_rate", "whipsaw_trade_rate", "annualized_trade_count"}
+    needed = {"index_code", "cohort", "buffer_rate", "whipsaw_trade_rate", "annualized_trade_count"}
     if buffer.empty or not needed.issubset(buffer.columns):
         reasons.append("missing_buffer_comparison")
         return False
-    official = buffer[buffer["cohort"] == "official"]
-    rates: dict[float, tuple[float, float]] = {}
-    for rate in (0.0, config.buffer_rate):
-        group = official[official["buffer_rate"] == rate]
-        if group.empty:
-            reasons.append(f"missing_buffer_rate:{rate:g}")
+    official = buffer[(buffer["cohort"] == "official") & (buffer["buffer_rate"].isin((0.0, config.buffer_rate)))].copy()
+    if official.empty:
+        reasons.append("buffer_reduces_whipsaw_rate_and_trades:missing_buffer_comparison")
+        return False
+    duplicate = official.duplicated(["index_code", "buffer_rate"], keep=False)
+    if duplicate.any():
+        row = official.loc[duplicate].sort_values(["index_code", "buffer_rate"]).iloc[0]
+        reasons.append(f"buffer_reduces_whipsaw_rate_and_trades:duplicate_buffer_index:{row['index_code']}:{row['buffer_rate']:g}")
+        return False
+    zero = official[official["buffer_rate"] == 0.0].set_index("index_code")
+    two = official[official["buffer_rate"] == config.buffer_rate].set_index("index_code")
+    unmatched = sorted(set(zero.index).symmetric_difference(two.index))
+    if unmatched:
+        reasons.append(f"buffer_reduces_whipsaw_rate_and_trades:unpaired_buffer_index:{unmatched[0]}")
+        return False
+    if zero.empty:
+        reasons.append("buffer_reduces_whipsaw_rate_and_trades:missing_buffer_rate:0")
+        return False
+    for code in zero.index:
+        observed = list(zero.loc[code, ["whipsaw_trade_rate", "annualized_trade_count"]]) + list(two.loc[code, ["whipsaw_trade_rate", "annualized_trade_count"]])
+        if not all(_finite(value) for value in observed):
+            reasons.append(f"buffer_reduces_whipsaw_rate_and_trades:non_finite_buffer_metric:{code}")
             return False
-        rate_value = float(pd.to_numeric(group["whipsaw_trade_rate"], errors="coerce").mean())
-        trade_value = float(pd.to_numeric(group["annualized_trade_count"], errors="coerce").mean())
-        if not (math.isfinite(rate_value) and math.isfinite(trade_value)):
-            reasons.append("non_finite_buffer_metric")
-            return False
-        rates[rate] = (rate_value, trade_value)
-    values.update({"whipsaw_rate_0": rates[0.0][0], "whipsaw_rate_2": rates[config.buffer_rate][0], "trades_per_year_0": rates[0.0][1], "trades_per_year_2": rates[config.buffer_rate][1]})
-    return rates[config.buffer_rate][0] < rates[0.0][0] and rates[config.buffer_rate][1] < rates[0.0][1]
+    rate_0 = float(pd.to_numeric(zero["whipsaw_trade_rate"], errors="raise").mean())
+    rate_2 = float(pd.to_numeric(two["whipsaw_trade_rate"], errors="raise").mean())
+    trades_0 = float(pd.to_numeric(zero["annualized_trade_count"], errors="raise").mean())
+    trades_2 = float(pd.to_numeric(two["annualized_trade_count"], errors="raise").mean())
+    values.update({"whipsaw_rate_0": rate_0, "whipsaw_rate_2": rate_2, "trades_per_year_0": trades_0, "trades_per_year_2": trades_2})
+    passed = rate_2 < rate_0 and trades_2 < trades_0
+    if not passed:
+        reasons.append(f"buffer_reduces_whipsaw_rate_and_trades:whipsaw_0={rate_0:g};whipsaw_2={rate_2:g};trades_0={trades_0:g};trades_2={trades_2:g}")
+    return passed
 
 
 def _stress_gate(stress: pd.DataFrame, config: IndexResearchConfig, reasons: list[str], values: dict[str, object]) -> bool:
@@ -404,7 +450,10 @@ def _stress_gate(stress: pd.DataFrame, config: IndexResearchConfig, reasons: lis
     gates, stress_values = _first_four_gates(pairs, config, reasons)
     values["stress_first_four_gates"] = gates
     values.update({f"stress_{key}": value for key, value in stress_values.items()})
-    return all(gates.values())
+    passed = all(gates.values())
+    if not passed:
+        reasons.append(f"stress_keeps_first_four_gates:first_four={gates}")
+    return passed
 
 
 def _group_statistics(results: pd.DataFrame) -> pd.DataFrame:
@@ -431,18 +480,21 @@ def _worst_indices(results: pd.DataFrame) -> pd.DataFrame:
     return subset.sort_values(["max_drawdown", "index_code"], ascending=[True, True], kind="stable").head(10).reset_index(drop=True)
 
 
-def _rolling_gate_summary(rolling: pd.DataFrame, config: IndexResearchConfig) -> pd.DataFrame:
+def summarize_rolling_gates(rolling: pd.DataFrame, config: IndexResearchConfig) -> pd.DataFrame:
     if rolling.empty:
         return pd.DataFrame(columns=["eligible_windows", "passing_windows", "pass_rate"])
     rows: list[dict[str, object]] = []
     for label, window in rolling[rolling["cohort"] == "official"].groupby("period_label", sort=True):
-        gates, _ = _first_four_gates(_paired_full_history(window, []), config, [])
+        gates, _ = _first_four_gates(_paired_full_history(window, [], period_type="rolling_5y"), config, [])
         passed = all(gates.values())
         rows.append({"period_label": label, "eligible_windows": 1, "passing_windows": int(passed), "pass_rate": float(passed), **gates})
     if not rows:
         return pd.DataFrame(columns=["eligible_windows", "passing_windows", "pass_rate"])
     summary = pd.DataFrame(rows)
     return pd.DataFrame([{"eligible_windows": int(summary["eligible_windows"].sum()), "passing_windows": int(summary["passing_windows"].sum()), "pass_rate": float(summary["passing_windows"].mean())}])
+
+
+_rolling_gate_summary = summarize_rolling_gates
 
 
 def _finite(value: object) -> bool:

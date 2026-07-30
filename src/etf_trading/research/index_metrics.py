@@ -43,7 +43,7 @@ def summarize_index_result(
         raise ValueError("whipsaw_max_holding_days must be non-negative")
 
     nav = _normalized_nav(result.nav)
-    metrics = _nav_metrics(nav)
+    metrics = _nav_metrics(nav, initial_nav=result.initial_nav)
     closed_round_trips = _closed_round_trips(result.trades, nav)
     metrics.update(_trade_metrics(result.trades, closed_round_trips, nav, whipsaw_max_holding_days))
     return metrics
@@ -85,7 +85,7 @@ def _normalized_nav(nav: pd.DataFrame) -> pd.DataFrame:
     return frame.sort_values("trade_date").reset_index(drop=True)
 
 
-def _nav_metrics(nav: pd.DataFrame) -> dict[str, object]:
+def _nav_metrics(nav: pd.DataFrame, *, initial_nav: float | None = None) -> dict[str, object]:
     if nav.empty:
         return _zero_nav_metrics()
 
@@ -93,9 +93,17 @@ def _nav_metrics(nav: pd.DataFrame) -> dict[str, object]:
     annualized_return = 0.0
     volatility = 0.0
     sharpe = 0.0
-    if len(nav) >= 2:
+    if initial_nav is not None:
+        if not math.isfinite(initial_nav) or initial_nav <= 0:
+            raise ValueError("initial_nav must be finite and positive")
+        # The base is capital immediately before the first dated close valuation,
+        # so there are ``len(nav)`` observed holding periods for annualization.
+        total_return = float(nav["nav"].iloc[-1] / initial_nav - 1.0)
+        annualized_return = _annualized_return(total_return, len(nav))
+    elif len(nav) >= 2:
         total_return = float(nav["nav"].iloc[-1] / nav["nav"].iloc[0] - 1.0)
         annualized_return = _annualized_return(total_return, len(nav) - 1)
+    if len(nav) >= 2:
         daily_returns = nav["nav"].pct_change().iloc[1:]
         volatility = float(daily_returns.std(ddof=0) * math.sqrt(TRADING_DAYS_PER_YEAR))
         sharpe = 0.0 if volatility == 0 else annualized_return / volatility

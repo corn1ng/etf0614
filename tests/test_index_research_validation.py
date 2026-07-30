@@ -7,12 +7,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from etf_trading.research.index_models import IndexAdmissionResult, IndexResearchConfig
+from etf_trading.research.index_backtest import run_buy_hold
+from etf_trading.research.index_metrics import summarize_index_result
+from etf_trading.research.index_models import IndexAdmissionResult, IndexBacktestCosts, IndexResearchConfig
 from etf_trading.research.index_validation import (
     IndexResearchCancelled,
     build_rolling_windows,
     evaluate_effectiveness,
     run_index_research,
+    summarize_rolling_gates,
 )
 
 
@@ -42,6 +45,30 @@ def test_five_year_windows_use_calendar_boundaries_and_exclude_incomplete_tail()
         (2015, 2019),
     ]
     assert all(window.end.month == 12 and window.end.day == 31 for window in windows)
+
+
+def test_rolling_windows_require_january_and_december_coverage_for_every_year():
+    half_first_year = long_frame("2005-06-01", "2010-12-30")
+    assert [(window.start.year, window.end.year) for window in build_rolling_windows(half_first_year)] == [(2006, 2010)]
+
+    missing_2007 = long_frame("2005-01-03", "2009-12-30")
+    missing_2007 = missing_2007[missing_2007["trade_date"].dt.year != 2007]
+    assert build_rolling_windows(missing_2007) == []
+
+
+def test_rolling_gate_summary_counts_passing_official_windows():
+    rolling = pd.concat(
+        [
+            paired_results().assign(period_type="rolling_5y", period_label="2005-2009"),
+            paired_results().assign(period_type="rolling_5y", period_label="2006-2010"),
+        ],
+        ignore_index=True,
+    )
+
+    summary = summarize_rolling_gates(rolling, make_config())
+
+    assert summary.iloc[0][["eligible_windows", "passing_windows"]].tolist() == [2, 2]
+    assert summary.iloc[0]["pass_rate"] == 1.0
 
 
 def test_prospective_rows_are_strictly_post_lock_but_have_pre_lock_warmup():
@@ -88,6 +115,28 @@ def test_effectiveness_requires_both_lower_whipsaw_rate_and_trades():
 
 
 @pytest.mark.parametrize(
+    "variant, expected_reason",
+    [
+        ("nan", "non_finite_buffer_metric"),
+        ("unpaired", "unpaired_buffer_index:000905"),
+        ("duplicate", "duplicate_buffer_index:000300:0"),
+    ],
+)
+def test_buffer_gate_rejects_invalid_or_unpaired_official_evidence(variant, expected_reason):
+    buffer = buffer_rows()
+    if variant == "nan":
+        buffer = buffer.assign(whipsaw_trade_rate=np.nan)
+    elif variant == "unpaired":
+        buffer = buffer.query("index_code != '000905' | buffer_rate != 0.02")
+    else:
+        buffer = pd.concat([buffer, buffer.iloc[[0]]], ignore_index=True)
+    assessment = evaluate_effectiveness(paired_results(), buffer, paired_results(), make_config())
+
+    assert assessment.gates["buffer_reduces_whipsaw_rate_and_trades"] is False
+    assert any(expected_reason in reason for reason in assessment.reasons)
+
+
+@pytest.mark.parametrize(
     "mutator, reason",
     [
         (lambda rows: rows.assign(cohort="reference"), "no_official_full_history_pairs"),
@@ -116,6 +165,22 @@ def test_stress_gate_recomputes_first_four_gates_under_stress_costs():
     assert assessment.status == "failed"
 
 
+def test_each_failed_gate_has_an_auditable_reason_with_its_name():
+    failed = paired_results(v1_drawdown=-0.60, v1_return=0.01).assign(
+        calmar=lambda rows: np.where(rows["strategy_name"] == "index_trend_v1", 0.5, 0.8)
+    )
+    assessment = evaluate_effectiveness(
+        failed,
+        buffer_rows(rate_0=0.10, rate_2=0.10),
+        failed,
+        make_config(),
+    )
+
+    assert not any(assessment.gates.values())
+    for name, passed in assessment.gates.items():
+        assert passed or any(reason.startswith(f"{name}:") for reason in assessment.reasons)
+
+
 def test_output_is_deterministic_and_reports_progress_at_index_boundaries():
     admission = two_index_admission()
     events: list[tuple[int, int, str, str]] = []
@@ -141,6 +206,22 @@ def test_cancellation_is_checked_at_index_boundary_and_never_returns_partial_out
         run_index_research(two_index_admission(), make_config(), should_stop=should_stop)
 
 
+def test_cancellation_after_the_last_index_is_not_published_as_a_completed_output():
+    stop = False
+
+    def progress(*_event):
+        nonlocal stop
+        stop = True
+
+    with pytest.raises(IndexResearchCancelled):
+        run_index_research(
+            admission_for({"000300": long_frame("2005-01-01", "2011-12-31")}, cohorts={"000300": "official"}),
+            make_config(),
+            progress=progress,
+            should_stop=lambda: stop,
+        )
+
+
 def test_run_output_contains_group_statistics_worst_ten_and_rolling_gate_rate():
     output = run_index_research(two_index_admission(), make_config())
 
@@ -148,6 +229,24 @@ def test_run_output_contains_group_statistics_worst_ten_and_rolling_gate_rate():
     assert {"mean", "median", "q25", "q75"}.issubset(output.group_statistics.columns)
     assert len(output.worst_indices) <= 10
     assert {"eligible_windows", "passing_windows", "pass_rate"}.issubset(output.rolling_gate_summary.columns)
+
+
+def test_buy_hold_summary_includes_initial_execution_cost_in_returns():
+    frame = pd.DataFrame(
+        {
+            "trade_date": pd.date_range("2024-01-02", periods=3, freq="B"),
+            "open": [100.0, 100.0, 100.0],
+            "high": [101.0, 101.0, 101.0],
+            "low": [99.0, 99.0, 99.0],
+            "close": [100.0, 100.0, 100.0],
+        }
+    )
+    result = run_buy_hold("000300", frame, IndexBacktestCosts(commission_rate=0.001, slippage_rate=0.001))
+
+    summary = summarize_index_result(result)
+
+    assert summary["total_return"] < 0
+    assert summary["annualized_return"] < 0
 
 
 def make_config() -> IndexResearchConfig:

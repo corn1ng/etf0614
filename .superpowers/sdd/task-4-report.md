@@ -58,8 +58,31 @@ Result: `512 passed, 1 skipped in 37.26s`.
 
 This task supplies in-memory research outputs only.  Versioned artifact publishing,
   report rendering, background execution, and the complete real-index run are
-  intentionally reserved for later tasks.
+intentionally reserved for later tasks.
 
-## Commit
+## Review hardening
 
-Pending commit: `feat: validate locked index trend v1`.
+The review follow-up added RED evidence for six defects and then fixed them:
+
+- rolling-window coverage now requires January and December observations in every
+  consecutive calendar year (a documented data-coverage proxy, not an exchange
+  calendar) and rolling gates pair `rolling_5y` rows rather than full-history rows;
+- buffer evidence is paired by official index at 0% and 2%, rejecting duplicates,
+  missing mates, and non-finite values before aggregation;
+- buy-and-hold carries an undated `initial_nav=1.0` capital base so first-buy costs
+  affect total and annualized returns without fabricating a NAV date; its annualized
+  period count is the number of dated close observations after that initial capital;
+- cancellation is checked after every index completion and before final assessment;
+- every failed effectiveness gate has a gate-named, value/threshold or
+  evidence-unavailable reason.
+
+Review GREEN command:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_validation.py tests\test_index_research_backtest.py tests\test_index_research_metrics.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-review-green
+```
+
+Result: `47 passed in 9.57s`.
+
+Review focused suite (`validation`, Task 2, and Task 3 neighbors): `54 passed in
+9.56s`.  Review full suite: `520 passed, 1 skipped in 37.93s`.

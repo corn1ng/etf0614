@@ -131,7 +131,7 @@ def run_buy_hold(index_code: str, frame: pd.DataFrame, costs: IndexBacktestCosts
             nav = cash + shares * close_price
             weight = 0.0 if nav == 0 else shares * close_price / nav
             nav_rows.append({"trade_date": trade_date, "nav": nav, "weight": weight})
-    return _result(trades, nav_rows, [])
+    return _result(trades, nav_rows, [], initial_nav=1.0)
 
 
 def _prepare_prices(frame: pd.DataFrame) -> pd.DataFrame:
@@ -213,12 +213,17 @@ def _cancellation(index_code: str, signal: StrategySignal, date: pd.Timestamp, r
 
 
 def _result(
-    trades: list[IndexBacktestTrade], nav_rows: list[dict[str, object]], cancellations: list[dict[str, object]]
+    trades: list[IndexBacktestTrade],
+    nav_rows: list[dict[str, object]],
+    cancellations: list[dict[str, object]],
+    *,
+    initial_nav: float | None = None,
 ) -> IndexBacktestResult:
     return IndexBacktestResult(
         trades=trades,
         nav=pd.DataFrame(nav_rows, columns=["trade_date", "nav", "weight"]),
         cancelled_signals=pd.DataFrame(cancellations, columns=_CANCELLED_COLUMNS),
+        initial_nav=initial_nav,
     )
 
 
