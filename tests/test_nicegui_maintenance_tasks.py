@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 from pathlib import Path
 import threading
 from datetime import datetime
@@ -122,6 +123,17 @@ def _snapshot_meta(parquet_store: ParquetStore) -> dict[str, object]:
     return json.loads((parquet_store.root / "cache" / "index_atomic_snapshot.meta.json").read_text(encoding="utf-8"))
 
 
+def _change_file_content_preserving_size_and_mtime(path: Path) -> None:
+    metadata = path.stat()
+    content = bytearray(path.read_bytes())
+    assert content
+    content[len(content) // 2] ^= 1
+    path.write_bytes(content)
+    os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    assert path.stat().st_size == metadata.st_size
+    assert path.stat().st_mtime_ns == metadata.st_mtime_ns
+
+
 def _write_previous_snapshot(parquet_store: ParquetStore) -> None:
     definitions = (_atomic_definition().to_index_definition(),)
     coverage = _atomic_coverage()
@@ -229,12 +241,13 @@ def test_atomic_snapshot_runner_rejects_publish_when_local_history_changes_durin
 
 
 def test_atomic_snapshot_runner_rejects_publish_when_valuation_history_changes_during_build(tmp_path, monkeypatch):
+    valuation_file = tmp_path / "parquet" / "index_valuations" / "000300.parquet"
+    valuation_file.parent.mkdir(parents=True, exist_ok=True)
+    valuation_file.write_bytes(b"official-valuation-input")
+
     def build_snapshot(parquet_store, definitions, *, coverage=None, on_progress=None):
         del definitions, coverage, on_progress
-        parquet_store.write_index_valuations(
-            "000300",
-            pd.DataFrame({"trade_date": ["2026-07-12"], "pe_ttm": [12.0]}),
-        )
+        _change_file_content_preserving_size_and_mtime(valuation_file)
         return _atomic_summary("000905"), _atomic_details("000905")
 
     runner, store, parquet_store = _atomic_runner(tmp_path, build_snapshot, monkeypatch)

@@ -66,6 +66,7 @@ _ATOMIC_SNAPSHOT_CACHE_LOCK = RLock()
 ATOMIC_SNAPSHOT_BUILD_MARKER_MAX_AGE_SECONDS = 600.0
 INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 3
 _INDEX_ATOMIC_SNAPSHOT_LOCK = RLock()
+_INDEX_ATOMIC_INPUT_HASH_CHUNK_SIZE = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -555,26 +556,48 @@ def _index_atomic_snapshot_source_signature(
     digest.update(_index_atomic_snapshot_catalog_signature(selected_definitions).encode())
     digest.update(_index_coverage_signature_bytes(coverage))
     for definition in selected_definitions:
-        path = root / "indexes" / f"{definition.index_code}.parquet"
-        try:
-            stat = path.stat()
-        except OSError:
-            digest.update(f"|prices|{definition.index_code}|exists=0".encode())
-        else:
-            digest.update(
-                f"|prices|{definition.index_code}|exists=1|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}".encode()
-            )
+        _append_index_atomic_input_file_signature(
+            digest,
+            "prices",
+            definition.index_code,
+            root / "indexes" / f"{definition.index_code}.parquet",
+        )
         if definition.index_code in OFFICIAL_INDEX_VALUATION_TS_CODES:
-            valuation_path = root / "index_valuations" / f"{definition.index_code}.parquet"
-            try:
-                valuation_stat = valuation_path.stat()
-            except OSError:
-                digest.update(f"|valuations|{definition.index_code}|exists=0".encode())
-            else:
-                digest.update(
-                    f"|valuations|{definition.index_code}|exists=1|size={valuation_stat.st_size}|mtime_ns={valuation_stat.st_mtime_ns}".encode()
-                )
+            _append_index_atomic_input_file_signature(
+                digest,
+                "valuations",
+                definition.index_code,
+                root / "index_valuations" / f"{definition.index_code}.parquet",
+            )
     return digest.hexdigest()
+
+
+def _append_index_atomic_input_file_signature(
+    digest: hashlib._Hash,
+    family: str,
+    index_code: str,
+    path: Path,
+) -> None:
+    try:
+        stat = path.stat()
+    except OSError:
+        digest.update(f"|{family}|{index_code}|exists=0".encode())
+        return
+
+    content_digest = hashlib.sha256()
+    try:
+        with path.open("rb") as input_file:
+            while chunk := input_file.read(_INDEX_ATOMIC_INPUT_HASH_CHUNK_SIZE):
+                content_digest.update(chunk)
+    except OSError as exc:
+        digest.update(
+            f"|{family}|{index_code}|exists=1|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}|unreadable={type(exc).__name__}".encode()
+        )
+        return
+
+    digest.update(
+        f"|{family}|{index_code}|exists=1|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}|sha256={content_digest.hexdigest()}".encode()
+    )
 
 
 def _index_coverage_signature_bytes(coverage: pd.DataFrame | None) -> bytes:

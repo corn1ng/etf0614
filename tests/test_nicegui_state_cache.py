@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -119,6 +120,17 @@ def _coverage(index_code: str, latest_trade_date: str = "2026-07-12") -> pd.Data
 
 def _read_index_atomic_meta(parquet_store: ParquetStore) -> dict[str, object]:
     return json.loads((parquet_store.root / "cache" / "index_atomic_snapshot.meta.json").read_text(encoding="utf-8"))
+
+
+def _change_file_content_preserving_size_and_mtime(path: Path) -> None:
+    metadata = path.stat()
+    content = bytearray(path.read_bytes())
+    assert content
+    content[len(content) // 2] ^= 1
+    path.write_bytes(content)
+    os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    assert path.stat().st_size == metadata.st_size
+    assert path.stat().st_mtime_ns == metadata.st_mtime_ns
 
 
 def _write_atomic_cache(root: Path, signature: str, schema_version: int | None = None) -> None:
@@ -400,6 +412,25 @@ def test_valuation_cache_change_marks_published_snapshot_stale(tmp_path):
     loaded = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
 
     assert loaded.status == "stale"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    ("indexes/000300.parquet", "index_valuations/000300.parquet"),
+    ids=("price", "supported_valuation"),
+)
+def test_index_atomic_input_signature_detects_content_change_with_preserved_metadata(tmp_path, relative_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    path = parquet_store.root / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"index-input-content")
+
+    before = state._index_atomic_snapshot_source_signature(parquet_store, definitions)
+    _change_file_content_preserving_size_and_mtime(path)
+    after = state._index_atomic_snapshot_source_signature(parquet_store, definitions)
+
+    assert after != before
 
 
 def test_atomic_snapshot_meta_records_schema_catalog_source_and_task_result(tmp_path):
