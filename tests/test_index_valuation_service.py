@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from etf_trading.data.index_valuation_service import OfficialIndexValuationSyncService
 from etf_trading.data.index_valuations import finalize_index_valuation_frame
@@ -44,6 +45,19 @@ class FailingOfficialProvider:
 
     def fetch_index_official_valuations(self, code, start, end):
         raise ProviderCallError(self.message, category="permission")
+
+
+class RecordingParquetStore:
+    def __init__(self, store):
+        self.store = store
+        self.write_calls = []
+
+    def read_index_valuations(self, index_code):
+        return self.store.read_index_valuations(index_code)
+
+    def write_index_valuations(self, index_code, frame):
+        self.write_calls.append((index_code, frame.copy()))
+        return self.store.write_index_valuations(index_code, frame)
 
 
 def test_sync_all_initializes_then_increments_without_duplicates(tmp_path):
@@ -101,7 +115,11 @@ def test_sync_rejects_invalid_provider_frame_without_replacing_cache(tmp_path):
     existing = _valuation_rows(["2026-07-28"])
     store.write_index_valuations("000300", existing)
     provider = FakeOfficialProvider(
-        {"000300": pd.DataFrame({"trade_date": ["2026-07-29"], "other": [1]})}
+        {
+            "000300": pd.DataFrame(
+                {"index_code": ["000300"], "trade_date": ["2026-07-29"], "other": [1]}
+            )
+        }
     )
     service = OfficialIndexValuationSyncService(provider, store, index_codes=("000300",))
 
@@ -110,3 +128,27 @@ def test_sync_rejects_invalid_provider_frame_without_replacing_cache(tmp_path):
     assert result.loc[0, "status"] == "FAILED"
     assert "valuation metric" in result.loc[0, "message"]
     pd.testing.assert_frame_equal(store.read_index_valuations("000300"), existing)
+
+
+@pytest.mark.parametrize("invalid_index_code", ["missing", None, "000905"])
+def test_sync_rejects_missing_empty_or_mismatched_index_code_without_writing_cache(
+    tmp_path, invalid_index_code
+):
+    backing_store = ParquetStore(tmp_path / "parquet")
+    existing = _valuation_rows(["2026-07-28"])
+    backing_store.write_index_valuations("000300", existing)
+    fetched = _valuation_rows(["2026-07-29"])
+    if invalid_index_code == "missing":
+        fetched = fetched.drop(columns="index_code")
+    else:
+        fetched["index_code"] = invalid_index_code
+    store = RecordingParquetStore(backing_store)
+    provider = FakeOfficialProvider({"000300": fetched})
+    service = OfficialIndexValuationSyncService(provider, store, index_codes=("000300",))
+
+    result = service.sync_all("2026-07-29")
+
+    assert result.loc[0, "status"] == "FAILED"
+    assert "index_code" in result.loc[0, "message"]
+    assert store.write_calls == []
+    pd.testing.assert_frame_equal(backing_store.read_index_valuations("000300"), existing)

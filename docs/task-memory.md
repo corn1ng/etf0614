@@ -1,5 +1,13 @@
 # Task Memory
 
+## 2026-07-30 - Reject invalid official valuation index codes
+
+- Summary: Hardened official valuation synchronization so a non-empty provider response must contain a non-null `index_code` matching the index currently being synchronized before any cache write occurs.
+- Verification: `H:\\pythonproject\\etf0614\\etf0614\\.venv-win\\Scripts\\python.exe -m pytest -q --basetemp C:\\Users\\cjj\\AppData\\Local\\Temp\\index-profile-sync-index-code-full` passed with 459 tests and 1 skipped.
+- Watch out next time:
+  - A valid date and valuation metric are insufficient: every returned row must belong to the requested index before deduplicating or writing.
+  - Test cache-preservation paths with a write-recording store as well as persisted-frame equality, so a rejected response cannot cause even a transient write.
+
 ## 2026-07-30 - Synchronize official index valuation cache
 
 - Summary: Added an idempotent official-valuation synchronization service for the six explicit Tushare index mappings. It performs a 2004-01-01 first fill, date-bounded incremental updates, deduplicated merges, progress callbacks, response-schema validation, and redacted failure reporting; empty or failed calls leave a successful cache untouched.

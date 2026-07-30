@@ -56,7 +56,7 @@ class OfficialIndexValuationSyncService:
                 start = pd.Timestamp("2004-01-01") if pd.isna(latest) else latest + pd.Timedelta(days=1)
                 try:
                     fetched = self.provider.fetch_index_official_valuations(code, start, through_date)
-                    _validate_fetched_valuations(fetched)
+                    _validate_fetched_valuations(fetched, index_code=code)
                     if fetched.empty:
                         status, message = "EMPTY", "Provider returned no new official valuations."
                     else:
@@ -93,12 +93,18 @@ def _latest_trade_date(frame: pd.DataFrame) -> pd.Timestamp:
     return latest.normalize() if pd.notna(latest) else pd.NaT
 
 
-def _validate_fetched_valuations(frame: pd.DataFrame) -> None:
+def _validate_fetched_valuations(frame: pd.DataFrame, *, index_code: str) -> None:
     if not isinstance(frame, pd.DataFrame):
         raise ValueError("official valuation response must be a DataFrame")
     if frame.empty:
         return
     if "trade_date" not in frame:
         raise ValueError("official valuation response missing trade_date")
+    if "index_code" not in frame:
+        raise ValueError("official valuation response missing index_code")
+    if frame["index_code"].isna().any():
+        raise ValueError("official valuation response has empty index_code")
+    if not frame["index_code"].astype(str).eq(str(index_code)).all():
+        raise ValueError("official valuation response has mismatched index_code")
     if not {"pe_static", "pe_ttm", "pb"}.intersection(frame.columns):
         raise ValueError("official valuation response missing valuation metric")
