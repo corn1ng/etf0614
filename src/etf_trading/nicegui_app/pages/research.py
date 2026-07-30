@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import RLock
 
 import pandas as pd
 from nicegui import ui
@@ -23,6 +24,8 @@ from etf_trading.nicegui_app.view_models import (
 from etf_trading.research.comparison import compare_regime_pairs
 from etf_trading.research.config import append_research_candidate, load_research_candidates
 from etf_trading.research.index_etf_universe import selected_etf_codes
+from etf_trading.research.index_jobs import IndexResearchAlreadyRunning, IndexResearchJobManager, index_research_is_stale
+from etf_trading.research.index_report import LoadedIndexResearch, load_latest_index_research, run_and_publish_index_research
 from etf_trading.research.models import StrategyCandidate
 from etf_trading.research.runner import run_research
 from etf_trading.research.signals import generate_candidate_signals
@@ -31,7 +34,10 @@ from etf_trading.strategy.models import StrategySignal
 
 RESEARCH_CONFIG = Path("configs/research.yaml")
 RESEARCH_REPORT_DIR = Path("reports/research_dashboard")
+INDEX_RESEARCH_REPORT_DIR = Path("reports/index_research")
 MIN_RESEARCH_ROWS = 252
+_INDEX_RESEARCH_JOB_MANAGERS: dict[tuple[str, str], IndexResearchJobManager] = {}
+_INDEX_RESEARCH_JOB_MANAGERS_LOCK = RLock()
 MA_OPTIONS = {
     "20日线": "ma20",
     "51日线": "ma51",
@@ -78,6 +84,8 @@ def render(snapshot: PlatformSnapshot, section: str, store=None, parquet_store=N
         _render_strategy_results("策略比较", store, parquet_store)
     elif section == "ETF复盘":
         _render_strategy_results("ETF复盘", store, parquet_store)
+    elif section == "指数趋势回测":
+        render_index_trend_research(INDEX_RESEARCH_REPORT_DIR, parquet_store, _index_research_job_manager(INDEX_RESEARCH_REPORT_DIR, parquet_store))
     else:
         _render_index_filter_experiment(snapshot, parquet_store)
 
@@ -440,6 +448,196 @@ def _draw_replay_chart(container, candidate_name: str, etf_code: str, category: 
         render_ranged_lightweight_chart(payload, element_id=f"research-replay-{candidate_name}-{etf_code}", title=f"ETF：{etf_code}")
         trades = _trade_rows(result.trades)
         _render_rows(trades, "该策略没有产生交易", "当前 ETF 历史区间没有买卖点。")
+
+
+def _index_research_job_manager(report_root: str | Path, parquet_store) -> IndexResearchJobManager:
+    """Keep one job manager for each page data location, not one per render."""
+
+    parquet_root = Path(getattr(parquet_store, "root", "data/parquet"))
+    key = (str(Path(report_root).resolve()), str(parquet_root.resolve()))
+    with _INDEX_RESEARCH_JOB_MANAGERS_LOCK:
+        manager = _INDEX_RESEARCH_JOB_MANAGERS.get(key)
+        if manager is None:
+            manager = IndexResearchJobManager(
+                lambda *, progress, should_stop: run_and_publish_index_research(
+                    report_root=report_root,
+                    parquet_root=parquet_root,
+                    progress=progress,
+                    should_stop=should_stop,
+                )
+            )
+            _INDEX_RESEARCH_JOB_MANAGERS[key] = manager
+        return manager
+
+
+def render_index_trend_research(report_root: str | Path, parquet_store, job_manager: IndexResearchJobManager) -> None:
+    """Render only a validated published package; calculation starts by user action."""
+
+    area = ui.column().classes("w-full gap-3 index-trend-research")
+
+    def draw() -> None:
+        area.clear()
+        job = job_manager.snapshot()
+        loaded, state, diagnostic = _load_index_research_for_page(report_root)
+        with area:
+            ui.label("指数理论回测").classes("text-base font-semibold text-slate-800")
+            _render_index_research_metadata(loaded, state, diagnostic, parquet_store)
+            _render_index_research_controls(job_manager, job, draw)
+            _render_index_research_job_state(job)
+            if loaded is not None:
+                _render_index_research_evidence(loaded)
+
+    draw()
+    # This refreshes read-only page state and never starts a research calculation.
+    ui.timer(1.0, draw)
+
+
+def _load_index_research_for_page(report_root: str | Path) -> tuple[LoadedIndexResearch | None, str, str]:
+    try:
+        return load_latest_index_research(report_root), "available", ""
+    except ValueError as exc:
+        message = str(exc)
+        state = "missing" if "pointer is missing" in message else "invalid"
+        return None, state, message
+
+
+def _render_index_research_metadata(loaded: LoadedIndexResearch | None, state: str, diagnostic: str, parquet_store) -> None:
+    if loaded is None:
+        if state == "missing":
+            empty_state("暂无指数趋势回测结果", "页面不会自动计算；请点击“重新回测”在后台生成完整证据包。")
+        else:
+            empty_state("指数趋势回测结果无效", f"已拒绝读取不完整或损坏的结果：{diagnostic}")
+        return
+    meta = loaded.run_meta
+    stale = index_research_is_stale(meta, parquet_store)
+    with ui.row().classes("w-full gap-2 flex-wrap"):
+        _metric("策略版本", meta.get("strategy_version", ""), "锁定规则")
+        _metric("锁定日期", meta.get("locked_at", ""), "参数冻结日")
+        _metric("数据截止日", meta.get("data_cutoff", ""), "已发布样本")
+        _metric("运行时间", meta.get("run_at", ""), "证据包生成时间")
+        _metric("结果状态", "结果已过期" if stale else "结果可用", "本地指数数据检查")
+    if stale:
+        ui.label("结果已过期：本地指数 Parquet 存在严格晚于数据截止日的新数据，请重新回测。").classes("workbench-warning-line w-full")
+    if bool(meta.get("limited_run")):
+        ui.label("醒目提示：这是有限样本运行，不构成全量历史有效性结论。").classes("workbench-warning-line w-full")
+
+
+def _render_index_research_controls(job_manager: IndexResearchJobManager, job, refresh) -> None:
+    with ui.row().classes("workbench-toolbar w-full gap-2 flex-wrap"):
+        rerun = ui.button("重新回测", icon="play_arrow", on_click=lambda: _start_index_research_job(job_manager, refresh)).props("dense outline")
+        if job.status in {"queued", "running"}:
+            rerun.disable()
+            ui.button("取消重算", icon="cancel", on_click=lambda: job_manager.cancel()).props("dense outline")
+            ui.label("取消将在当前指数完成后生效；不会强制终止线程。").classes("text-xs text-slate-500")
+
+
+def _start_index_research_job(job_manager: IndexResearchJobManager, refresh) -> None:
+    try:
+        job_manager.start()
+    except IndexResearchAlreadyRunning:
+        ui.notify("指数趋势回测已在运行", type="warning")
+    else:
+        ui.notify("已在后台启动指数趋势回测", type="positive")
+    refresh()
+
+
+def _render_index_research_job_state(job) -> None:
+    if job.status in {"queued", "running"}:
+        if job.total:
+            ui.linear_progress(value=job.done / job.total).props("instant-feedback").classes("w-full")
+        ui.label(f"任务状态：{job.status} · {job.done}/{job.total} · {job.index_code or job.phase}").classes("text-sm text-slate-600")
+    elif job.status == "completed":
+        ui.label(f"后台回测完成：run_id={job.run_id or ''}，数据截止日={job.data_cutoff or ''}。已重新读取最新完整结果。").classes("text-sm text-emerald-700")
+    elif job.status == "failed":
+        ui.label(f"后台回测失败：{job.error}").classes("text-sm text-red-700")
+    elif job.status == "cancelled":
+        ui.label("后台回测已取消；最近一次成功发布的结果仍可查看。").classes("text-sm text-amber-700")
+
+
+def _render_index_research_evidence(loaded: LoadedIndexResearch) -> None:
+    meta = loaded.run_meta
+    gates = [
+        {"门槛": name, "是否通过": "通过" if passed else "未通过", "证据": meta.get("gate_values", {}).get(name, "")}
+        for name, passed in dict(meta.get("gates", {})).items()
+    ]
+    ui.label("总体结论").classes("text-sm font-semibold text-slate-700")
+    conclusion = "通过历史有效性门槛" if meta.get("status") == "passed" else "未通过历史有效性门槛"
+    ui.label(f"{conclusion}（这是策略证据结论，不等同于后台任务 failed）。").classes("text-sm text-slate-600")
+    _render_rows(gates, "暂无六项门槛证据", "已发布结果缺少门槛行。")
+
+    full = loaded.results[loaded.results.get("period_type", pd.Series(dtype="object")) == "full_history"]
+    official = full[full.get("cohort", pd.Series(dtype="object")) == "official"] if not full.empty else full
+    ui.label("官方样本 V1 / 买入持有").classes("text-sm font-semibold text-slate-700")
+    _render_rows(_display_rows(official), "暂无官方样本", "该完整证据包没有官方样本结果。")
+    _render_index_research_selector(loaded)
+
+    ui.label("年度与五年滚动").classes("text-sm font-semibold text-slate-700")
+    _render_rows(_display_rows(loaded.yearly), "暂无年度结果", "没有可展示的年度样本。")
+    ui.label("五年滚动").classes("text-sm font-semibold text-slate-700")
+    _render_rows(_display_rows(loaded.rolling), "暂无五年滚动结果", "没有满足完整五年覆盖的窗口。")
+    ui.label("0/2/3% 缓冲带诊断").classes("text-sm font-semibold text-slate-700")
+    _render_rows(_display_rows(loaded.buffer_comparison), "暂无缓冲带诊断", "没有可展示的缓冲带对照。")
+    ui.label("双倍费用").classes("text-sm font-semibold text-slate-700")
+    _render_rows(_display_rows(loaded.stress_results), "暂无双倍费用结果", "没有可展示的压力测试。")
+    ui.label("扩展样本").classes("text-sm font-semibold text-slate-700")
+    reference = full[full.get("cohort", pd.Series(dtype="object")) == "reference"] if not full.empty else full
+    _render_rows(_display_rows(reference), "暂无扩展样本", "没有第三方基日扩展样本。")
+    ui.label("排除原因").classes("text-sm font-semibold text-slate-700")
+    _render_rows(_display_rows(loaded.exclusions), "暂无排除项", "所有已知样本均已准入，或无排除记录。")
+    ui.label("前瞻状态与限制").classes("text-sm font-semibold text-slate-700")
+    _render_rows(_display_rows(loaded.prospective_status), "暂无前瞻样本", "锁定日后尚无可用的前瞻样本。")
+    ui.label("指数理论回测仅提供指数层面的历史证据，不代表 ETF 可实现收益。").classes("text-xs text-slate-500")
+
+
+def _render_index_research_selector(loaded: LoadedIndexResearch) -> None:
+    nav = loaded.nav[loaded.nav.get("period_type", pd.Series(dtype="object")) == "full_history"].copy()
+    codes = sorted(nav.get("index_code", pd.Series(dtype="object")).dropna().astype(str).unique())
+    if not codes:
+        empty_state("暂无净值曲线", "完整证据包没有可绘制的 NAV 数据。")
+        return
+    with ui.row().classes("workbench-toolbar w-full"):
+        selected = ui.select(codes, value=codes[0], label="选择指数").props("dense outlined").classes("w-72")
+    detail_area = ui.column().classes("w-full gap-2")
+
+    def draw_detail() -> None:
+        detail_area.clear()
+        evidence = _filtered_index_research_evidence(loaded, str(selected.value))
+        with detail_area:
+            payload = _index_research_nav_payload(evidence["nav"])
+            if payload[0]["series"]:
+                render_ranged_lightweight_chart(payload, element_id=f"index-trend-nav-{selected.value}", title=f"指数净值与回撤：{selected.value}")
+            ui.label("交易记录").classes("text-sm font-semibold text-slate-700")
+            _render_rows(_display_rows(evidence["trades"]), "没有交易记录", "该指数在所选区间没有完成交易。")
+
+    selected.on_value_change(lambda event: draw_detail())
+    draw_detail()
+
+
+def _filtered_index_research_evidence(loaded: LoadedIndexResearch, index_code: str) -> dict[str, pd.DataFrame]:
+    """Filter all selector-dependent evidence together, without recalculating it."""
+
+    def filter_frame(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame.empty or "index_code" not in frame:
+            return frame.copy()
+        return frame[frame["index_code"].astype(str) == str(index_code)].copy()
+
+    return {"nav": filter_frame(loaded.nav), "trades": filter_frame(loaded.trades), "yearly": filter_frame(loaded.yearly), "rolling": filter_frame(loaded.rolling)}
+
+
+def _index_research_nav_payload(nav: pd.DataFrame) -> list[dict]:
+    if nav.empty or not {"trade_date", "nav", "strategy_name"}.issubset(nav.columns):
+        return [{"chart": {"height": 320}, "series": []}]
+    frame = nav.copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
+    frame["nav"] = pd.to_numeric(frame["nav"], errors="coerce")
+    frame = frame.dropna(subset=["trade_date", "nav"]).sort_values("trade_date")
+    series = []
+    for strategy_name, rows in frame.groupby("strategy_name", sort=True):
+        points = [{"time": date.strftime("%Y-%m-%d"), "value": float(value)} for date, value in zip(rows["trade_date"], rows["nav"], strict=False)]
+        series.append({"type": "Line", "data": points, "options": {"title": str(strategy_name)}})
+        drawdown = rows["nav"] / rows["nav"].cummax() - 1.0
+        series.append({"type": "Line", "data": [{"time": date.strftime("%Y-%m-%d"), "value": float(value)} for date, value in zip(rows["trade_date"], drawdown, strict=False)], "options": {"title": f"{strategy_name} 回撤", "color": "#dc2626"}})
+    return [{"chart": {"height": 360}, "series": series}]
 
 
 def _render_index_filter_experiment(snapshot: PlatformSnapshot, parquet_store) -> None:

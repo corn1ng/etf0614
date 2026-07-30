@@ -241,6 +241,8 @@ def run_and_publish_index_research(
     catalog: Sequence[IndexCatalogEntry] | None = None,
     admission_loader: Callable[[str | Path, Sequence[IndexCatalogEntry], IndexResearchConfig], IndexAdmissionResult] = load_index_frames,
     research_runner: Callable[[IndexAdmissionResult, IndexResearchConfig], IndexResearchOutput] = run_index_research,
+    progress: Callable[[int, int, str, str], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> PublishedIndexResearch:
     """Run the locked matrix and publish it through the sole reusable entry point."""
 
@@ -254,7 +256,19 @@ def run_and_publish_index_research(
     admission = admission_loader(parquet_root, selected_catalog, config)
     if not admission.frames:
         raise ValueError("没有可准入的本地指数数据；未发布任何研究结果")
-    output = research_runner(admission, config)
+    if should_stop is not None and should_stop():
+        from etf_trading.research.index_validation import IndexResearchCancelled
+
+        raise IndexResearchCancelled("index research cancelled before publishing a partial output")
+    output = (
+        research_runner(admission, config)
+        if progress is None and should_stop is None
+        else research_runner(admission, config, progress=progress, should_stop=should_stop)
+    )
+    if should_stop is not None and should_stop():
+        from etf_trading.research.index_validation import IndexResearchCancelled
+
+        raise IndexResearchCancelled("index research cancelled before publishing a partial output")
     return publish_index_research(output, report_root, _build_run_meta(config_file, config, admission, output, limit))
 
 
