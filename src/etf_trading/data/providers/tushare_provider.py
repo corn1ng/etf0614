@@ -7,6 +7,10 @@ import time
 
 import pandas as pd
 
+from etf_trading.data.index_valuations import (
+    OFFICIAL_INDEX_VALUATION_TS_CODES,
+    finalize_index_valuation_frame,
+)
 from etf_trading.data.provider import DataProvider
 from etf_trading.data.provider_runtime import (
     ProviderCallError,
@@ -153,6 +157,28 @@ class TushareProvider(DataProvider):
         frame["amount"] = frame["amount"] * 1000
         frame["data_source"] = "tushare_index_daily"
         return frame[["index_code", "trade_date", "open", "high", "low", "close", "volume", "amount", "data_source"]].sort_values("trade_date").reset_index(drop=True)
+
+    def fetch_index_official_valuations(self, index_code, start_date, end_date) -> pd.DataFrame:
+        code = str(index_code).zfill(6)
+        ts_code = OFFICIAL_INDEX_VALUATION_TS_CODES.get(code)
+        if ts_code is None:
+            raise ProviderCapabilityError(f"official index valuation is unsupported: {code}")
+        raw = self._query(
+            "index_dailybasic",
+            fields=(
+                "ts_code,trade_date,total_mv,float_mv,total_share,float_share,free_share,"
+                "turnover_rate,turnover_rate_f,pe,pe_ttm,pb"
+            ),
+            ts_code=ts_code,
+            start_date=_fmt_date(start_date),
+            end_date=_fmt_date(end_date),
+        )
+        return finalize_index_valuation_frame(
+            raw.rename(columns={"pe": "pe_static"}),
+            code,
+            "tushare_index_dailybasic",
+            "official",
+        )
 
     def fetch_trade_calendar(self, market: str, start_date: date | str, end_date: date | str) -> pd.DataFrame:
         raw = self._query(

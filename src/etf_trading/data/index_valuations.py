@@ -5,6 +5,16 @@ from __future__ import annotations
 import pandas as pd
 
 
+OFFICIAL_INDEX_VALUATION_TS_CODES = {
+    "000001": "000001.SH",
+    "000016": "000016.SH",
+    "000300": "000300.SH",
+    "000905": "000905.SH",
+    "399001": "399001.SZ",
+    "399006": "399006.SZ",
+}
+
+
 INDEX_VALUATION_COLUMNS = [
     "index_code",
     "trade_date",
@@ -19,6 +29,13 @@ INDEX_VALUATION_COLUMNS = [
     "roe",
     "payout_ratio",
     "forward_pe",
+    "total_mv",
+    "float_mv",
+    "total_share",
+    "float_share",
+    "free_share",
+    "turnover_rate",
+    "turnover_rate_f",
     "data_source",
     "source_quality",
     "source_updated_at",
@@ -44,6 +61,13 @@ NUMERIC_VALUATION_COLUMNS = [
     "roe",
     "payout_ratio",
     "forward_pe",
+    "total_mv",
+    "float_mv",
+    "total_share",
+    "float_share",
+    "free_share",
+    "turnover_rate",
+    "turnover_rate_f",
 ]
 
 CORE_VALUATION_METRICS = ("pe_ttm", "pb", "erp")
