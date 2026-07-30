@@ -80,7 +80,8 @@ class IndexResearchJobManager:
         with self._lock:
             if self._snapshot.status in {"queued", "running"}:
                 self._cancel_event.set()
-                self._snapshot = self._replace_current(message="已请求取消；将在当前指数完成后停止")
+                message = "取消已请求，任务尚未开始" if self._snapshot.status == "queued" else "取消已请求，将在当前指数完成后取消"
+                self._snapshot = self._replace_current(message=message)
 
     def snapshot(self) -> IndexResearchJobSnapshot:
         """Return the immutable current snapshot."""
@@ -126,6 +127,16 @@ class IndexResearchJobManager:
                 return
             parsed_total = max(0, int(total))
             if parsed_total == 0:
+                if current.total > 0:
+                    self._snapshot = self._replace_current(
+                        status="running",
+                        phase=str(phase or "running"),
+                        done=min(current.total, max(current.done, max(0, int(done)))),
+                        total=current.total,
+                        index_code=str(index_code or current.index_code),
+                        message="正在执行指数理论回测",
+                    )
+                    return
                 self._snapshot = self._replace_current(
                     status="running",
                     phase=str(phase or "running"),

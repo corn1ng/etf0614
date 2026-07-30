@@ -504,7 +504,8 @@ class IndexResearchPageController:
         self._evidence_status = "missing"
         self._diagnostic = ""
         self._limited = False
-        self._last_job_status = getattr(job_manager.snapshot(), "status", "idle")
+        self.last_loaded_completed_job_id: str | None = None
+        self.last_loaded_completed_run_id: str | None = None
 
     @property
     def state(self) -> IndexResearchPageState:
@@ -528,17 +529,37 @@ class IndexResearchPageController:
         self._evidence_status = "stale" if loaded is not None and stale else status
         self._diagnostic = diagnostic
         self._limited = bool(loaded is not None and loaded.run_meta.get("limited_run"))
+        completed = self.job_manager.snapshot()
+        if getattr(completed, "status", "idle") == "completed":
+            self.last_loaded_completed_job_id, self.last_loaded_completed_run_id = _completed_job_identity(completed)
         return self.state
 
     def poll(self) -> bool:
         """Return whether a completed transition requires exactly one evidence reload."""
 
-        status = getattr(self.job_manager.snapshot(), "status", "idle")
-        completed_transition = status == "completed" and self._last_job_status != "completed"
-        self._last_job_status = status
-        if completed_transition:
+        snapshot = self.job_manager.snapshot()
+        completed_identity = _completed_job_identity(snapshot)
+        is_new_completed_job = (
+            getattr(snapshot, "status", "idle") == "completed"
+            and completed_identity != (self.last_loaded_completed_job_id, self.last_loaded_completed_run_id)
+        )
+        if is_new_completed_job:
             self.load_evidence()
-        return completed_transition
+        return is_new_completed_job
+
+
+def _completed_job_identity(snapshot) -> tuple[str | None, str | None]:
+    job_id = getattr(snapshot, "job_id", None)
+    run_id = getattr(snapshot, "run_id", None)
+    if job_id is None and run_id is None:
+        return (f"legacy-snapshot:{id(snapshot)}", None)
+    return (job_id, run_id)
+
+
+def index_research_layout_order() -> tuple[str, str, str]:
+    """The fixed visual hierarchy for the index research surface."""
+
+    return ("metadata", "controls", "results")
 
 
 def render_index_trend_research(report_root: str | Path, parquet_store, job_manager: IndexResearchJobManager) -> None:
@@ -547,22 +568,26 @@ def render_index_trend_research(report_root: str | Path, parquet_store, job_mana
     controller = IndexResearchPageController(report_root, parquet_store, job_manager)
     controller.load_evidence()
     ui.label("指数理论回测").classes("text-base font-semibold text-slate-800")
-    evidence_area = ui.column().classes("w-full gap-3 index-trend-research")
+    metadata_area = ui.column().classes("w-full gap-3 index-trend-research-metadata")
+
+    with ui.row().classes("workbench-toolbar w-full gap-2 flex-wrap"):
+        rerun = ui.button("重新回测", icon="play_arrow", on_click=lambda: _start_index_research_job(job_manager, update_job_widgets)).props("dense outline")
+        ui.button("刷新结果", icon="refresh", on_click=lambda: _refresh_index_research_evidence(controller, render_evidence)).props("dense outline")
+        cancel = ui.button("取消重算", icon="cancel", on_click=lambda: _cancel_index_research_job(job_manager, update_job_widgets)).props("dense outline")
+    progress = ui.linear_progress(value=0).props("instant-feedback").classes("w-full")
+    job_label = ui.label("").classes("text-sm text-slate-600")
+    results_area = ui.column().classes("w-full gap-3 index-trend-research-results")
 
     def render_evidence() -> None:
-        evidence_area.clear()
-        with evidence_area:
+        metadata_area.clear()
+        results_area.clear()
+        with metadata_area:
             _render_index_research_metadata(controller.state)
+        with results_area:
             if controller.state.loaded is not None:
                 _render_index_research_evidence(controller.state.loaded)
 
     render_evidence()
-    with ui.row().classes("workbench-toolbar w-full gap-2 flex-wrap"):
-        rerun = ui.button("重新回测", icon="play_arrow", on_click=lambda: _start_index_research_job(job_manager, update_job_widgets)).props("dense outline")
-        refresh = ui.button("刷新结果", icon="refresh", on_click=lambda: _refresh_index_research_evidence(controller, render_evidence)).props("dense outline")
-        cancel = ui.button("取消重算", icon="cancel", on_click=job_manager.cancel).props("dense outline")
-    progress = ui.linear_progress(value=0).props("instant-feedback").classes("w-full")
-    job_label = ui.label("").classes("text-sm text-slate-600")
 
     def update_job_widgets() -> None:
         if controller.poll():
@@ -604,6 +629,11 @@ def _refresh_index_research_evidence(controller: IndexResearchPageController, re
     render_evidence()
 
 
+def _cancel_index_research_job(job_manager: IndexResearchJobManager, update_job_widgets) -> None:
+    job_manager.cancel()
+    update_job_widgets()
+
+
 def _render_index_research_metadata(state: IndexResearchPageState) -> None:
     loaded = state.loaded
     if loaded is None:
@@ -637,7 +667,8 @@ def _start_index_research_job(job_manager: IndexResearchJobManager, update_job_w
 
 def _index_research_job_state_text(job) -> str:
     if job.status in {"queued", "running"}:
-        return f"任务状态：{job.status} · {job.done}/{job.total} · {job.index_code or job.phase}"
+        suffix = f" · {job.message}" if getattr(job, "message", "") else ""
+        return f"任务状态：{job.status} · {job.done}/{job.total} · {job.index_code or job.phase}{suffix}"
     elif job.status == "completed":
         return f"后台回测完成：run_id={job.run_id or ''}，数据截止日={job.data_cutoff or ''}。已重新读取最新完整结果。"
     elif job.status == "failed":
@@ -681,12 +712,13 @@ def _render_index_research_evidence(loaded: LoadedIndexResearch) -> None:
 def _render_index_research_selector(loaded: LoadedIndexResearch) -> None:
     nav = loaded.nav[loaded.nav.get("period_type", pd.Series(dtype="object")) == "full_history"].copy()
     codes = sorted(nav.get("index_code", pd.Series(dtype="object")).dropna().astype(str).unique())
+    detail_area = ui.column().classes("w-full gap-2")
     if not codes:
-        empty_state("暂无净值曲线", "完整证据包没有可绘制的 NAV 数据。")
+        with detail_area:
+            _render_empty_index_research_detail()
         return
     with ui.row().classes("workbench-toolbar w-full"):
         selected = ui.select(codes, value=codes[0], label="选择指数").props("dense outlined").classes("w-72")
-    detail_area = ui.column().classes("w-full gap-2")
 
     def draw_detail() -> None:
         detail_area.clear()
@@ -704,6 +736,21 @@ def _render_index_research_selector(loaded: LoadedIndexResearch) -> None:
 
     selected.on_value_change(lambda event: draw_detail())
     draw_detail()
+
+
+def empty_index_research_detail_states() -> tuple[str, str, str, str]:
+    return ("暂无净值曲线", "暂无年度数据", "暂无五年滚动", "没有交易记录")
+
+
+def _render_empty_index_research_detail() -> None:
+    nav_empty, yearly_empty, rolling_empty, trades_empty = empty_index_research_detail_states()
+    empty_state(nav_empty, "完整证据包没有可绘制的 NAV 数据。")
+    ui.label("年度与五年滚动").classes("text-sm font-semibold text-slate-700")
+    empty_state(yearly_empty, "没有可展示的年度样本。")
+    ui.label("五年滚动").classes("text-sm font-semibold text-slate-700")
+    empty_state(rolling_empty, "没有满足完整五年覆盖的窗口。")
+    ui.label("交易记录").classes("text-sm font-semibold text-slate-700")
+    empty_state(trades_empty, "该指数在所选区间没有完成交易。")
 
 
 def _filtered_index_research_evidence(loaded: LoadedIndexResearch, index_code: str) -> dict[str, pd.DataFrame]:

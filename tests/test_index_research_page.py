@@ -110,6 +110,59 @@ def test_page_controller_polls_jobs_without_reloading_evidence_until_completed_t
     assert calls == {"loader": 2, "stale": 2}
 
 
+def test_page_controller_reloads_each_completed_job_identity_once_and_refresh_marks_it_loaded():
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    class Manager:
+        def __init__(self):
+            self.current = SimpleNamespace(status="running", job_id="a", run_id=None)
+
+        def snapshot(self):
+            return self.current
+
+    calls = {"loader": 0}
+    manager = Manager()
+
+    def loader(_root):
+        calls["loader"] += 1
+        return SimpleNamespace(run_meta={"limited_run": False})
+
+    controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=lambda *_: False)
+    controller.load_evidence()
+    manager.current = SimpleNamespace(status="completed", job_id="a", run_id="run-a")
+    assert controller.poll() is True
+    manager.current = SimpleNamespace(status="completed", job_id="b", run_id="run-b")
+    assert controller.poll() is True
+    assert calls == {"loader": 3}
+
+    controller.load_evidence()  # explicit refresh while b is completed
+    assert controller.poll() is False
+    assert calls == {"loader": 4}
+
+
+def test_cancel_handler_updates_widgets_and_running_text_uses_snapshot_message():
+    from etf_trading.nicegui_app.pages.research import _cancel_index_research_job, _index_research_job_state_text
+
+    calls = []
+    manager = SimpleNamespace(cancel=lambda: calls.append("cancel"))
+    _cancel_index_research_job(manager, lambda: calls.append("update"))
+
+    assert calls == ["cancel", "update"]
+    assert "取消已请求" in _index_research_job_state_text(SimpleNamespace(status="running", done=1, total=2, index_code="A", phase="", message="取消已请求，将在当前指数完成后取消"))
+
+
+def test_index_research_layout_has_metadata_controls_then_results():
+    from etf_trading.nicegui_app.pages.research import index_research_layout_order
+
+    assert index_research_layout_order() == ("metadata", "controls", "results")
+
+
+def test_empty_nav_detail_keeps_all_followup_empty_sections():
+    from etf_trading.nicegui_app.pages.research import empty_index_research_detail_states
+
+    assert empty_index_research_detail_states() == ("暂无净值曲线", "暂无年度数据", "暂无五年滚动", "没有交易记录")
+
+
 @pytest.mark.parametrize(
     ("evidence_status", "limited", "job_status"),
     [

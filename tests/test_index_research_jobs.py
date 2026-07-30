@@ -167,3 +167,38 @@ def test_progress_with_non_positive_total_keeps_done_at_zero():
     assert (running.done, running.total) == (0, 0)
     release.set()
     _wait_for(manager, "completed")
+
+
+def test_non_positive_progress_total_does_not_erase_an_established_total():
+    release = threading.Event()
+
+    def runner(*, progress, should_stop):
+        progress(1, 2, "000300", "running")
+        progress(2, 0, "000905", "running")
+        assert release.wait(2)
+        return _Published()
+
+    manager = IndexResearchJobManager(runner)
+    manager.start()
+    deadline = time.monotonic() + 3
+    while manager.snapshot().total != 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    running = manager.snapshot()
+    assert (running.done, running.total, running.index_code) == (2, 2, "000905")
+    release.set()
+    _wait_for(manager, "completed")
+
+
+def test_cancel_sets_immediate_user_facing_message():
+    release = threading.Event()
+
+    def runner(*, progress, should_stop):
+        assert release.wait(2)
+        raise IndexResearchCancelled("cancelled")
+
+    manager = IndexResearchJobManager(runner)
+    manager.start()
+    _wait_for(manager, "running")
+    manager.cancel()
+    assert manager.snapshot().message == "取消已请求，将在当前指数完成后取消"
+    release.set()
