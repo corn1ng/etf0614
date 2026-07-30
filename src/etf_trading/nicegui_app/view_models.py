@@ -203,6 +203,65 @@ class IndexAtomicOverview:
 
 
 @dataclass(frozen=True)
+class IndexProfileSummaryCard:
+    label: str
+    value: str
+    detail: str
+    available: bool
+
+
+@dataclass(frozen=True)
+class IndexProfileValuationMetric:
+    label: str
+    current_value: str
+    percentile_3y: str
+    percentile_5y: str
+    percentile_10y: str
+    band_5y: str
+    median_5y: str
+    median_deviation_5y: str
+    sample_count_5y: int
+
+
+@dataclass(frozen=True)
+class IndexProfileValuationSection:
+    visible: bool
+    status: str
+    reason: str
+    pe_ttm: IndexProfileValuationMetric | None
+    pb: IndexProfileValuationMetric | None
+    metrics: tuple[IndexAtomicOverviewMetric, ...]
+
+
+@dataclass(frozen=True)
+class IndexProfileTrendSection:
+    visible: bool
+    close: IndexAtomicOverviewMetric
+    rows: tuple[IndexAtomicOverviewMetric, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
+class IndexProfileMetricSection:
+    title: str
+    items: tuple[IndexAtomicDetailItem, ...]
+
+
+@dataclass(frozen=True)
+class IndexProfileView:
+    identity: str
+    price_as_of_date: str
+    valuation_as_of_date: str
+    summary_cards: tuple[IndexProfileSummaryCard, ...]
+    valuation: IndexProfileValuationSection
+    trend: IndexProfileTrendSection
+    trend_risk_sections: tuple[IndexProfileMetricSection, ...]
+    events: tuple[IndexAtomicOverviewEvent, ...]
+    all_groups: tuple[IndexAtomicOverviewEvidenceGroup, ...]
+    quality: tuple[IndexAtomicOverviewMetric, ...]
+
+
+@dataclass(frozen=True)
 class AtomicDataHealthItem:
     key: str
     label: str
@@ -277,7 +336,27 @@ INDEX_ATOMIC_DATA_SOURCE_LABELS = {
     "akshare_hk_sina": "AkShare（新浪港股指数行情）",
     "akshare_shenwan": "AkShare（申万指数行情）",
     "akshare_hk_em": "AkShare（东方财富港股指数行情）",
+    "tushare_index_dailybasic": "Tushare（官方指数每日指标）",
 }
+
+INDEX_PROFILE_STATUS_LABELS = {
+    "supported": "官方估值支持",
+    "unsupported": "官方估值暂不支持",
+    "not_synced": "官方估值尚未同步",
+    "fresh": "估值数据新鲜",
+    "stale": "估值数据已过期",
+}
+
+INDEX_PROFILE_ALL_GROUPS = (
+    ("price_ma", "价格与均线"),
+    ("ma_cross", "均线穿越"),
+    ("range_position", "区间位置与突破"),
+    ("return_drawdown", "收益与回撤"),
+    ("volatility_volume", "波动与量能"),
+    ("momentum_return", "动量与收益"),
+    ("drawdown_risk", "回撤与风险"),
+    ("trading_activity", "成交活跃度"),
+)
 
 INDEX_ATOMIC_DISPLAY_COLUMNS = (
     "index",
@@ -810,6 +889,258 @@ def index_atomic_overview(summary: dict[str, object], details: pd.DataFrame, ind
             if group.title != "数据质量"
         ),
     )
+
+
+def index_profile_view(
+    summary: dict[str, object],
+    details: pd.DataFrame,
+    index_code: str,
+) -> IndexProfileView | None:
+    """Project one published index snapshot into the five-tab read-only profile."""
+
+    if not index_code or details.empty or "index_code" not in details:
+        return None
+    data = details[details["index_code"].fillna("").astype(str) == str(index_code)].copy()
+    if data.empty:
+        return None
+
+    records = data.to_dict("records")
+    rows = {str(row.get("metric_key") or ""): row for row in records}
+    code = _text(summary.get("index_code")) or str(index_code)
+    name = _text(summary.get("index_name"))
+    identity = " · ".join(part for part in (code, name) if part) or "数据不足"
+    price_as_of_date = _format_index_atomic_date(summary.get("latest_date"))
+    valuation_as_of_date = _profile_date(summary.get("valuation_as_of_date"), rows.get("valuation_as_of_date"))
+    valuation = _profile_valuation_section(summary, rows)
+    trend = _profile_trend_section(records, rows)
+
+    return IndexProfileView(
+        identity=identity,
+        price_as_of_date=price_as_of_date,
+        valuation_as_of_date=valuation_as_of_date,
+        summary_cards=_profile_summary_cards(summary, rows),
+        valuation=valuation,
+        trend=trend,
+        trend_risk_sections=_profile_trend_risk_sections(records),
+        events=_profile_events(rows),
+        all_groups=_profile_all_groups(records),
+        quality=_profile_quality(summary, records, rows),
+    )
+
+
+def _profile_summary_cards(
+    summary: dict[str, object],
+    rows: dict[str, dict[str, object]],
+) -> tuple[IndexProfileSummaryCard, ...]:
+    pe = _profile_summary_card("PE-TTM", rows.get("pe_ttm"), summary.get("pe_ttm"), rows.get("pe_ttm_percentile_5y"))
+    pb = _profile_summary_card("PB", rows.get("pb"), summary.get("pb"), rows.get("pb_percentile_5y"))
+    trend_row = rows.get("close_vs_ma_20")
+    trend_value = trend_row.get("value") if trend_row is not None else summary.get("close_vs_ma_20")
+    trend_available = _profile_row_available(trend_row, trend_value)
+    trend_detail = _format_index_atomic_relative_ma(trend_value) if trend_available else _profile_reason(trend_row)
+    drawdown_row = rows.get("drawdown_250")
+    drawdown_value = drawdown_row.get("value") if drawdown_row is not None else summary.get("drawdown_250")
+    drawdown_available = _profile_row_available(drawdown_row, drawdown_value)
+    return (
+        pe,
+        pb,
+        IndexProfileSummaryCard("趋势位置", trend_detail, "相对20日均线", trend_available),
+        IndexProfileSummaryCard(
+            "250日当前回撤",
+            _format_index_atomic_percent(drawdown_value) if drawdown_available else "数据不足",
+            "当前收盘相对250日内此前高点",
+            drawdown_available,
+        ),
+    )
+
+
+def _profile_summary_card(
+    label: str,
+    row: dict[str, object] | None,
+    summary_value: object,
+    percentile_row: dict[str, object] | None,
+) -> IndexProfileSummaryCard:
+    value = row.get("value") if row is not None else summary_value
+    available = _profile_row_available(row, value)
+    detail = _profile_percentile(percentile_row.get("value")) if percentile_row is not None else ""
+    return IndexProfileSummaryCard(
+        label,
+        _format_index_atomic_number(value) if available else "数据不足",
+        f"5年分位 {detail}" if detail else (_profile_reason(row) if not available else "5年分位数据不足"),
+        available,
+    )
+
+
+def _profile_valuation_section(
+    summary: dict[str, object],
+    rows: dict[str, dict[str, object]],
+) -> IndexProfileValuationSection:
+    support_row = rows.get("valuation_support_status")
+    support = _text(summary.get("valuation_support_status")) or _text(support_row.get("value") if support_row else "")
+    freshness_row = rows.get("valuation_freshness_status")
+    freshness = _text(summary.get("valuation_freshness_status")) or _text(freshness_row.get("value") if freshness_row else "")
+    visible = support == "supported"
+    reason = _profile_reason(support_row)
+    if visible and freshness_row is not None and freshness != "fresh":
+        reason = _profile_reason(freshness_row)
+    if not reason:
+        reason = INDEX_PROFILE_STATUS_LABELS.get(support, "数据不足")
+    status_code = freshness if visible else support
+    status = INDEX_PROFILE_STATUS_LABELS.get(status_code) or "数据不足"
+    metric_rows = tuple(
+        _profile_overview_metric(row, _index_atomic_detail_label(_text(row.get("metric_key")), row.get("metric_label")))
+        for row in rows.values()
+        if _text(row.get("group_key")) == "valuation"
+    )
+    return IndexProfileValuationSection(
+        visible=visible,
+        status=status,
+        reason=reason,
+        pe_ttm=_profile_valuation_metric("PE-TTM", "pe_ttm", rows) if visible else None,
+        pb=_profile_valuation_metric("PB", "pb", rows) if visible else None,
+        metrics=metric_rows,
+    )
+
+
+def _profile_valuation_metric(
+    label: str,
+    metric_key: str,
+    rows: dict[str, dict[str, object]],
+) -> IndexProfileValuationMetric:
+    current = rows.get(metric_key)
+    percentile = {window: rows.get(f"{metric_key}_percentile_{window}") for window in ("3y", "5y", "10y")}
+    median = rows.get(f"{metric_key}_median_5y")
+    deviation = rows.get(f"{metric_key}_median_deviation_5y")
+    band = rows.get(f"{metric_key}_band_5y")
+    return IndexProfileValuationMetric(
+        label=label,
+        current_value=_profile_number(current.get("value") if current else None),
+        percentile_3y=_profile_percentile(percentile["3y"].get("value") if percentile["3y"] else None),
+        percentile_5y=_profile_percentile(percentile["5y"].get("value") if percentile["5y"] else None),
+        percentile_10y=_profile_percentile(percentile["10y"].get("value") if percentile["10y"] else None),
+        band_5y=_text(band.get("value")) if band and _profile_row_available(band, band.get("value")) else "数据不足",
+        median_5y=_profile_number(median.get("value") if median else None),
+        median_deviation_5y=_profile_percentile(deviation.get("value") if deviation else None),
+        sample_count_5y=_profile_sample_count(percentile["5y"]),
+    )
+
+
+def _profile_trend_section(
+    records: list[dict[str, object]],
+    rows: dict[str, dict[str, object]],
+) -> IndexProfileTrendSection:
+    close = _overview_metric(rows.get("close"), "最新收盘")
+    trend_records = [
+        row for row in records
+        if _text(row.get("group_key")) in {"price_ma", "ma_cross", "range_position"}
+        and _text(row.get("metric_key")) != "close"
+    ]
+    trend_rows = tuple(
+        _overview_metric(row, _index_atomic_detail_label(_text(row.get("metric_key")), row.get("metric_label")))
+        for row in trend_records
+    )
+    visible = close.status == "已计算"
+    reason = "" if visible else close.reason
+    if visible:
+        reason = next((item.reason for item in trend_rows if item.status != "已计算"), "")
+    return IndexProfileTrendSection(visible, close, trend_rows, reason)
+
+
+def _profile_trend_risk_sections(records: list[dict[str, object]]) -> tuple[IndexProfileMetricSection, ...]:
+    selectors = (
+        ("趋势结构", lambda row: _text(row.get("group_key")) in {"price_ma", "ma_cross", "range_position"}),
+        ("动量与收益", lambda row: _text(row.get("group_key")) == "momentum_return" or _text(row.get("metric_key")).startswith("return_") or _text(row.get("metric_key")) in {"rsi_14", "up_day_ratio_20"}),
+        ("回撤与风险", lambda row: _text(row.get("group_key")) == "drawdown_risk" or _text(row.get("metric_key")).startswith(("drawdown_", "max_drawdown_")) or (_text(row.get("group_key")) == "volatility_volume" and not _text(row.get("metric_key")).startswith("amount_"))),
+        ("成交活跃度", lambda row: _text(row.get("group_key")) == "trading_activity" or _text(row.get("metric_key")).startswith("amount_")),
+    )
+    return tuple(
+        IndexProfileMetricSection(title, tuple(_index_atomic_detail_item(row) for row in records if selector(row)))
+        for title, selector in selectors
+    )
+
+
+def _profile_all_groups(records: list[dict[str, object]]) -> tuple[IndexAtomicOverviewEvidenceGroup, ...]:
+    return tuple(
+        IndexAtomicOverviewEvidenceGroup(title, tuple(_index_atomic_detail_item(row) for row in records if _text(row.get("group_key")) == group_key))
+        for group_key, title in INDEX_PROFILE_ALL_GROUPS
+        if any(_text(row.get("group_key")) == group_key for row in records)
+    )
+
+
+def _profile_quality(
+    summary: dict[str, object],
+    records: list[dict[str, object]],
+    rows: dict[str, dict[str, object]],
+) -> tuple[IndexAtomicOverviewMetric, ...]:
+    summary_quality = _overview_quality(summary)
+    detail_quality = tuple(
+        _overview_metric(row, _index_atomic_detail_label(_text(row.get("metric_key")), row.get("metric_label")))
+        for row in records
+        if _text(row.get("group_key")) == "data_quality"
+    )
+    valuation_quality = tuple(
+        _profile_overview_metric(rows[key], _index_atomic_detail_label(key, rows[key].get("metric_label")))
+        for key in ("valuation_support_status", "valuation_as_of_date", "valuation_freshness_status", "valuation_source")
+        if key in rows
+    )
+    return summary_quality + detail_quality + valuation_quality
+
+
+def _profile_events(rows: dict[str, dict[str, object]]) -> tuple[IndexAtomicOverviewEvent, ...]:
+    price_events = _overview_events(rows)
+    valuation_events = []
+    for metric_key, label in (("pe_ttm_5y_band_changed", "PE-TTM 5年分位区间变化"), ("pb_5y_band_changed", "PB 5年分位区间变化")):
+        row = rows.get(metric_key)
+        if row is None or _text(row.get("status")) != "computed" or not _truthy(row.get("value")):
+            continue
+        valuation_events.append(IndexAtomicOverviewEvent(label, _format_index_atomic_date(row.get("as_of_date"))))
+    return price_events + tuple(valuation_events)
+
+
+def _profile_overview_metric(row: dict[str, object], label: str) -> IndexAtomicOverviewMetric:
+    metric_key = _text(row.get("metric_key"))
+    if metric_key in {"valuation_support_status", "valuation_freshness_status"}:
+        value = INDEX_PROFILE_STATUS_LABELS.get(_text(row.get("value")), "数据不足")
+        status = INDEX_PROFILE_STATUS_LABELS.get(_text(row.get("status"))) or _index_atomic_status_label(row.get("status"))
+        return IndexAtomicOverviewMetric(label, value, status, _profile_reason(row))
+    return _overview_metric(row, label)
+
+
+def _profile_row_available(row: dict[str, object] | None, value: object) -> bool:
+    if _missing(value) or value == "":
+        return False
+    return row is None or _text(row.get("status")) == "computed"
+
+
+def _profile_reason(row: dict[str, object] | None) -> str:
+    return _text(row.get("reason")) if row is not None else "数据不足"
+
+
+def _profile_date(summary_value: object, row: dict[str, object] | None) -> str:
+    value = summary_value if not _missing(summary_value) and summary_value != "" else (row.get("value") if row else None)
+    return _format_index_atomic_date(value)
+
+
+def _profile_number(value: object) -> str:
+    return _format_index_atomic_number(value)
+
+
+def _profile_percentile(value: object) -> str:
+    if _missing(value) or value == "":
+        return "数据不足"
+    try:
+        return f"{float(value):.1%}"
+    except (TypeError, ValueError):
+        return "数据不足"
+
+
+def _profile_sample_count(row: dict[str, object] | None) -> int:
+    if row is None or _missing(row.get("sample_count")):
+        return 0
+    try:
+        return int(float(row["sample_count"]))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _trend_ladder_markers(rows: dict[str, dict[str, object]]) -> tuple[IndexAtomicTrendMarker, ...]:

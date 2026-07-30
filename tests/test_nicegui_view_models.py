@@ -9,6 +9,7 @@ from etf_trading.nicegui_app.view_models import (
     AtomicIndicatorFilters,
     IndexAtomicFilters,
     IndexHealthFilters,
+    IndexProfileView,
     PlatformSnapshot,
     atomic_data_update_health,
     atomic_data_health_summary,
@@ -28,6 +29,7 @@ from etf_trading.nicegui_app.view_models import (
     index_choice_options,
     index_atomic_detail_groups,
     index_atomic_overview,
+    index_profile_view,
     index_health_detail_rows,
     index_health_filter_options,
     index_health_rows,
@@ -173,6 +175,102 @@ def _overview_detail(metric_key: str, value: object, *, status: str = "computed"
         "metric_label": metric_key, "value": value, "status": status, "reason": reason,
         "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "akshare_zh_em",
     }
+
+
+def _profile_detail(
+    metric_key: str,
+    value: object,
+    *,
+    group_key: str = "valuation",
+    status: str = "computed",
+    reason: str = "已计算",
+) -> dict[str, object]:
+    return {
+        "index_code": "000300",
+        "group_key": group_key,
+        "metric_key": metric_key,
+        "metric_label": metric_key,
+        "value": value,
+        "status": status,
+        "reason": reason,
+        "as_of_date": "2026-07-29",
+        "sample_count": 1000,
+        "data_source": "tushare_index_dailybasic" if group_key == "valuation" else "unit",
+        "window_start_date": "2021-07-29" if "5y" in metric_key else "",
+        "window_end_date": "2026-07-29" if "5y" in metric_key else "",
+    }
+
+
+def _profile_summary() -> dict[str, object]:
+    return {
+        "index_code": "000300", "index_name": "沪深300", "latest_date": "2026-07-29",
+        "valuation_as_of_date": "2026-07-29", "valuation_support_status": "supported",
+        "valuation_freshness_status": "fresh", "pe_ttm": 11.6, "pe_ttm_5y_percentile": 0.18,
+        "pb": 1.24, "pb_5y_percentile": 0.22, "close_above_ma_20": False,
+        "close_vs_ma_20": -0.037, "drawdown_250": -0.079,
+    }
+
+
+def _profile_details() -> pd.DataFrame:
+    return pd.DataFrame([
+        _profile_detail("pe_ttm", 11.6),
+        _profile_detail("pe_ttm_percentile_5y", 0.18),
+        _profile_detail("pe_ttm_band_5y", "历史低位"),
+        _profile_detail("pb", 1.24),
+        _profile_detail("pb_percentile_5y", 0.22),
+        _profile_detail("pb_band_5y", "偏低"),
+        _profile_detail("close", 4569.52, group_key="price_ma"),
+        _profile_detail("ma_20", 4743.52, group_key="price_ma"),
+        _profile_detail("close_above_ma_20", False, group_key="price_ma"),
+        _profile_detail("drawdown_250", -0.079, group_key="return_drawdown"),
+        _profile_detail("rsi_14", 41.2, group_key="momentum_return"),
+        _profile_detail("annualized_volatility_20", 0.146, group_key="drawdown_risk"),
+        _profile_detail("amount_avg_20", 100_000_000, group_key="trading_activity"),
+    ])
+
+
+def test_index_profile_view_builds_approved_summary_and_five_domains():
+    view = index_profile_view(_profile_summary(), _profile_details(), "000300")
+
+    assert isinstance(view, IndexProfileView)
+    assert view.identity == "000300 · 沪深300"
+    assert [card.label for card in view.summary_cards] == ["PE-TTM", "PB", "趋势位置", "250日当前回撤"]
+    assert view.valuation.pe_ttm.percentile_5y == "18.0%"
+    assert view.valuation.pe_ttm.band_5y == "历史低位"
+    assert [section.title for section in view.trend_risk_sections] == [
+        "趋势结构", "动量与收益", "回撤与风险", "成交活跃度",
+    ]
+
+
+def test_index_profile_view_hides_valuation_tracks_when_unsupported():
+    summary = _profile_summary() | {
+        "index_code": "801010", "index_name": "农林牧渔", "valuation_support_status": "unsupported",
+        "valuation_as_of_date": "",
+    }
+    details = _profile_details().copy()
+    details["index_code"] = "801010"
+    details = pd.concat([details, pd.DataFrame([{
+        **_profile_detail("valuation_support_status", "unsupported", status="unsupported", reason="Tushare 官方估值暂不支持该指数"),
+        "index_code": "801010",
+    }])], ignore_index=True)
+
+    view = index_profile_view(summary, details, "801010")
+
+    assert view.valuation.visible is False
+    assert view.valuation.reason == "Tushare 官方估值暂不支持该指数"
+    assert view.trend.visible is True
+
+
+def test_index_profile_view_exposes_stale_dates_without_relabeling_old_value():
+    summary = _profile_summary() | {
+        "valuation_as_of_date": "2026-07-20", "valuation_freshness_status": "stale",
+    }
+
+    view = index_profile_view(summary, _profile_details(), "000300")
+
+    assert view.valuation.status == "估值数据已过期"
+    assert view.price_as_of_date == "2026-07-29"
+    assert view.valuation_as_of_date == "2026-07-20"
 
 
 def test_index_atomic_overview_reads_stored_atoms_without_conclusions():
