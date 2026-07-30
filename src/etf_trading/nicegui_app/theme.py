@@ -816,6 +816,13 @@ body {
     font-size: 14px;
     font-weight: 700;
   }
+  .workbench-topbar {
+    height: auto;
+    min-height: 42px;
+    flex-wrap: wrap;
+    padding: 6px 10px;
+    gap: 6px 10px;
+  }
   .workbench-page { padding: 10px; }
   .workbench-page-title { font-size: 20px; }
   .workbench-action-panel { width: 100%; }
