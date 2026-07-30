@@ -18,7 +18,7 @@ import pandas as pd
 
 from etf_trading.data.index_catalog import IndexCatalogEntry, default_index_catalog
 from etf_trading.research.index_data import load_index_frames
-from etf_trading.research.index_models import IndexAdmissionResult, IndexResearchConfig, IndexResearchOutput
+from etf_trading.research.index_models import EffectivenessAssessment, IndexAdmissionResult, IndexResearchConfig, IndexResearchOutput
 from etf_trading.research.index_models import load_index_research_config
 from etf_trading.research.index_validation import run_index_research
 
@@ -198,7 +198,8 @@ def render_index_research_markdown(output: IndexResearchOutput, run_meta: Mappin
         "",
         "## 六项门槛",
     ]
-    for name, passed in assessment.gates.items():
+    for name in _GATE_NAMES:
+        passed = assessment.gates[name]
         value, threshold = _gate_detail(name, assessment.values)
         reason = "; ".join(reason for reason in assessment.reasons if reason.startswith(f"{name}:")) or "通过"
         lines.append(f"- `{name}`：{'通过' if passed else '失败'}；实际值：`{value}`；阈值：`{threshold}`；原因：{reason}。")
@@ -460,8 +461,19 @@ def _gate_detail(name: str, values: Mapping[str, object]) -> tuple[object, str]:
     if name == "buffer_reduces_whipsaw_rate_and_trades":
         return f"假突破率 0%={values.get('whipsaw_rate_0', '未提供')}, 2%={values.get('whipsaw_rate_2', '未提供')}; 交易/年 0%={values.get('trades_per_year_0', '未提供')}, 2%={values.get('trades_per_year_2', '未提供')}", "2% 两项均严格低于 0%"
     if name == "stress_keeps_first_four_gates":
-        return values.get("stress_first_four_gates", "未提供"), "双倍费用下前四项均通过"
+        return _format_stress_first_four_gates(values.get("stress_first_four_gates")), "双倍费用下前四项均通过"
     return values.get(name, "未提供"), "预设门槛"
+
+
+def _format_stress_first_four_gates(value: object) -> object:
+    """Render stress evidence in the fixed first-four-gate order after JSON round trips."""
+
+    if not isinstance(value, Mapping):
+        return "未提供" if value is None else value
+    first_four = _GATE_NAMES[:4]
+    ordered = {name: value[name] for name in first_four if name in value}
+    ordered.update({name: value[name] for name in sorted(set(value).difference(ordered))})
+    return ordered
 
 
 def _normalise_run_meta(run_meta: Mapping[str, object]) -> dict[str, object]:
@@ -494,6 +506,9 @@ def _normalise_run_meta(run_meta: Mapping[str, object]) -> dict[str, object]:
         raise ValueError("run metadata effectiveness status disagrees with its gates")
     if not isinstance(meta["gate_values"], dict) or not isinstance(meta["gate_reasons"], list) or not isinstance(meta["exclusions"], list):
         raise ValueError("run metadata has invalid audit fields")
+    gate_prefixes = tuple(f"{name}:" for name in _GATE_NAMES)
+    if any(not isinstance(reason, str) or not reason.startswith(gate_prefixes) for reason in meta["gate_reasons"]):
+        raise ValueError("run metadata gate reasons must name one of the six gates")
     return _json_safe(meta)
 
 
@@ -714,8 +729,61 @@ def _validate_run_directory(directory: Path, run_id: str) -> None:
     _read_csv(directory / "index_strategy_rolling_5y.csv")
     _read_csv(directory / "index_strategy_buffer_comparison.csv")
     nav = _read_nav(directory / "index_strategy_nav.parquet")
-    _validate_cross_artifact_consistency(meta, results, trades, exclusions, nav, _unpack_summary(summary))
-    (directory / "index_trend_strategy_report.md").read_text(encoding="utf-8")
+    sections = _unpack_summary(summary)
+    _validate_cross_artifact_consistency(meta, results, trades, exclusions, nav, sections)
+    _validate_markdown_consistency(
+        (directory / "index_trend_strategy_report.md").read_text(encoding="utf-8"),
+        meta,
+    )
+
+
+def _markdown_gate_evidence_lines(assessment: EffectivenessAssessment) -> list[str]:
+    """Render the six visible gate disclosures from structured evidence only."""
+
+    lines: list[str] = []
+    for name in _GATE_NAMES:
+        value, threshold = _gate_detail(name, assessment.values)
+        reason = "; ".join(reason for reason in assessment.reasons if reason.startswith(f"{name}:")) or "\u901a\u8fc7"
+        result = "\u901a\u8fc7" if assessment.gates[name] else "\u5931\u8d25"
+        lines.append(
+            f"- `{name}`\uff1a{result}\uff1b\u5b9e\u9645\u503c\uff1a`{value}`\uff1b"
+            f"\u9608\u503c\uff1a`{threshold}`\uff1b\u539f\u56e0\uff1a{reason}\u3002"
+        )
+    return lines
+
+
+def _extract_markdown_gate_evidence_lines(markdown: str) -> list[str]:
+    """Extract exactly one visible line for each locked gate without parsing values."""
+
+    lines: list[str] = []
+    positions: list[int] = []
+    for name in _GATE_NAMES:
+        prefix = f"- `{name}`"
+        if markdown.count(prefix) != 1:
+            raise ValueError("index research markdown gate evidence is missing or duplicated")
+        start = markdown.index(prefix)
+        end = markdown.find("\n", start)
+        lines.append(markdown[start:] if end == -1 else markdown[start:end])
+        positions.append(start)
+    if positions != sorted(positions):
+        raise ValueError("index research markdown gate evidence is out of order")
+    return lines
+
+
+def _validate_markdown_consistency(
+    markdown: str,
+    meta: Mapping[str, object],
+) -> None:
+    """Strictly bind the visible gate evidence to the structured artifacts."""
+
+    assessment = EffectivenessAssessment(
+        status=str(meta["status"]),
+        gates=dict(meta["gates"]),
+        values=dict(meta["gate_values"]),
+        reasons=tuple(meta["gate_reasons"]),
+    )
+    if _extract_markdown_gate_evidence_lines(markdown) != _markdown_gate_evidence_lines(assessment):
+        raise ValueError("index research markdown gate evidence disagrees with structured evidence")
 
 
 def _read_meta(path: Path, run_id: str) -> dict[str, object]:

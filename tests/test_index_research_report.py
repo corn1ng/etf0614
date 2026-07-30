@@ -288,6 +288,25 @@ def test_loader_rejects_is_empty_tampering_and_gate_value_display_tampering(tmp_
         load_latest_index_research(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    [
+        ("`drawdown_win_rate`：失败；实际值：`0.4`", "`drawdown_win_rate`：通过；实际值：`0.4`"),
+        ("`drawdown_win_rate`：失败；实际值：`0.4`", "`drawdown_win_rate`：失败；实际值：`0.9`"),
+        ("drawdown_win_rate:样本不足", "drawdown_win_rate:篡改原因"),
+    ],
+)
+def test_loader_rejects_markdown_gate_value_or_reason_tampering(tmp_path: Path, original: str, replacement: str):
+    published = publish_index_research(sample_output(), tmp_path, sample_run_meta("markdown-tampering"))
+    markdown_path = published.run_dir / "index_trend_strategy_report.md"
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert original in markdown
+    markdown_path.write_text(markdown.replace(original, replacement, 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="markdown"):
+        load_latest_index_research(tmp_path)
+
+
 def test_loader_rejects_non_finite_or_non_numeric_core_performance_evidence(tmp_path: Path):
     published = publish_index_research(sample_output(), tmp_path, sample_run_meta("first"))
     results_path = tmp_path / "runs" / published.run_id / "index_backtest_results.csv"

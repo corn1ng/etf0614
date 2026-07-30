@@ -642,5 +642,5 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
 - Watch out next time:
   - A published package is not self-authenticating: recompute gates from loaded structured tables and require every NAV/trade key to resolve to a result series.
   - Optional missing facts are acceptable as blank structured cells, but must never render literal `NaN` or `Infinity` in CSV/JSON/Markdown disclosures.
-  - This is index-level theoretical evidence only: official-base-date coverage, survivorship and index correlation remain limitations; ETF tracking error, premium/discount, liquidity, and executable phase-two validation remain outside V1.
+  - This is index-level theoretical evidence only: official-base-date coverage, first-year completeness is a proxy rather than a guarantee, survivorship and index correlation remain limitations; ETF tracking error, premium/discount, liquidity, and executable phase-two validation remain outside V1.
   - One final full-suite attempt had a transient unrelated job-manager race (`done=0` immediately after `running`); its isolated rerun passed and the fresh complete rerun passed with 596 tests and 1 skipped. The index selector was not faulty: its UI update settles asynchronously, and the fresh state showed `000819` in both selector and chart title.
