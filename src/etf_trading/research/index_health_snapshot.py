@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
@@ -85,11 +86,20 @@ _METRIC_SPECS = (
     *(("range_position", f"range_{window}_from_low", f"距{window}日收盘最低偏离率") for window in _RANGE_WINDOWS),
     *(("return_drawdown", f"return_{window}", f"{window}日收益率") for window in _RETURN_WINDOWS),
     *(("return_drawdown", f"drawdown_{window}", f"{window}日回撤") for window in _RETURN_WINDOWS),
+    *(("price_ma", f"ma_{window}_change_20", f"{window}日均线20日变化") for window in (20, 60, 120)),
+    ("return_drawdown", "rsi_14", "14日相对强弱指标"),
+    ("return_drawdown", "up_day_ratio_20", "20日上涨日占比"),
+    *(("return_drawdown", f"max_drawdown_{window}", f"{window}日最大回撤") for window in (60, 120, 250)),
     ("volatility_volume", "atr_14", "ATR14"),
+    ("volatility_volume", "atr_14_pct", "ATR14占收盘价比例"),
     ("volatility_volume", "return_std_20", "20日收益率标准差"),
+    *(("volatility_volume", f"annualized_volatility_{window}", f"{window}日年化波动率") for window in (20, 60)),
+    ("volatility_volume", "downside_volatility_60", "60日下行波动率"),
     ("volatility_volume", "amount_avg_5", "5日平均成交额"),
     ("volatility_volume", "amount_avg_20", "20日平均成交额"),
     ("volatility_volume", "amount_avg_ratio_5_20", "5日与20日平均成交额比值"),
+    ("volatility_volume", "amount_avg_60", "60日平均成交额"),
+    *(("volatility_volume", f"amount_vs_avg_{window}", f"当前成交额相对{window}日平均成交额") for window in (20, 60)),
 )
 
 
@@ -333,13 +343,34 @@ def _atomic_metric_rows(
         value, status, reason = _drawdown(close, window)
         rows.append(_detail(index_code, "return_drawdown", f"drawdown_{window}", f"{window}日回撤", value, status, reason, latest_date, sample_count, data_source))
 
+    for window in (20, 60, 120):
+        value, status, reason = _ma_change(close, window)
+        rows.append(_detail(index_code, "price_ma", f"ma_{window}_change_20", f"{window}日均线20日变化", value, status, reason, latest_date, sample_count, data_source))
+    value, status, reason = _rsi_14(close)
+    rows.append(_detail(index_code, "return_drawdown", "rsi_14", "14日相对强弱指标", value, status, reason, latest_date, sample_count, data_source))
+    value, status, reason = _up_day_ratio_20(close)
+    rows.append(_detail(index_code, "return_drawdown", "up_day_ratio_20", "20日上涨日占比", value, status, reason, latest_date, sample_count, data_source))
+    for window in (60, 120, 250):
+        value, status, reason = _maximum_drawdown(close, window)
+        rows.append(_detail(index_code, "return_drawdown", f"max_drawdown_{window}", f"{window}日最大回撤", value, status, reason, latest_date, sample_count, data_source))
+
     value, status, reason = _atr_14(data, close)
     rows.append(_detail(index_code, "volatility_volume", "atr_14", "ATR14", value, status, reason, latest_date, sample_count, data_source))
+    atr_value, atr_status, atr_reason = value, status, reason
+    value, status, reason = _atr_percent(atr_value, atr_status, atr_reason, close_value, close_status, close_reason)
+    rows.append(_detail(index_code, "volatility_volume", "atr_14_pct", "ATR14占收盘价比例", value, status, reason, latest_date, sample_count, data_source))
     value, status, reason = _return_std_20(close)
     rows.append(_detail(index_code, "volatility_volume", "return_std_20", "20日收益率标准差", value, status, reason, latest_date, sample_count, data_source))
+    for window in (20, 60):
+        value, status, reason = _annualized_volatility(close, window)
+        rows.append(_detail(index_code, "volatility_volume", f"annualized_volatility_{window}", f"{window}日年化波动率", value, status, reason, latest_date, sample_count, data_source))
+    value, status, reason = _downside_volatility_60(close)
+    rows.append(_detail(index_code, "volatility_volume", "downside_volatility_60", "60日下行波动率", value, status, reason, latest_date, sample_count, data_source))
+
+    amount = _numeric_series(data, "amount")
     amount_averages: dict[int, tuple[object, str, str]] = {}
-    for window in (5, 20):
-        value, status, reason = _mean(_numeric_series(data, "amount"), window, column="amount")
+    for window in (5, 20, 60):
+        value, status, reason = _mean(amount, window, column="amount")
         amount_averages[window] = (value, status, reason)
         rows.append(_detail(index_code, "volatility_volume", f"amount_avg_{window}", f"{window}日平均成交额", value, status, reason, latest_date, sample_count, data_source))
     amount_5, amount_5_status, amount_5_reason = amount_averages[5]
@@ -353,6 +384,10 @@ def _atomic_metric_rows(
     else:
         value, status, reason = float(amount_5) / float(amount_20), "computed", "已从本地指数历史计算"
     rows.append(_detail(index_code, "volatility_volume", "amount_avg_ratio_5_20", "5日与20日平均成交额比值", value, status, reason, latest_date, sample_count, data_source))
+    for window in (20, 60):
+        average, average_status, average_reason = amount_averages[window]
+        value, status, reason = _amount_vs_average(amount, average, average_status, average_reason, window)
+        rows.append(_detail(index_code, "volatility_volume", f"amount_vs_avg_{window}", f"当前成交额相对{window}日平均成交额", value, status, reason, latest_date, sample_count, data_source))
     return rows
 
 
@@ -498,6 +533,95 @@ def _return_std_20(close: pd.Series | None) -> tuple[object, str, str]:
     if values is None:
         return pd.NA, status, reason
     return float(values.pct_change().iloc[1:].std()), "computed", "已从本地指数历史计算"
+
+
+def _annualized_volatility(close: pd.Series | None, window: int) -> tuple[object, str, str]:
+    values, status, reason = _tail(close, window + 1, "close")
+    if values is None:
+        return pd.NA, status, reason
+    return float(values.pct_change().iloc[1:].std() * np.sqrt(252)), "computed", "按日收益率样本标准差年化"
+
+
+def _maximum_drawdown(close: pd.Series | None, window: int) -> tuple[object, str, str]:
+    values, status, reason = _tail(close, window, "close")
+    if values is None:
+        return pd.NA, status, reason
+    drawdowns = values / values.cummax() - 1
+    return float(drawdowns.min()), "computed", "按窗口内此前累计最高收盘计算"
+
+
+def _rsi_14(close: pd.Series | None) -> tuple[object, str, str]:
+    values, status, reason = _tail(close, 15, "close")
+    if values is None:
+        return pd.NA, status, reason
+    changes = values.diff().iloc[1:]
+    gains = changes.clip(lower=0).mean()
+    losses = -changes.clip(upper=0).mean()
+    if losses == 0:
+        return 100.0, "computed", "最近14日没有下跌变动"
+    return float(100 - 100 / (1 + gains / losses)), "computed", "按14日平均涨跌幅计算"
+
+
+def _ma_change(close: pd.Series | None, ma_window: int, lookback: int = 20) -> tuple[object, str, str]:
+    values, status, reason = _tail(close, ma_window + lookback, "close")
+    if values is None:
+        return pd.NA, status, reason
+    moving_average = values.rolling(ma_window).mean().dropna()
+    reference = float(moving_average.iloc[-lookback - 1])
+    if reference == 0:
+        return pd.NA, "calculation_failed", f"{ma_window}日均线参考值为零"
+    return float(moving_average.iloc[-1]) / reference - 1, "computed", "按20个交易日均线变化计算"
+
+
+def _up_day_ratio_20(close: pd.Series | None) -> tuple[object, str, str]:
+    values, status, reason = _tail(close, 21, "close")
+    if values is None:
+        return pd.NA, status, reason
+    returns = values.pct_change().iloc[1:]
+    return float((returns > 0).mean()), "computed", "按最近20日收益方向计算"
+
+
+def _downside_volatility_60(close: pd.Series | None) -> tuple[object, str, str]:
+    values, status, reason = _tail(close, 61, "close")
+    if values is None:
+        return pd.NA, status, reason
+    returns = values.pct_change().iloc[1:].to_numpy(dtype=float)
+    downside = np.minimum(returns, 0.0)
+    return float(np.sqrt(np.square(downside).mean()) * np.sqrt(252)), "computed", "按60日下行收益均方根年化"
+
+
+def _atr_percent(
+    atr_value: object,
+    atr_status: str,
+    atr_reason: str,
+    close_value: object,
+    close_status: str,
+    close_reason: str,
+) -> tuple[object, str, str]:
+    if atr_status != "computed":
+        return pd.NA, atr_status, atr_reason
+    if close_status != "computed":
+        return pd.NA, close_status, close_reason
+    if float(close_value) <= 0:
+        return pd.NA, "calculation_failed", "最新收盘价非正，无法计算ATR比例"
+    return float(atr_value) / float(close_value), "computed", "ATR14除以最新正收盘价"
+
+
+def _amount_vs_average(
+    amount: pd.Series | None,
+    average: object,
+    average_status: str,
+    average_reason: str,
+    window: int,
+) -> tuple[object, str, str]:
+    values, status, reason = _tail(amount, 1, "amount")
+    if values is None:
+        return pd.NA, status, reason
+    if average_status != "computed":
+        return pd.NA, average_status, average_reason
+    if float(average) <= 0:
+        return pd.NA, "calculation_failed", f"{window}日平均成交额非正，无法计算偏离率"
+    return float(values.iloc[-1]) / float(average) - 1, "computed", "当前成交额相对窗口平均成交额"
 
 
 def _data_quality_rows(

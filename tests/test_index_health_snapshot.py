@@ -148,6 +148,63 @@ def test_missing_amount_only_marks_volume_metrics_missing(tmp_path):
     assert _detail_status(details, "000300", "return_20") == "computed"
 
 
+def test_snapshot_calculates_expanded_momentum_risk_and_activity_atoms(tmp_path):
+    prices = _price_history(300)
+    store = _store_with_index_prices(tmp_path, "000300", prices)
+
+    _, details = build_index_atomic_snapshot(store, (_definition("000300"),))
+
+    returns = prices["close"].pct_change()
+    assert _detail_value(details, "000300", "ma_20_change_20") == pytest.approx(
+        prices["close"].rolling(20).mean().iloc[-1] / prices["close"].rolling(20).mean().iloc[-21] - 1
+    )
+    assert _detail_value(details, "000300", "ma_60_change_20") == pytest.approx(
+        prices["close"].rolling(60).mean().iloc[-1] / prices["close"].rolling(60).mean().iloc[-21] - 1
+    )
+    assert _detail_value(details, "000300", "ma_120_change_20") == pytest.approx(
+        prices["close"].rolling(120).mean().iloc[-1] / prices["close"].rolling(120).mean().iloc[-21] - 1
+    )
+    assert _detail_value(details, "000300", "rsi_14") == pytest.approx(100.0)
+    assert _detail_value(details, "000300", "up_day_ratio_20") == pytest.approx((returns.iloc[-20:] > 0).mean())
+    assert _detail_value(details, "000300", "max_drawdown_60") == pytest.approx(
+        (prices["close"].iloc[-60:] / prices["close"].iloc[-60:].cummax() - 1).min()
+    )
+    assert _detail_value(details, "000300", "max_drawdown_120") == pytest.approx(
+        (prices["close"].iloc[-120:] / prices["close"].iloc[-120:].cummax() - 1).min()
+    )
+    assert _detail_value(details, "000300", "max_drawdown_250") == pytest.approx(
+        (prices["close"].iloc[-250:] / prices["close"].iloc[-250:].cummax() - 1).min()
+    )
+    assert _detail_value(details, "000300", "annualized_volatility_20") == pytest.approx(
+        returns.iloc[-20:].std() * np.sqrt(252)
+    )
+    assert _detail_value(details, "000300", "annualized_volatility_60") == pytest.approx(
+        returns.iloc[-60:].std() * np.sqrt(252)
+    )
+    assert _detail_value(details, "000300", "downside_volatility_60") == pytest.approx(
+        np.sqrt(np.square(np.minimum(returns.iloc[-60:], 0)).mean()) * np.sqrt(252)
+    )
+    assert _detail_value(details, "000300", "atr_14_pct") == pytest.approx(
+        _detail_value(details, "000300", "atr_14") / prices["close"].iloc[-1]
+    )
+    assert _detail_value(details, "000300", "amount_avg_60") == pytest.approx(prices["amount"].iloc[-60:].mean())
+    assert _detail_value(details, "000300", "amount_vs_avg_20") == pytest.approx(0.0)
+    assert _detail_value(details, "000300", "amount_vs_avg_60") == pytest.approx(0.0)
+    assert _detail_status(details, "000300", "amount_avg_60") == "computed"
+
+
+def test_missing_amount_only_marks_expanded_activity_atoms_missing(tmp_path):
+    prices = _price_history(300, amount=None)
+    store = _store_with_index_prices(tmp_path, "000300", prices)
+
+    _, details = build_index_atomic_snapshot(store, (_definition("000300"),))
+
+    assert _detail_status(details, "000300", "amount_avg_60") == "missing_input"
+    assert _detail_status(details, "000300", "amount_vs_avg_20") == "missing_input"
+    assert _detail_status(details, "000300", "amount_vs_avg_60") == "missing_input"
+    assert _detail_status(details, "000300", "rsi_14") == "computed"
+
+
 def test_snapshot_preserves_catalog_order_and_never_reads_valuation_parquet(tmp_path, monkeypatch):
     store = _store_with_index_prices(tmp_path, "000300", _price_history(260))
     store.write_index_prices("000905", _price_history(260).assign(index_code="000905"))
