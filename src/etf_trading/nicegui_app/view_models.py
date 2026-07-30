@@ -351,6 +351,7 @@ INDEX_PROFILE_STATUS_LABELS = {
 }
 
 INDEX_PROFILE_ALL_GROUPS = (
+    ("valuation", "估值与便宜程度"),
     ("price_ma", "价格与均线"),
     ("ma_cross", "均线穿越"),
     ("range_position", "区间位置与突破"),
@@ -359,6 +360,7 @@ INDEX_PROFILE_ALL_GROUPS = (
     ("momentum_return", "动量与收益"),
     ("drawdown_risk", "回撤与风险"),
     ("trading_activity", "成交活跃度"),
+    ("data_quality", "数据质量"),
 )
 
 INDEX_PROFILE_OVERVIEW_TREND_METRIC_KEYS = frozenset(
@@ -943,7 +945,7 @@ def index_profile_view(
         overview_trend=overview_trend,
         trend_risk_sections=_profile_trend_risk_sections(records),
         overview_trend_risk_sections=_profile_overview_trend_risk_sections(rows),
-        events=_profile_events(rows),
+        events=_profile_events(rows, price_as_of_date),
         all_groups=_profile_all_groups(records),
         quality=_profile_quality(summary, records, rows),
     )
@@ -1122,15 +1124,38 @@ def _profile_quality(
     return summary_quality + detail_quality + valuation_quality
 
 
-def _profile_events(rows: dict[str, dict[str, object]]) -> tuple[IndexAtomicOverviewEvent, ...]:
-    price_events = _overview_events(rows)
-    valuation_events = []
+def _profile_events(
+    rows: dict[str, dict[str, object]],
+    price_as_of_date: str,
+) -> tuple[IndexAtomicOverviewEvent, ...]:
+    events = list(_overview_event_items(rows))
+    valuation_lag = _event_age(rows.get("valuation_lag_trading_days", {}).get("value"))
     for metric_key, label in (("pe_ttm_5y_band_changed", "PE-TTM 5年分位区间变化"), ("pb_5y_band_changed", "PB 5年分位区间变化")):
         row = rows.get(metric_key)
         if row is None or _text(row.get("status")) != "computed" or not _truthy(row.get("value")):
             continue
-        valuation_events.append(IndexAtomicOverviewEvent(label, _format_index_atomic_date(row.get("as_of_date"))))
-    return price_events + tuple(valuation_events)
+        event_date = _format_index_atomic_date(row.get("as_of_date"))
+        age = valuation_lag
+        if age is None:
+            age = _calendar_day_age(price_as_of_date, event_date)
+        events.append((age if age is not None else math.inf, IndexAtomicOverviewEvent(label, event_date)))
+    return tuple(event for _, event in sorted(events, key=lambda item: item[0])[:4])
+
+
+def _event_age(value: object) -> float | None:
+    try:
+        age = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return age if math.isfinite(age) and age >= 0 else None
+
+
+def _calendar_day_age(price_as_of_date: str, event_date: str) -> float | None:
+    price_date = pd.to_datetime(price_as_of_date, errors="coerce")
+    dated_event = pd.to_datetime(event_date, errors="coerce")
+    if pd.isna(price_date) or pd.isna(dated_event) or dated_event > price_date:
+        return None
+    return float((price_date - dated_event).days)
 
 
 def _profile_overview_metric(row: dict[str, object], label: str) -> IndexAtomicOverviewMetric:
@@ -1252,8 +1277,10 @@ def _range_marker(
         return None
 
 
-def _overview_events(rows: dict[str, dict[str, object]]) -> tuple[IndexAtomicOverviewEvent, ...]:
-    events: list[tuple[int, IndexAtomicOverviewEvent]] = []
+def _overview_event_items(
+    rows: dict[str, dict[str, object]],
+) -> list[tuple[float, IndexAtomicOverviewEvent]]:
+    events: list[tuple[float, IndexAtomicOverviewEvent]] = []
     for direction, label in (("up", "上穿"), ("down", "下穿")):
         for window in (20, 60, 120, 250):
             row = rows.get("days_since_ma_cross_{}_{}".format(direction, window))
@@ -1267,7 +1294,11 @@ def _overview_events(rows: dict[str, dict[str, object]]) -> tuple[IndexAtomicOve
                 continue
             days = int(event_age)
             events.append((days, IndexAtomicOverviewEvent("{}{}日均线".format(label, window), "{} 日前".format(days))))
-    return tuple(event for _, event in sorted(events, key=lambda item: item[0])[:2])
+    return events
+
+
+def _overview_events(rows: dict[str, dict[str, object]]) -> tuple[IndexAtomicOverviewEvent, ...]:
+    return tuple(event for _, event in sorted(_overview_event_items(rows), key=lambda item: item[0])[:2])
 
 
 def _overview_quality(summary: dict[str, object]) -> tuple[IndexAtomicOverviewMetric, ...]:

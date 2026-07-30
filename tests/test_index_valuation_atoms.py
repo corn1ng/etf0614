@@ -36,7 +36,7 @@ def _by_key(rows):
 
 def test_midrank_percentile_uses_valid_values_and_exact_window():
     history = _daily_valuations("2021-01-01", periods=1300)
-    history.loc[history.index[-3:], "pe_ttm"] = [10.0, 10.0, float("inf")]
+    history.loc[history.index[-3:], "pe_ttm"] = [float("inf"), 10.0, 10.0]
 
     atoms = _by_key(
         build_index_valuation_atoms(
@@ -165,7 +165,7 @@ def test_percentile_windows_are_available_at_their_exact_minimum_sample_counts(w
         assert available_atoms[f"{metric}_percentile_{window_name}"]["sample_count"] == minimum_samples
 
 
-def test_current_and_turnover_atoms_exclude_non_positive_non_finite_and_non_numeric_values():
+def test_latest_record_invalid_fields_are_unavailable_without_backfilling_older_values():
     history = _daily_valuations("2026-01-01", periods=65)
     history["pe_static"] = history["pe_static"].astype(object)
     history.loc[history.index[-1], ["pe_static", "pb", "turnover_rate"]] = ["bad", -1.0, float("inf")]
@@ -178,12 +178,13 @@ def test_current_and_turnover_atoms_exclude_non_positive_non_finite_and_non_nume
         )
     )
 
-    assert atoms["pe_static"]["status"] == "computed"
-    assert atoms["pb"]["status"] == "computed"
-    assert atoms["turnover_rate"]["status"] == "computed"
+    assert atoms["pe_static"]["status"] == "missing_data"
+    assert atoms["pb"]["status"] == "missing_data"
+    assert atoms["pb_percentile_3y"]["status"] == "missing_data"
+    assert atoms["turnover_rate"]["status"] == "missing_data"
     assert atoms["turnover_rate_mean_60d"]["sample_count"] == 57
     assert atoms["turnover_rate_mean_60d"]["status"] == "computed"
-    assert atoms["turnover_rate_deviation_60d"]["status"] == "computed"
+    assert atoms["turnover_rate_deviation_60d"]["status"] == "missing_data"
 
 
 def test_band_boundaries_and_change_event_are_fixed_and_atomic():

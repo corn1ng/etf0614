@@ -124,7 +124,7 @@ def _direct_value_atoms(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for column in _DIRECT_VALUE_COLUMNS:
-        value, value_date = _latest_valid_value(history, column)
+        value, value_date = _current_record_value(history, column)
         rows.append(
             _atom(
                 index_code,
@@ -150,7 +150,7 @@ def _percentile_atoms(
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for metric, label in (("pe_ttm", "PE-TTM"), ("pb", "PB")):
-        current_value, current_date_text = _latest_valid_value(history, metric)
+        current_value, current_date_text = _current_record_value(history, metric)
         current_date = _timestamp(current_date_text) if current_date_text else None
         for window_name, years, minimum_samples in VALUATION_PERCENTILE_WINDOWS:
             start = price_date - pd.DateOffset(years=years)
@@ -212,7 +212,7 @@ def _turnover_atoms(
     source: str,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    current_value, current_date = _latest_valid_value(history, "turnover_rate")
+    current_value, current_date = _current_record_value(history, "turnover_rate")
     for window in (20, 60):
         valid = _valid_values(history["turnover_rate"].tail(window)) if "turnover_rate" in history else pd.Series(dtype=float)
         sample_count = len(valid)
@@ -248,14 +248,17 @@ def _valid_values(values: pd.Series) -> pd.Series:
     return numeric[(numeric > 0) & np.isfinite(numeric)].astype(float)
 
 
-def _latest_valid_value(history: pd.DataFrame, column: str) -> tuple[float | None, str]:
+def _current_record_value(history: pd.DataFrame, column: str) -> tuple[float | None, str]:
+    if history.empty:
+        return None, ""
+    current = history.iloc[-1]
+    current_date = _date_text(current.get("trade_date"))
     if column not in history:
-        return None, ""
-    valid = _valid_values(history[column])
-    if valid.empty:
-        return None, ""
-    index = valid.index[-1]
-    return float(valid.iloc[-1]), _date_text(history.loc[index, "trade_date"])
+        return None, current_date
+    numeric = pd.to_numeric(pd.Series([current.get(column)]), errors="coerce").iloc[0]
+    if pd.isna(numeric) or not np.isfinite(numeric) or numeric <= 0:
+        return None, current_date
+    return float(numeric), current_date
 
 
 def _midrank_percentile(values: pd.Series, current: float) -> float:

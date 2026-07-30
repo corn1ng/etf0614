@@ -432,7 +432,7 @@ def test_index_profile_keeps_empty_atomic_values_and_statuses(status, status_lab
     assert (drawdown.value, drawdown.status, drawdown.reason) == ("数据不足", status_label, "原子指标不可用")
 
 
-def test_index_profile_all_groups_cover_every_nonquality_price_atom_in_stable_group_order():
+def test_index_profile_all_groups_cover_every_published_atom_in_stable_group_order():
     details = pd.DataFrame([
         _profile_detail("pe_ttm", 11.6),
         _profile_detail("history_rows", 1000, group_key="data_quality"),
@@ -450,14 +450,35 @@ def test_index_profile_all_groups_cover_every_nonquality_price_atom_in_stable_gr
     view = index_profile_view(_profile_summary(), details, "000300")
 
     assert [group.title for group in view.all_groups] == [
-        "价格与均线", "均线穿越", "区间位置与突破", "收益与回撤", "波动与量能",
-        "动量与收益", "回撤与风险", "成交活跃度",
+        "估值与便宜程度", "价格与均线", "均线穿越", "区间位置与突破", "收益与回撤", "波动与量能",
+        "动量与收益", "回撤与风险", "成交活跃度", "数据质量",
     ]
     assert [item.metric_key for group in view.all_groups for item in group.items] == [
-        "close", "ma_20", "ma_cross_up_20", "range_20_from_high", "return_20",
-        "annualized_volatility_20", "rsi_14", "max_drawdown_250", "amount_avg_20",
+        "pe_ttm", "close", "ma_20", "ma_cross_up_20", "range_20_from_high", "return_20",
+        "annualized_volatility_20", "rsi_14", "max_drawdown_250", "amount_avg_20", "history_rows",
     ]
-    assert all(item.metric_key != "history_rows" for group in view.all_groups for item in group.items)
+
+
+def test_index_profile_events_are_sorted_newest_to_oldest_across_price_and_valuation():
+    details = pd.concat(
+        [
+            _profile_details(),
+            pd.DataFrame(
+                [
+                    _profile_detail("days_since_ma_cross_up_20", 5, group_key="ma_cross"),
+                    _profile_detail("pe_ttm_5y_band_changed", True),
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    assert [(event.label, event.days) for event in view.events] == [
+        ("PE-TTM 5年分位区间变化", "2026-07-29"),
+        ("上穿20日均线", "5 日前"),
+    ]
 
 
 def test_index_atomic_overview_reads_stored_atoms_without_conclusions():
