@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -119,11 +120,11 @@ def _invalid_frame_reason(
 
     prepared = _prepare_frame(frame, entry.index_base_date)
     prices = prepared[["high", "low", "close"]].apply(pd.to_numeric, errors="coerce")
-    if prices.isna().any().any() or (prices <= 0).any().any():
+    if not prices.map(_finite_positive).all().all():
         return "non_positive_ohlc"
     open_prices = pd.to_numeric(prepared["open"], errors="coerce")
     present_open = prepared["open"].notna()
-    if (present_open & (open_prices.isna() | (open_prices <= 0))).any():
+    if (present_open & ~open_prices.map(_finite_positive)).any():
         return "non_positive_open"
     if len(prepared) < config.min_valid_rows:
         return "insufficient_valid_rows"
@@ -141,6 +142,14 @@ def _normalize_price_columns(frame: pd.DataFrame) -> pd.DataFrame:
     for column in ("open", "high", "low", "close"):
         result[column] = pd.to_numeric(result[column], errors="coerce")
     return result
+
+
+def _finite_positive(value: object) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number > 0
 
 
 def _exclude(exclusions: list[dict[str, object]], entry: IndexCatalogEntry, reason_code: str) -> None:

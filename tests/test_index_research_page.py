@@ -294,6 +294,59 @@ def test_index_research_layout_has_metadata_controls_then_results():
     assert index_research_layout_order() == ("metadata", "controls", "results")
 
 
+def test_full_run_gate_rows_show_actual_threshold_and_reason_for_all_six_gates():
+    from etf_trading.nicegui_app.pages.research import _index_research_gate_rows
+
+    meta = {
+        "gates": {
+            "drawdown_win_rate": True,
+            "median_drawdown_reduction": True,
+            "median_calmar_improves": True,
+            "median_return_is_retained": False,
+            "buffer_reduces_whipsaw_rate_and_trades": True,
+            "stress_keeps_first_four_gates": False,
+        },
+        "gate_values": {
+            "drawdown_win_rate": 0.75,
+            "median_drawdown_reduction": 0.31,
+            "median_calmar_v1": 0.88,
+            "median_calmar_buy_hold": 0.54,
+            "median_annual_return_v1": 0.061,
+            "median_annual_return_buy_hold": 0.089,
+            "whipsaw_rate_0": 0.42,
+            "whipsaw_rate_2": 0.25,
+            "trades_per_year_0": 5.4,
+            "trades_per_year_2": 3.1,
+            "stress_first_four_gates": {
+                "drawdown_win_rate": True,
+                "median_drawdown_reduction": True,
+                "median_calmar_improves": False,
+                "median_return_is_retained": True,
+            },
+        },
+        "gate_reasons": [
+            "median_return_is_retained:median_annual_return_lag_exceeds_0.02",
+            "stress_keeps_first_four_gates:median_calmar_improves",
+        ],
+    }
+
+    rows = _index_research_gate_rows(meta)
+
+    assert len(rows) == 6
+    assert [row["门槛"] for row in rows] == [
+        "drawdown_win_rate",
+        "median_drawdown_reduction",
+        "median_calmar_improves",
+        "median_return_is_retained",
+        "buffer_reduces_whipsaw_rate_and_trades",
+        "stress_keeps_first_four_gates",
+    ]
+    assert all(row["实际值"] not in ("", None) and row["阈值"] and row["原因"] for row in rows)
+    assert "V1=0.88" in rows[2]["实际值"]
+    assert "0%=0.42" in rows[4]["实际值"]
+    assert "median_calmar_improves" in rows[5]["原因"]
+
+
 def test_empty_nav_detail_keeps_all_followup_empty_sections():
     from etf_trading.nicegui_app.pages.research import empty_index_research_detail_states
 

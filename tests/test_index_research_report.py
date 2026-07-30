@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -11,7 +12,6 @@ import pandas as pd
 import pytest
 
 from etf_trading.research.index_models import (
-    EffectivenessAssessment,
     IndexAdmissionResult,
     IndexResearchOutput,
     load_index_research_config,
@@ -203,7 +203,7 @@ def test_loader_rejects_results_cohort_or_summary_gate_tampering(tmp_path: Path)
     summary_path = second_dir / "index_strategy_summary.csv"
     summary = pd.read_csv(summary_path)
     gate = summary.index[summary["section"] == "effectiveness_gate"][0]
-    summary.loc[gate, "passed"] = True
+    summary.loc[gate, "passed"] = not bool(summary.loc[gate, "passed"])
     summary.to_csv(summary_path, index=False)
     (tmp_path / "latest.json").write_text(json.dumps({"run_id": "second"}), encoding="utf-8")
     with pytest.raises(ValueError, match="gate"):
@@ -225,7 +225,7 @@ def test_chinese_report_has_ordered_sections_gates_failure_reason_and_index_warn
         "双倍费用", "年度/阶段", "最好与最差指数", "扩展样本", "排除项", "前瞻样本状态", "研究限制",
     ]
     assert [markdown.index(f"## {section}") for section in sections] == sorted(markdown.index(f"## {section}") for section in sections)
-    assert "drawdown_win_rate" in markdown and "样本不足" in markdown
+    assert "drawdown_win_rate" in markdown and "whipsaw_0" in markdown
     assert "阈值：`至少 0.60`" in markdown
     assert "median_calmar_improves" in markdown and "实际值" in markdown and "阈值" in markdown
     assert "指数理论回测" in markdown and "不是 ETF 可实现收益" in markdown
@@ -291,9 +291,12 @@ def test_loader_rejects_is_empty_tampering_and_gate_value_display_tampering(tmp_
 @pytest.mark.parametrize(
     ("original", "replacement"),
     [
-        ("`drawdown_win_rate`：失败；实际值：`0.4`", "`drawdown_win_rate`：通过；实际值：`0.4`"),
-        ("`drawdown_win_rate`：失败；实际值：`0.4`", "`drawdown_win_rate`：失败；实际值：`0.9`"),
-        ("drawdown_win_rate:样本不足", "drawdown_win_rate:篡改原因"),
+        ("`drawdown_win_rate`：通过；实际值：`1.0`", "`drawdown_win_rate`：失败；实际值：`1.0`"),
+        ("`drawdown_win_rate`：通过；实际值：`1.0`", "`drawdown_win_rate`：通过；实际值：`0.9`"),
+        (
+            "buffer_reduces_whipsaw_rate_and_trades:whipsaw_0=0.2",
+            "buffer_reduces_whipsaw_rate_and_trades:whipsaw_0=0.1",
+        ),
     ],
 )
 def test_loader_rejects_markdown_gate_value_or_reason_tampering(tmp_path: Path, original: str, replacement: str):
@@ -364,6 +367,61 @@ def test_published_evidence_recalculates_gates_and_rejects_orphan_trade(tmp_path
         load_latest_index_research(tmp_path)
 
 
+@pytest.mark.parametrize("artifact", ["results", "buffer", "stress"])
+def test_loader_rejects_gate_input_tampering_even_when_copied_gate_metadata_is_unchanged(
+    tmp_path: Path,
+    artifact: str,
+):
+    output = cross_file_consistent_output()
+    published = publish_index_research(output, tmp_path, run_meta_for_output(output, f"tampered-{artifact}"))
+
+    if artifact == "results":
+        path = published.run_dir / "index_backtest_results.csv"
+        frame = pd.read_csv(path, dtype={"index_code": "string"})
+        row = (frame["period_type"] == "full_history") & (frame["strategy_name"] == "index_trend_v1")
+        frame.loc[row, "max_drawdown"] = -0.19
+        frame.to_csv(path, index=False)
+    elif artifact == "buffer":
+        path = published.run_dir / "index_strategy_buffer_comparison.csv"
+        frame = pd.read_csv(path, dtype={"index_code": "string"})
+        frame.loc[frame["buffer_rate"] == 0.02, "whipsaw_trade_rate"] = 0.10
+        frame.to_csv(path, index=False)
+    else:
+        path = published.run_dir / "index_strategy_summary.csv"
+        frame = pd.read_csv(path, dtype={"index_code": "string"})
+        row = (
+            (frame["section"] == "stress_results")
+            & (frame["period_type"] == "full_history")
+            & (frame["strategy_name"] == "index_trend_v1")
+        )
+        frame.loc[row, "max_drawdown"] = -0.30
+        frame.to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="recalculated effectiveness"):
+        load_latest_index_research(tmp_path)
+
+
+def test_loader_resolves_and_audits_locked_config_independently_of_cwd(tmp_path: Path, monkeypatch):
+    output = cross_file_consistent_output()
+    published = publish_index_research(output, tmp_path, run_meta_for_output(output, "cwd-independent"))
+
+    monkeypatch.chdir(tmp_path)
+
+    assert load_latest_index_research(tmp_path).run_id == published.run_id
+
+
+def test_loader_rejects_config_hash_that_no_longer_identifies_locked_config(tmp_path: Path):
+    output = cross_file_consistent_output()
+    published = publish_index_research(output, tmp_path, run_meta_for_output(output, "config-tampering"))
+    meta_path = published.run_dir / "index_trend_strategy_run.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["config_sha256"] = "0" * 64
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="config_sha256"):
+        load_latest_index_research(tmp_path)
+
+
 def test_run_and_publish_marks_limited_run_and_uses_sorted_catalog(tmp_path: Path):
     calls: list[list[str]] = []
 
@@ -412,22 +470,37 @@ def test_cli_help_is_available_from_project_root():
 
 
 def sample_output(code: str = "000300") -> IndexResearchOutput:
-    results = pd.DataFrame([{
+    v1 = pd.DataFrame([{
         "index_code": code, "name": code, "cohort": "official", "market": "CN", "index_type": "broad",
         "period_type": "full_history", "period_label": "full_history", "period_start": "2020-01-01",
-        "period_end": "2020-12-31", "strategy_name": "index_trend_v1", "annualized_return": 0.08,
-        "volatility": 0.12, "sharpe": 0.66, "max_drawdown": -0.20, "calmar": 0.4,
+        "period_end": "2020-12-31", "strategy_name": "index_trend_v1", "annualized_return": 0.09,
+        "volatility": 0.12, "sharpe": 0.75, "max_drawdown": -0.10, "calmar": 0.9,
         "total_return": 0.1, "avg_exposure": 0.5, "trade_count": 2, "trades_per_year": 1.0,
         "whipsaw_trade_rate": 0.0,
     }])
-    results = pd.concat([results, results.assign(period_type="stage", period_label="stage_2020")], ignore_index=True)
-    assessment = EffectivenessAssessment(
-        status="failed",
-        gates={"drawdown_win_rate": False, "median_drawdown_reduction": True, "median_calmar_improves": True,
-               "median_return_is_retained": True, "buffer_reduces_whipsaw_rate_and_trades": True,
-               "stress_keeps_first_four_gates": True},
-        values={"drawdown_win_rate": 0.4, "official_index_count": 1},
-        reasons=("drawdown_win_rate:样本不足",),
+    buy_hold = v1.assign(
+        strategy_name="buy_hold",
+        annualized_return=0.10,
+        sharpe=0.50,
+        max_drawdown=-0.20,
+        calmar=0.5,
+        avg_exposure=1.0,
+        trade_count=1,
+    )
+    results = pd.concat(
+        [v1, buy_hold, v1.assign(period_type="stage", period_label="stage_2020")],
+        ignore_index=True,
+    )
+    buffer = pd.DataFrame([
+        {"index_code": code, "cohort": "official", "buffer_rate": 0.0, "whipsaw_trade_rate": 0.2, "annualized_trade_count": 3.0},
+        {"index_code": code, "cohort": "official", "buffer_rate": 0.02, "whipsaw_trade_rate": 0.3, "annualized_trade_count": 2.0},
+    ])
+    stress = pd.concat([v1, buy_hold], ignore_index=True).assign(period_label="stress_double_cost")
+    assessment = evaluate_effectiveness(
+        results,
+        buffer,
+        stress,
+        load_index_research_config(Path("configs/index_research.yaml")),
     )
     return IndexResearchOutput(
         results=results,
@@ -439,12 +512,12 @@ def sample_output(code: str = "000300") -> IndexResearchOutput:
             "commission": 0.01, "delay_days": 1, "reason": "test", "trigger_rules": "[]",
             "reference_price": 100.0, "slippage_cost": 0.02,
         }]),
-        yearly=results[results["period_type"] == "full_history"].assign(period_type="calendar_year"),
+        yearly=pd.concat([v1, buy_hold], ignore_index=True).assign(period_type="calendar_year", period_label="2020"),
         rolling=results.assign(period_type="rolling_5y"),
-        buffer_comparison=pd.DataFrame([{"index_code": code, "cohort": "official", "buffer_rate": 0.02, "whipsaw_trade_rate": 0.1, "annualized_trade_count": 2.0}]),
-        stress_results=results.assign(period_label="stress_double_cost"),
+        buffer_comparison=buffer,
+        stress_results=stress,
         prospective_status=pd.DataFrame([{"index_code": code, "cohort": "official", "status": "no_prospective_sample", "reason": "no_data_strictly_after_locked_at"}]),
-        group_statistics=pd.DataFrame([{"group_type": "cohort", "group_value": "official", "metric": "calmar", "mean": 0.4, "median": 0.4, "q25": 0.4, "q75": 0.4, "count": 1}]),
+        group_statistics=pd.DataFrame([{"group_type": "cohort", "group_value": "official", "metric": "calmar", "mean": 0.9, "median": 0.9, "q25": 0.9, "q75": 0.9, "count": 1}]),
         worst_indices=results.copy(),
         rolling_gate_summary=pd.DataFrame([{"eligible_windows": 0, "passing_windows": 0, "pass_rate": 0.0}]),
         effectiveness=assessment,
@@ -452,27 +525,21 @@ def sample_output(code: str = "000300") -> IndexResearchOutput:
 
 
 def sample_run_meta(run_id: str) -> dict[str, object]:
+    assessment = sample_output().effectiveness
     return {
         "run_id": run_id,
         "strategy_version": "index_trend_v1",
-        "config_sha256": "a" * 64,
+        "config_sha256": hashlib.sha256(Path("configs/index_research.yaml").read_bytes()).hexdigest(),
         "locked_at": date(2026, 7, 30),
         "data_cutoff": "2020-12-31",
         "run_at": "2026-07-30T00:00:00+00:00",
         "official_count": 1,
         "reference_count": 0,
         "exclusion_count": 0,
-        "status": "failed",
-        "gates": {
-            "drawdown_win_rate": False,
-            "median_drawdown_reduction": True,
-            "median_calmar_improves": True,
-            "median_return_is_retained": True,
-            "buffer_reduces_whipsaw_rate_and_trades": True,
-            "stress_keeps_first_four_gates": True,
-        },
-        "gate_values": {"drawdown_win_rate": 0.4, "official_index_count": 1},
-        "gate_reasons": ["drawdown_win_rate:样本不足"],
+        "status": assessment.status,
+        "gates": assessment.gates,
+        "gate_values": assessment.values,
+        "gate_reasons": list(assessment.reasons),
         "exclusions": [],
     }
 

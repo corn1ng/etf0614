@@ -18,9 +18,10 @@ import pandas as pd
 
 from etf_trading.data.index_catalog import IndexCatalogEntry, default_index_catalog
 from etf_trading.research.index_data import load_index_frames
+from etf_trading.research.index_gate_evidence import EFFECTIVENESS_GATE_NAMES, format_gate_evidence
 from etf_trading.research.index_models import EffectivenessAssessment, IndexAdmissionResult, IndexResearchConfig, IndexResearchOutput
 from etf_trading.research.index_models import load_index_research_config
-from etf_trading.research.index_validation import run_index_research
+from etf_trading.research.index_validation import evaluate_effectiveness, run_index_research
 
 
 REQUIRED_ARTIFACTS = (
@@ -41,11 +42,8 @@ _RUN_META_REQUIRED = frozenset({
     "official_count", "reference_count", "exclusion_count", "status", "gates", "gate_values",
     "gate_reasons", "exclusions",
 })
-_GATE_NAMES = (
-    "drawdown_win_rate", "median_drawdown_reduction", "median_calmar_improves",
-    "median_return_is_retained", "buffer_reduces_whipsaw_rate_and_trades",
-    "stress_keeps_first_four_gates",
-)
+_GATE_NAMES = EFFECTIVENESS_GATE_NAMES
+_LOCKED_CONFIG_PATH = Path(__file__).resolve().parents[3] / "configs" / "index_research.yaml"
 _SUMMARY_SECTIONS = (
     "effectiveness_status", "effectiveness_gate", "group_statistics", "worst_indices",
     "rolling_gate_summary", "stress_results", "prospective_status",
@@ -198,11 +196,11 @@ def render_index_research_markdown(output: IndexResearchOutput, run_meta: Mappin
         "",
         "## 六项门槛",
     ]
-    for name in _GATE_NAMES:
-        passed = assessment.gates[name]
-        value, threshold = _gate_detail(name, assessment.values)
-        reason = "; ".join(reason for reason in assessment.reasons if reason.startswith(f"{name}:")) or "通过"
-        lines.append(f"- `{name}`：{'通过' if passed else '失败'}；实际值：`{value}`；阈值：`{threshold}`；原因：{reason}。")
+    for evidence in format_gate_evidence(assessment.gates, assessment.values, assessment.reasons):
+        lines.append(
+            f"- `{evidence.name}`：{'通过' if evidence.passed else '失败'}；"
+            f"实际值：`{evidence.actual}`；阈值：`{evidence.threshold}`；原因：{evidence.reason}。"
+        )
     full_history = output.results[output.results["period_type"] == "full_history"] if "period_type" in output.results else output.results
     lines.extend(_table_section("全历史配对结果", full_history))
     lines.extend(_table_section("五年滚动稳定性", output.rolling))
@@ -445,35 +443,6 @@ def _best_and_worst_indices(results: pd.DataFrame) -> pd.DataFrame:
     best = base.sort_values(["annualized_return", "index_code"], ascending=[False, True], kind="stable").head(10).assign(side="best")
     worst = base.sort_values(["annualized_return", "index_code"], ascending=[True, True], kind="stable").head(10).assign(side="worst")
     return pd.concat([best, worst], ignore_index=True)
-
-
-def _gate_detail(name: str, values: Mapping[str, object]) -> tuple[object, str]:
-    """Make each locked gate's observed evidence and pre-set rule visible."""
-
-    if name == "drawdown_win_rate":
-        return values.get("drawdown_win_rate", "未提供"), "至少 0.60"
-    if name == "median_drawdown_reduction":
-        return values.get("median_drawdown_reduction", "未提供"), "至少 0.20"
-    if name == "median_calmar_improves":
-        return f"V1={values.get('median_calmar_v1', '未提供')}; 买入持有={values.get('median_calmar_buy_hold', '未提供')}", "V1 中位 Calmar 高于买入持有"
-    if name == "median_return_is_retained":
-        return f"V1={values.get('median_annual_return_v1', '未提供')}; 买入持有={values.get('median_annual_return_buy_hold', '未提供')}", "V1 中位年化收益不低于买入持有减 0.02"
-    if name == "buffer_reduces_whipsaw_rate_and_trades":
-        return f"假突破率 0%={values.get('whipsaw_rate_0', '未提供')}, 2%={values.get('whipsaw_rate_2', '未提供')}; 交易/年 0%={values.get('trades_per_year_0', '未提供')}, 2%={values.get('trades_per_year_2', '未提供')}", "2% 两项均严格低于 0%"
-    if name == "stress_keeps_first_four_gates":
-        return _format_stress_first_four_gates(values.get("stress_first_four_gates")), "双倍费用下前四项均通过"
-    return values.get(name, "未提供"), "预设门槛"
-
-
-def _format_stress_first_four_gates(value: object) -> object:
-    """Render stress evidence in the fixed first-four-gate order after JSON round trips."""
-
-    if not isinstance(value, Mapping):
-        return "未提供" if value is None else value
-    first_four = _GATE_NAMES[:4]
-    ordered = {name: value[name] for name in first_four if name in value}
-    ordered.update({name: value[name] for name in sorted(set(value).difference(ordered))})
-    return ordered
 
 
 def _normalise_run_meta(run_meta: Mapping[str, object]) -> dict[str, object]:
@@ -727,10 +696,11 @@ def _validate_run_directory(directory: Path, run_id: str) -> None:
     exclusions = _read_csv(directory / "index_strategy_exclusions.csv")
     _read_csv(directory / "index_strategy_yearly.csv")
     _read_csv(directory / "index_strategy_rolling_5y.csv")
-    _read_csv(directory / "index_strategy_buffer_comparison.csv")
+    buffer_comparison = _read_csv(directory / "index_strategy_buffer_comparison.csv")
     nav = _read_nav(directory / "index_strategy_nav.parquet")
     sections = _unpack_summary(summary)
     _validate_cross_artifact_consistency(meta, results, trades, exclusions, nav, sections)
+    _validate_recalculated_effectiveness(meta, results, buffer_comparison, sections["stress_results"])
     _validate_markdown_consistency(
         (directory / "index_trend_strategy_report.md").read_text(encoding="utf-8"),
         meta,
@@ -741,15 +711,57 @@ def _markdown_gate_evidence_lines(assessment: EffectivenessAssessment) -> list[s
     """Render the six visible gate disclosures from structured evidence only."""
 
     lines: list[str] = []
-    for name in _GATE_NAMES:
-        value, threshold = _gate_detail(name, assessment.values)
-        reason = "; ".join(reason for reason in assessment.reasons if reason.startswith(f"{name}:")) or "\u901a\u8fc7"
-        result = "\u901a\u8fc7" if assessment.gates[name] else "\u5931\u8d25"
+    for evidence in format_gate_evidence(assessment.gates, assessment.values, assessment.reasons):
+        result = "\u901a\u8fc7" if evidence.passed else "\u5931\u8d25"
         lines.append(
-            f"- `{name}`\uff1a{result}\uff1b\u5b9e\u9645\u503c\uff1a`{value}`\uff1b"
-            f"\u9608\u503c\uff1a`{threshold}`\uff1b\u539f\u56e0\uff1a{reason}\u3002"
+            f"- `{evidence.name}`\uff1a{result}\uff1b\u5b9e\u9645\u503c\uff1a`{evidence.actual}`\uff1b"
+            f"\u9608\u503c\uff1a`{evidence.threshold}`\uff1b\u539f\u56e0\uff1a{evidence.reason}\u3002"
         )
     return lines
+
+
+def _validate_recalculated_effectiveness(
+    meta: Mapping[str, object],
+    results: pd.DataFrame,
+    buffer_comparison: pd.DataFrame,
+    stress_results: pd.DataFrame,
+) -> None:
+    """Recalculate all six gates from primary evidence under the audited lock."""
+
+    try:
+        config_bytes = _LOCKED_CONFIG_PATH.read_bytes()
+    except OSError as exc:
+        raise ValueError("locked index research config is unavailable") from exc
+    if hashlib.sha256(config_bytes).hexdigest() != meta["config_sha256"]:
+        raise ValueError("index research config_sha256 disagrees with locked config")
+    config = load_index_research_config(_LOCKED_CONFIG_PATH)
+    recalculated = evaluate_effectiveness(results, buffer_comparison, stress_results, config)
+    if (
+        recalculated.status != meta["status"]
+        or recalculated.gates != meta["gates"]
+        or not _audit_values_match(recalculated.values, meta["gate_values"])
+        or list(recalculated.reasons) != meta["gate_reasons"]
+    ):
+        raise ValueError("recalculated effectiveness disagrees with published gate evidence")
+
+
+def _audit_values_match(actual: object, expected: object) -> bool:
+    """Compare JSON-like evidence with tight tolerance for CSV float round trips."""
+
+    if isinstance(actual, Mapping) and isinstance(expected, Mapping):
+        return set(actual) == set(expected) and all(_audit_values_match(actual[key], expected[key]) for key in actual)
+    if isinstance(actual, (list, tuple)) and isinstance(expected, (list, tuple)):
+        return len(actual) == len(expected) and all(_audit_values_match(left, right) for left, right in zip(actual, expected))
+    if (
+        isinstance(actual, (int, float))
+        and not isinstance(actual, bool)
+        and isinstance(expected, (int, float))
+        and not isinstance(expected, bool)
+    ):
+        return math.isfinite(float(actual)) and math.isfinite(float(expected)) and math.isclose(
+            float(actual), float(expected), rel_tol=1e-12, abs_tol=1e-12
+        )
+    return type(actual) is type(expected) and actual == expected
 
 
 def _extract_markdown_gate_evidence_lines(markdown: str) -> list[str]:

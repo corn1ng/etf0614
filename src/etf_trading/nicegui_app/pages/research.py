@@ -26,6 +26,7 @@ from etf_trading.nicegui_app.view_models import (
 from etf_trading.research.comparison import compare_regime_pairs
 from etf_trading.research.config import append_research_candidate, load_research_candidates
 from etf_trading.research.index_etf_universe import selected_etf_codes
+from etf_trading.research.index_gate_evidence import format_gate_evidence
 from etf_trading.research.index_jobs import IndexResearchAlreadyRunning, IndexResearchJobManager, index_research_is_stale
 from etf_trading.research.index_report import LoadedIndexResearch, load_latest_index_research, run_and_publish_index_research
 from etf_trading.research.models import StrategyCandidate
@@ -724,10 +725,7 @@ def _index_research_job_state_text(job) -> str:
 
 def _render_index_research_evidence(loaded: LoadedIndexResearch) -> None:
     meta = loaded.run_meta
-    gates = [
-        {"门槛": name, "是否通过": "通过" if passed else "未通过", "证据": meta.get("gate_values", {}).get(name, "")}
-        for name, passed in dict(meta.get("gates", {})).items()
-    ]
+    gates = _index_research_gate_rows(meta)
     ui.label("总体结论").classes("text-sm font-semibold text-slate-700")
     conclusion = "通过历史有效性门槛" if meta.get("status") == "passed" else "未通过历史有效性门槛"
     ui.label(f"{conclusion}（这是策略证据结论，不等同于后台任务 failed）。").classes("text-sm text-slate-600")
@@ -751,6 +749,25 @@ def _render_index_research_evidence(loaded: LoadedIndexResearch) -> None:
     ui.label("前瞻状态与限制").classes("text-sm font-semibold text-slate-700")
     _render_rows(_display_rows(loaded.prospective_status), "暂无前瞻样本", "锁定日后尚无可用的前瞻样本。")
     ui.label("指数理论回测仅提供指数层面的历史证据，不代表 ETF 可实现收益。").classes("text-xs text-slate-500")
+
+
+def _index_research_gate_rows(meta) -> list[dict[str, object]]:
+    """Build the complete six-gate page model from strictly loaded metadata."""
+
+    return [
+        {
+            "门槛": evidence.name,
+            "是否通过": "通过" if evidence.passed else "未通过",
+            "实际值": evidence.actual,
+            "阈值": evidence.threshold,
+            "原因": evidence.reason,
+        }
+        for evidence in format_gate_evidence(
+            dict(meta.get("gates", {})),
+            dict(meta.get("gate_values", {})),
+            list(meta.get("gate_reasons", [])),
+        )
+    ]
 
 
 def _render_index_research_selector(loaded: LoadedIndexResearch) -> None:

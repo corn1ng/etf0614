@@ -149,6 +149,24 @@ def test_missing_open_is_allowed_but_present_open_must_be_positive(tmp_path):
     assert set(result.frames) == {"TEST"}
 
 
+@pytest.mark.parametrize("column", ["open", "high", "low", "close"])
+@pytest.mark.parametrize("value", [float("inf"), float("-inf")])
+def test_non_finite_ohlc_is_excluded_with_existing_price_reason_code(tmp_path, column, value):
+    frame = valid_prices(1100)
+    frame.loc[3, column] = value
+    ParquetStore(tmp_path).write_index_prices("TEST", frame)
+
+    result = load_index_frames(
+        tmp_path,
+        (catalog_entry("TEST", "official_base_date"),),
+        locked_config(),
+    )
+
+    assert result.frames == {}
+    expected = "non_positive_open" if column == "open" else "non_positive_ohlc"
+    assert result.exclusions.iloc[0]["reason_code"] == expected
+
+
 def test_numeric_string_ohlc_is_normalized_before_features_are_calculated(tmp_path):
     frame = valid_prices(1100)
     for column in ("open", "high", "low", "close"):
