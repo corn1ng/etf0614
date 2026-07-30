@@ -273,7 +273,7 @@ def _percentile_status(current_value: float | None, sample_count: int, minimum_s
 def _trading_day_lag(price_trade_dates: pd.Series, valuation_date: object, price_date: pd.Timestamp) -> object:
     if valuation_date is None:
         return pd.NA
-    dates = pd.to_datetime(price_trade_dates, errors="coerce").dropna()
+    dates = pd.Series(pd.to_datetime(price_trade_dates, errors="coerce")).dropna().dt.normalize().drop_duplicates()
     if dates.empty:
         return pd.NA
     valuation_timestamp = _timestamp(valuation_date)

@@ -75,6 +75,33 @@ def test_valuation_more_than_five_price_days_old_is_stale():
     assert atoms["valuation_freshness_status"]["value"] == "stale"
 
 
+def test_duplicate_price_trade_dates_do_not_inflate_five_day_freshness_threshold():
+    one_row = _daily_valuations("2026-07-20", 1)
+    price_dates = pd.Series(
+        pd.to_datetime(
+            [
+                "2026-07-20",
+                "2026-07-21",
+                "2026-07-22",
+                "2026-07-23",
+                "2026-07-24",
+                "2026-07-25",
+                "2026-07-25",
+                "2026-07-25",
+            ]
+        )
+    )
+
+    atoms = _by_key(
+        build_index_valuation_atoms(
+            "000300", one_row, pd.Timestamp("2026-07-29"), price_dates, supported=True
+        )
+    )
+
+    assert atoms["valuation_lag_trading_days"]["value"] == 5
+    assert atoms["valuation_freshness_status"]["value"] == "fresh"
+
+
 def test_unsupported_index_returns_explicit_atoms_without_tracks():
     atoms = _by_key(
         build_index_valuation_atoms(
@@ -113,6 +140,29 @@ def test_windows_require_configured_sample_counts_and_preserve_unavailable_statu
     assert atoms["pe_ttm_percentile_5y"]["status"] == "insufficient_history"
     assert pd.isna(atoms["pe_ttm_percentile_5y"]["value"])
     assert atoms["pe_ttm_percentile_5y"]["sample_count"] == 600
+
+
+@pytest.mark.parametrize("window_name, minimum_samples", [("3y", 500), ("5y", 900), ("10y", 1800)])
+def test_percentile_windows_are_available_at_their_exact_minimum_sample_counts(window_name, minimum_samples):
+    insufficient = _daily_valuations("2015-01-01", minimum_samples - 1)
+    available = _daily_valuations("2015-01-01", minimum_samples)
+
+    insufficient_atoms = _by_key(
+        build_index_valuation_atoms(
+            "000300", insufficient, insufficient.iloc[-1]["trade_date"], insufficient["trade_date"], supported=True
+        )
+    )
+    available_atoms = _by_key(
+        build_index_valuation_atoms(
+            "000300", available, available.iloc[-1]["trade_date"], available["trade_date"], supported=True
+        )
+    )
+
+    for metric in ("pe_ttm", "pb"):
+        assert insufficient_atoms[f"{metric}_percentile_{window_name}"]["status"] == "insufficient_history"
+        assert insufficient_atoms[f"{metric}_percentile_{window_name}"]["sample_count"] == minimum_samples - 1
+        assert available_atoms[f"{metric}_percentile_{window_name}"]["status"] == "computed"
+        assert available_atoms[f"{metric}_percentile_{window_name}"]["sample_count"] == minimum_samples
 
 
 def test_current_and_turnover_atoms_exclude_non_positive_non_finite_and_non_numeric_values():
