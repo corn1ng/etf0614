@@ -412,9 +412,24 @@ def _table_section_body(frame: pd.DataFrame, *, limit: int = 10) -> list[str]:
     if frame.empty:
         return ["- 无可报告数据。"]
     preview = frame.head(limit).copy()
-    for column in preview.select_dtypes(include=["datetime", "datetimetz"]).columns:
-        preview[column] = preview[column].astype(str)
+    preview = preview.apply(lambda column: column.map(_display_table_value))
     return [preview.to_markdown(index=False)]
+
+
+def _display_table_value(value: object) -> object:
+    """Keep human-readable reports free of non-finite dataframe sentinels."""
+
+    try:
+        if pd.isna(value):
+            return "—"
+    except (TypeError, ValueError):
+        pass
+    try:
+        if math.isinf(float(value)):
+            return "—"
+    except (TypeError, ValueError):
+        pass
+    return str(value) if isinstance(value, (pd.Timestamp, datetime)) else value
 
 
 def _best_and_worst_indices(results: pd.DataFrame) -> pd.DataFrame:
@@ -585,6 +600,7 @@ def _validate_cross_artifact_consistency(
         raise ValueError("index research metadata cohort counts disagree with results")
     if exclusions.fillna("").to_dict("records") != _exclusions_frame(meta).fillna("").to_dict("records"):
         raise ValueError("index research exclusions disagree with metadata")
+    _validate_result_references(results, trades, nav)
     _validate_meta_cutoff(meta, results, trades, nav)
 
 
@@ -644,6 +660,18 @@ def _validate_nav(nav: pd.DataFrame) -> None:
     weights = pd.to_numeric(nav["weight"], errors="coerce")
     if dates.isna().any() or values.isna().any() or weights.isna().any() or not values.map(math.isfinite).all() or not weights.map(math.isfinite).all():
         raise ValueError("index research NAV has invalid dates or numbers")
+
+
+def _validate_result_references(results: pd.DataFrame, trades: pd.DataFrame, nav: pd.DataFrame) -> None:
+    """Require every trade and NAV row to belong to a published result series."""
+
+    keys = ("index_code", "period_type", "period_label", "strategy_name")
+    available = set(map(tuple, results.loc[:, keys].itertuples(index=False, name=None)))
+    for artifact, frame in (("trades", trades), ("NAV", nav)):
+        referenced = set(map(tuple, frame.loc[:, keys].itertuples(index=False, name=None)))
+        orphaned = referenced.difference(available)
+        if orphaned:
+            raise ValueError(f"index research {artifact} has orphan result reference: {sorted(orphaned)[0]}")
 
 
 def _validate_meta_cutoff(meta: Mapping[str, object], results: pd.DataFrame, trades: pd.DataFrame, nav: pd.DataFrame) -> None:

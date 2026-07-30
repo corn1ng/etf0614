@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import replace
 from datetime import date
@@ -9,7 +10,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from etf_trading.research.index_models import EffectivenessAssessment, IndexAdmissionResult, IndexResearchOutput
+from etf_trading.research.index_models import (
+    EffectivenessAssessment,
+    IndexAdmissionResult,
+    IndexResearchOutput,
+    load_index_research_config,
+)
 from etf_trading.research.index_report import (
     REQUIRED_ARTIFACTS,
     load_latest_index_research,
@@ -17,6 +23,7 @@ from etf_trading.research.index_report import (
     render_index_research_markdown,
     run_and_publish_index_research,
 )
+from etf_trading.research.index_validation import evaluate_effectiveness
 
 
 def test_publish_creates_all_versioned_artifacts_and_reloads_latest(tmp_path: Path):
@@ -227,6 +234,16 @@ def test_chinese_report_has_ordered_sections_gates_failure_reason_and_index_warn
     assert "side" in markdown and "best" in markdown and "worst" in markdown
 
 
+def test_markdown_renders_missing_table_cells_without_nan_or_infinity():
+    output = sample_output()
+    output = replace(output, results=output.results.assign(optional_exit_signal_date=pd.NaT))
+
+    markdown = render_index_research_markdown(output, sample_run_meta("missing-cell"))
+
+    assert not re.search(r"(?i)(?<![A-Za-z])(?:nan|infinity)(?![A-Za-z])", markdown)
+    assert "—" in markdown
+
+
 def test_report_keeps_best_and_worst_rows_when_more_than_ten_indexes():
     output = sample_output()
     rows = []
@@ -279,6 +296,52 @@ def test_loader_rejects_non_finite_or_non_numeric_core_performance_evidence(tmp_
     results.loc[0, "annualized_return"] = "not-a-number"
     results.to_csv(results_path, index=False)
     with pytest.raises(ValueError, match="annualized_return"):
+        load_latest_index_research(tmp_path)
+
+
+def test_published_evidence_recalculates_gates_and_rejects_orphan_trade(tmp_path: Path):
+    """Audit the published files independently instead of trusting copied metadata."""
+
+    output = cross_file_consistent_output()
+    meta = run_meta_for_output(output, "cross-file")
+    published = publish_index_research(output, tmp_path, meta)
+    loaded = load_latest_index_research(tmp_path)
+    expected = evaluate_effectiveness(
+        loaded.results,
+        loaded.buffer_comparison,
+        loaded.stress_results,
+        load_index_research_config(Path("configs/index_research.yaml")),
+    )
+
+    assert expected.status == loaded.run_meta["status"]
+    assert expected.gates == loaded.run_meta["gates"]
+    assert expected.values == loaded.run_meta["gate_values"]
+    assert list(expected.reasons) == loaded.run_meta["gate_reasons"]
+    status = loaded.summary.loc[loaded.summary["section"] == "effectiveness_status"].iloc[0]
+    assert json.loads(status["gates_json"]) == expected.gates
+    assert json.loads(status["values_json"]) == expected.values
+    assert json.loads(status["reasons_json"]) == list(expected.reasons)
+    for row in loaded.summary.loc[loaded.summary["section"] == "effectiveness_gate"].itertuples(index=False):
+        assert row.passed == expected.gates[row.name]
+        assert json.loads(row.value_json)["value"] == expected.values.get(row.name)
+    assert "failed" in loaded.report_markdown
+    assert expected.reasons[0] in loaded.report_markdown
+
+    cohorts = loaded.results[["index_code", "cohort"]].drop_duplicates()
+    assert int((cohorts["cohort"] == "official").sum()) == loaded.run_meta["official_count"]
+    assert int((cohorts["cohort"] == "reference").sum()) == loaded.run_meta["reference_count"]
+    assert len(loaded.exclusions) == loaded.run_meta["exclusion_count"]
+    assert pd.Timestamp(loaded.results["period_end"].max()).date().isoformat() == loaded.run_meta["data_cutoff"]
+    result_keys = set(map(tuple, loaded.results[["index_code", "period_type", "period_label", "strategy_name"]].to_numpy()))
+    for evidence in (loaded.nav, loaded.trades):
+        assert set(map(tuple, evidence[["index_code", "period_type", "period_label", "strategy_name"]].to_numpy())) <= result_keys
+
+    trades_path = published.run_dir / "index_backtest_trades.csv"
+    trades = pd.read_csv(trades_path)
+    orphan = trades.iloc[[0]].copy()
+    orphan["index_code"] = "ORPHAN"
+    pd.concat([trades, orphan], ignore_index=True).to_csv(trades_path, index=False)
+    with pytest.raises(ValueError, match="orphan"):
         load_latest_index_research(tmp_path)
 
 
@@ -393,6 +456,49 @@ def sample_run_meta(run_id: str) -> dict[str, object]:
         "gate_reasons": ["drawdown_win_rate:样本不足"],
         "exclusions": [],
     }
+
+
+def cross_file_consistent_output() -> IndexResearchOutput:
+    """Small fully linked package with a deliberately failed buffer gate."""
+
+    base = sample_output()
+    v1 = base.results.loc[base.results["period_type"] == "full_history"].iloc[[0]].copy()
+    v1.loc[:, ["max_drawdown", "calmar", "annualized_return"]] = [-0.10, 0.90, 0.09]
+    buy_hold = v1.assign(
+        strategy_name="buy_hold",
+        max_drawdown=-0.20,
+        calmar=0.50,
+        annualized_return=0.10,
+    )
+    results = pd.concat([v1, buy_hold, v1.assign(period_type="stage", period_label="stage_2020")], ignore_index=True)
+    buffer = pd.DataFrame([
+        {"index_code": "000300", "cohort": "official", "buffer_rate": 0.0, "whipsaw_trade_rate": 0.20, "annualized_trade_count": 3.0},
+        {"index_code": "000300", "cohort": "official", "buffer_rate": 0.02, "whipsaw_trade_rate": 0.30, "annualized_trade_count": 2.0},
+    ])
+    stress = pd.concat([v1, buy_hold], ignore_index=True).assign(period_label="stress_double_cost")
+    config = load_index_research_config(Path("configs/index_research.yaml"))
+    assessment = evaluate_effectiveness(results, buffer, stress, config)
+    return replace(
+        base,
+        results=results,
+        yearly=pd.concat([v1, buy_hold], ignore_index=True).assign(period_type="calendar_year", period_label="2020"),
+        rolling=pd.concat([v1, buy_hold], ignore_index=True).assign(period_type="rolling_5y", period_label="2016-2020"),
+        buffer_comparison=buffer,
+        stress_results=stress,
+        worst_indices=results.copy(),
+        effectiveness=assessment,
+    )
+
+
+def run_meta_for_output(output: IndexResearchOutput, run_id: str) -> dict[str, object]:
+    meta = sample_run_meta(run_id)
+    meta.update(
+        status=output.effectiveness.status,
+        gates=output.effectiveness.gates,
+        gate_values=output.effectiveness.values,
+        gate_reasons=list(output.effectiveness.reasons),
+    )
+    return meta
 
 
 def assert_records_equal(actual: pd.DataFrame, expected: pd.DataFrame) -> None:
