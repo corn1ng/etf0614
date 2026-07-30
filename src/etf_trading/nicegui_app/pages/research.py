@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from threading import RLock
 
@@ -470,88 +472,179 @@ def _index_research_job_manager(report_root: str | Path, parquet_store) -> Index
         return manager
 
 
+@dataclass(frozen=True)
+class IndexResearchPageState:
+    """Pure page decision state; dynamic job status is kept separate from evidence."""
+
+    evidence_status: str
+    limited: bool
+    job: object
+    diagnostic: str
+    loaded: LoadedIndexResearch | None
+
+    @property
+    def can_start(self) -> bool:
+        return getattr(self.job, "status", "idle") not in {"queued", "running"}
+
+    @property
+    def can_cancel(self) -> bool:
+        return not self.can_start
+
+
+class IndexResearchPageController:
+    """Cache expensive evidence reads while cheaply polling only the job snapshot."""
+
+    def __init__(self, report_root: str | Path, parquet_store, job_manager, *, loader=None, stale_checker=None) -> None:
+        self.report_root = report_root
+        self.parquet_store = parquet_store
+        self.job_manager = job_manager
+        self.loader = loader
+        self.stale_checker = stale_checker or index_research_is_stale
+        self._loaded: LoadedIndexResearch | None = None
+        self._evidence_status = "missing"
+        self._diagnostic = ""
+        self._limited = False
+        self._last_job_status = getattr(job_manager.snapshot(), "status", "idle")
+
+    @property
+    def state(self) -> IndexResearchPageState:
+        return IndexResearchPageState(
+            evidence_status=self._evidence_status,
+            limited=self._limited,
+            job=self.job_manager.snapshot(),
+            diagnostic=self._diagnostic,
+            loaded=self._loaded,
+        )
+
+    def load_evidence(self) -> IndexResearchPageState:
+        loaded, status, diagnostic = _load_index_research_for_page(self.report_root, loader=self.loader)
+        stale = False
+        if loaded is not None:
+            try:
+                stale = bool(self.stale_checker(loaded.run_meta, self.parquet_store))
+            except (ValueError, OSError, PermissionError, TypeError) as exc:
+                loaded, status, diagnostic = None, "invalid", _safe_page_diagnostic(exc)
+        self._loaded = loaded
+        self._evidence_status = "stale" if loaded is not None and stale else status
+        self._diagnostic = diagnostic
+        self._limited = bool(loaded is not None and loaded.run_meta.get("limited_run"))
+        return self.state
+
+    def poll(self) -> bool:
+        """Return whether a completed transition requires exactly one evidence reload."""
+
+        status = getattr(self.job_manager.snapshot(), "status", "idle")
+        completed_transition = status == "completed" and self._last_job_status != "completed"
+        self._last_job_status = status
+        if completed_transition:
+            self.load_evidence()
+        return completed_transition
+
+
 def render_index_trend_research(report_root: str | Path, parquet_store, job_manager: IndexResearchJobManager) -> None:
-    """Render only a validated published package; calculation starts by user action."""
+    """Render cached validated evidence; timer ticks only update lightweight job controls."""
 
-    area = ui.column().classes("w-full gap-3 index-trend-research")
+    controller = IndexResearchPageController(report_root, parquet_store, job_manager)
+    controller.load_evidence()
+    ui.label("指数理论回测").classes("text-base font-semibold text-slate-800")
+    evidence_area = ui.column().classes("w-full gap-3 index-trend-research")
 
-    def draw() -> None:
-        area.clear()
-        job = job_manager.snapshot()
-        loaded, state, diagnostic = _load_index_research_for_page(report_root)
-        with area:
-            ui.label("指数理论回测").classes("text-base font-semibold text-slate-800")
-            _render_index_research_metadata(loaded, state, diagnostic, parquet_store)
-            _render_index_research_controls(job_manager, job, draw)
-            _render_index_research_job_state(job)
-            if loaded is not None:
-                _render_index_research_evidence(loaded)
+    def render_evidence() -> None:
+        evidence_area.clear()
+        with evidence_area:
+            _render_index_research_metadata(controller.state)
+            if controller.state.loaded is not None:
+                _render_index_research_evidence(controller.state.loaded)
 
-    draw()
-    # This refreshes read-only page state and never starts a research calculation.
-    ui.timer(1.0, draw)
+    render_evidence()
+    with ui.row().classes("workbench-toolbar w-full gap-2 flex-wrap"):
+        rerun = ui.button("重新回测", icon="play_arrow", on_click=lambda: _start_index_research_job(job_manager, update_job_widgets)).props("dense outline")
+        refresh = ui.button("刷新结果", icon="refresh", on_click=lambda: _refresh_index_research_evidence(controller, render_evidence)).props("dense outline")
+        cancel = ui.button("取消重算", icon="cancel", on_click=job_manager.cancel).props("dense outline")
+    progress = ui.linear_progress(value=0).props("instant-feedback").classes("w-full")
+    job_label = ui.label("").classes("text-sm text-slate-600")
+
+    def update_job_widgets() -> None:
+        if controller.poll():
+            render_evidence()
+        state = controller.state
+        if state.can_start:
+            rerun.enable()
+        else:
+            rerun.disable()
+        cancel.set_visibility(state.can_cancel)
+        progress.set_visibility(state.can_cancel and bool(getattr(state.job, "total", 0)))
+        total = int(getattr(state.job, "total", 0) or 0)
+        if total > 0:
+            progress.value = max(0.0, min(1.0, int(getattr(state.job, "done", 0) or 0) / total))
+            progress.update()
+        job_label.set_text(_index_research_job_state_text(state.job))
+
+    update_job_widgets()
+    # This timer does not call the loader, stale scan, or rebuild the evidence area.
+    ui.timer(1.0, update_job_widgets)
 
 
-def _load_index_research_for_page(report_root: str | Path) -> tuple[LoadedIndexResearch | None, str, str]:
+def _load_index_research_for_page(report_root: str | Path, *, loader=None) -> tuple[LoadedIndexResearch | None, str, str]:
+    selected_loader = loader or load_latest_index_research
     try:
-        return load_latest_index_research(report_root), "available", ""
-    except ValueError as exc:
+        return selected_loader(report_root), "available", ""
+    except (ValueError, OSError, PermissionError, TypeError) as exc:
         message = str(exc)
-        state = "missing" if "pointer is missing" in message else "invalid"
-        return None, state, message
+        state = "missing" if isinstance(exc, ValueError) and "pointer is missing" in message else "invalid"
+        return None, state, _safe_page_diagnostic(exc)
 
 
-def _render_index_research_metadata(loaded: LoadedIndexResearch | None, state: str, diagnostic: str, parquet_store) -> None:
+def _safe_page_diagnostic(exc: Exception) -> str:
+    return escape(" ".join(str(exc).split())[:300]) or type(exc).__name__
+
+
+def _refresh_index_research_evidence(controller: IndexResearchPageController, render_evidence) -> None:
+    controller.load_evidence()
+    render_evidence()
+
+
+def _render_index_research_metadata(state: IndexResearchPageState) -> None:
+    loaded = state.loaded
     if loaded is None:
-        if state == "missing":
+        if state.evidence_status == "missing":
             empty_state("暂无指数趋势回测结果", "页面不会自动计算；请点击“重新回测”在后台生成完整证据包。")
         else:
-            empty_state("指数趋势回测结果无效", f"已拒绝读取不完整或损坏的结果：{diagnostic}")
+            empty_state("指数趋势回测结果无效", f"已拒绝读取不完整或损坏的结果：{state.diagnostic}")
         return
     meta = loaded.run_meta
-    stale = index_research_is_stale(meta, parquet_store)
     with ui.row().classes("w-full gap-2 flex-wrap"):
         _metric("策略版本", meta.get("strategy_version", ""), "锁定规则")
         _metric("锁定日期", meta.get("locked_at", ""), "参数冻结日")
         _metric("数据截止日", meta.get("data_cutoff", ""), "已发布样本")
         _metric("运行时间", meta.get("run_at", ""), "证据包生成时间")
-        _metric("结果状态", "结果已过期" if stale else "结果可用", "本地指数数据检查")
-    if stale:
+        _metric("结果状态", "结果已过期" if state.evidence_status == "stale" else "结果可用", "本地指数数据检查")
+    if state.evidence_status == "stale":
         ui.label("结果已过期：本地指数 Parquet 存在严格晚于数据截止日的新数据，请重新回测。").classes("workbench-warning-line w-full")
-    if bool(meta.get("limited_run")):
+    if state.limited:
         ui.label("醒目提示：这是有限样本运行，不构成全量历史有效性结论。").classes("workbench-warning-line w-full")
 
 
-def _render_index_research_controls(job_manager: IndexResearchJobManager, job, refresh) -> None:
-    with ui.row().classes("workbench-toolbar w-full gap-2 flex-wrap"):
-        rerun = ui.button("重新回测", icon="play_arrow", on_click=lambda: _start_index_research_job(job_manager, refresh)).props("dense outline")
-        if job.status in {"queued", "running"}:
-            rerun.disable()
-            ui.button("取消重算", icon="cancel", on_click=lambda: job_manager.cancel()).props("dense outline")
-            ui.label("取消将在当前指数完成后生效；不会强制终止线程。").classes("text-xs text-slate-500")
-
-
-def _start_index_research_job(job_manager: IndexResearchJobManager, refresh) -> None:
+def _start_index_research_job(job_manager: IndexResearchJobManager, update_job_widgets) -> None:
     try:
         job_manager.start()
     except IndexResearchAlreadyRunning:
         ui.notify("指数趋势回测已在运行", type="warning")
     else:
         ui.notify("已在后台启动指数趋势回测", type="positive")
-    refresh()
+    update_job_widgets()
 
 
-def _render_index_research_job_state(job) -> None:
+def _index_research_job_state_text(job) -> str:
     if job.status in {"queued", "running"}:
-        if job.total:
-            ui.linear_progress(value=job.done / job.total).props("instant-feedback").classes("w-full")
-        ui.label(f"任务状态：{job.status} · {job.done}/{job.total} · {job.index_code or job.phase}").classes("text-sm text-slate-600")
+        return f"任务状态：{job.status} · {job.done}/{job.total} · {job.index_code or job.phase}"
     elif job.status == "completed":
-        ui.label(f"后台回测完成：run_id={job.run_id or ''}，数据截止日={job.data_cutoff or ''}。已重新读取最新完整结果。").classes("text-sm text-emerald-700")
+        return f"后台回测完成：run_id={job.run_id or ''}，数据截止日={job.data_cutoff or ''}。已重新读取最新完整结果。"
     elif job.status == "failed":
-        ui.label(f"后台回测失败：{job.error}").classes("text-sm text-red-700")
+        return f"后台回测失败：{job.error}"
     elif job.status == "cancelled":
-        ui.label("后台回测已取消；最近一次成功发布的结果仍可查看。").classes("text-sm text-amber-700")
+        return "后台回测已取消；最近一次成功发布的结果仍可查看。"
+    return ""
 
 
 def _render_index_research_evidence(loaded: LoadedIndexResearch) -> None:
@@ -571,10 +664,6 @@ def _render_index_research_evidence(loaded: LoadedIndexResearch) -> None:
     _render_rows(_display_rows(official), "暂无官方样本", "该完整证据包没有官方样本结果。")
     _render_index_research_selector(loaded)
 
-    ui.label("年度与五年滚动").classes("text-sm font-semibold text-slate-700")
-    _render_rows(_display_rows(loaded.yearly), "暂无年度结果", "没有可展示的年度样本。")
-    ui.label("五年滚动").classes("text-sm font-semibold text-slate-700")
-    _render_rows(_display_rows(loaded.rolling), "暂无五年滚动结果", "没有满足完整五年覆盖的窗口。")
     ui.label("0/2/3% 缓冲带诊断").classes("text-sm font-semibold text-slate-700")
     _render_rows(_display_rows(loaded.buffer_comparison), "暂无缓冲带诊断", "没有可展示的缓冲带对照。")
     ui.label("双倍费用").classes("text-sm font-semibold text-slate-700")
@@ -606,6 +695,10 @@ def _render_index_research_selector(loaded: LoadedIndexResearch) -> None:
             payload = _index_research_nav_payload(evidence["nav"])
             if payload[0]["series"]:
                 render_ranged_lightweight_chart(payload, element_id=f"index-trend-nav-{selected.value}", title=f"指数净值与回撤：{selected.value}")
+            ui.label("年度与五年滚动").classes("text-sm font-semibold text-slate-700")
+            _render_rows(_display_rows(evidence["yearly"]), "暂无年度结果", "没有可展示的年度样本。")
+            ui.label("五年滚动").classes("text-sm font-semibold text-slate-700")
+            _render_rows(_display_rows(evidence["rolling"]), "暂无五年滚动结果", "没有满足完整五年覆盖的窗口。")
             ui.label("交易记录").classes("text-sm font-semibold text-slate-700")
             _render_rows(_display_rows(evidence["trades"]), "没有交易记录", "该指数在所选区间没有完成交易。")
 
@@ -621,7 +714,10 @@ def _filtered_index_research_evidence(loaded: LoadedIndexResearch, index_code: s
             return frame.copy()
         return frame[frame["index_code"].astype(str) == str(index_code)].copy()
 
-    return {"nav": filter_frame(loaded.nav), "trades": filter_frame(loaded.trades), "yearly": filter_frame(loaded.yearly), "rolling": filter_frame(loaded.rolling)}
+    nav = filter_frame(loaded.nav)
+    if "period_type" in nav:
+        nav = nav[nav["period_type"] == "full_history"].copy()
+    return {"nav": nav, "trades": filter_frame(loaded.trades), "yearly": filter_frame(loaded.yearly), "rolling": filter_frame(loaded.rolling)}
 
 
 def _index_research_nav_payload(nav: pd.DataFrame) -> list[dict]:
@@ -631,6 +727,7 @@ def _index_research_nav_payload(nav: pd.DataFrame) -> list[dict]:
     frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
     frame["nav"] = pd.to_numeric(frame["nav"], errors="coerce")
     frame = frame.dropna(subset=["trade_date", "nav"]).sort_values("trade_date")
+    frame = frame.drop_duplicates(["strategy_name", "trade_date"], keep="last")
     series = []
     for strategy_name, rows in frame.groupby("strategy_name", sort=True):
         points = [{"time": date.strftime("%Y-%m-%d"), "value": float(value)} for date, value in zip(rows["trade_date"], rows["nav"], strict=False)]

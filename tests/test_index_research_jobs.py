@@ -131,3 +131,39 @@ def test_failed_job_preserves_safe_error_summary():
     manager.start()
     failed = _wait_for(manager, "failed")
     assert "expected failure" in failed.error
+
+
+def test_cancel_after_runner_publishes_still_completes_with_published_identity():
+    published = threading.Event()
+    release = threading.Event()
+
+    def runner(*, progress, should_stop):
+        published.set()  # The unified runner has already crossed its publish boundary.
+        assert release.wait(2)
+        return _Published("published-after-cancel", "2026-07-29")
+
+    manager = IndexResearchJobManager(runner)
+    manager.start()
+    assert published.wait(2)
+    manager.cancel()
+    release.set()
+
+    completed = _wait_for(manager, "completed")
+    assert completed.run_id == "published-after-cancel"
+    assert completed.data_cutoff == "2026-07-29"
+
+
+def test_progress_with_non_positive_total_keeps_done_at_zero():
+    release = threading.Event()
+
+    def runner(*, progress, should_stop):
+        progress(5, 0, "000300", "running")
+        assert release.wait(2)
+        return _Published()
+
+    manager = IndexResearchJobManager(runner)
+    manager.start()
+    running = _wait_for(manager, "running")
+    assert (running.done, running.total) == (0, 0)
+    release.set()
+    _wait_for(manager, "completed")

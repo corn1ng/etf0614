@@ -105,8 +105,6 @@ class IndexResearchJobManager:
             if should_stop():
                 raise IndexResearchCancelled("index research cancelled before start")
             published = self._runner(progress=progress, should_stop=should_stop)
-            if should_stop():
-                raise IndexResearchCancelled("index research cancelled before publish")
         except IndexResearchCancelled:
             self._finish(job_id, "cancelled", phase="cancelled", message="回测已取消；最近一次已发布结果保持不变")
         except Exception as exc:  # noqa: BLE001 - worker errors must not tear down the UI
@@ -127,6 +125,16 @@ class IndexResearchJobManager:
             if current.job_id != job_id or current.status not in {"queued", "running"}:
                 return
             parsed_total = max(0, int(total))
+            if parsed_total == 0:
+                self._snapshot = self._replace_current(
+                    status="running",
+                    phase=str(phase or "running"),
+                    done=0,
+                    total=0,
+                    index_code=str(index_code or current.index_code),
+                    message="正在执行指数理论回测",
+                )
+                return
             stable_total = current.total or parsed_total
             if stable_total and parsed_total and parsed_total != stable_total:
                 parsed_total = stable_total
