@@ -78,8 +78,10 @@ def _load_snapshot_for_route(mode: str, store, parquet_store) -> PlatformSnapsho
 
     if mode == FULL_SNAPSHOT_MODE:
         return state.load_snapshot_cached(store, parquet_store)
-    if mode in {MAINTENANCE_TASK_SNAPSHOT_MODE, ATOMIC_INDEX_SNAPSHOT_MODE}:
+    if mode == MAINTENANCE_TASK_SNAPSHOT_MODE:
         return state.load_maintenance_task_snapshot(store)
+    if mode == ATOMIC_INDEX_SNAPSHOT_MODE:
+        return state.load_index_atomic_shell_snapshot_readonly(parquet_store)
     raise ValueError(f"unknown snapshot mode: {mode}")
 
 

@@ -55,3 +55,23 @@ The valuation section now shares the atomic-index snapshot policy with index hea
 ### Follow-up Commit
 
 fix: keep index valuation comparison readonly
+
+## Second Review Follow-up
+
+### RED
+
+Added a recorded-store shell lifecycle regression. It failed because atomic_index reused the maintenance snapshot loader, which invoked initialize_schema. Added a state projection regression and changed the unsynced comparison fixture to the canonical shape: valuation_support_status is not_synced and valuation_freshness_status is empty. The projection initially showed “数据不足”. Focused RED finished with 3 failures, 123 passes; a follow-up renderer boundary test failed because the valuation section still created a store.
+
+### GREEN
+
+Atomic-index shell rendering now uses a dedicated published-snapshot projection that accepts only the parquet store and never accesses SQLite. The valuation renderer now also reads its published snapshot without creating a store. Its state label uses freshness when present, otherwise the support state, so canonical not-synced rows display “官方估值尚未同步”. Index health retains the atomic-index route policy and its page-level read contract.
+
+### Verification
+
+- Focused GREEN: tests/test_nicegui_app_import.py + tests/test_nicegui_view_models.py + tests/test_nicegui_state_cache.py — 127 passed.
+- Related: the focused files plus navigation and index health snapshot coverage — 165 passed, 2 existing pandas warnings.
+- Full: 521 passed, 1 skipped, 2 existing pandas warnings.
+
+### Follow-up Commit
+
+fix: make index valuation shell snapshot readonly

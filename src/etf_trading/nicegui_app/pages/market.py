@@ -94,8 +94,7 @@ def _render_index_valuation(parquet_store) -> None:
         _render_index_valuation_empty_state()
         return
 
-    definitions, coverage = index_atomic_snapshot_inputs(create_store())
-    result = load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+    result = load_index_atomic_snapshot_readonly(parquet_store)
     rows = official_index_valuation_comparison_rows(result.summary)
     if result.status in {"missing", "failed"} or not rows:
         _render_index_valuation_empty_state()

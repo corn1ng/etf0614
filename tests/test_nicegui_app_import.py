@@ -29,6 +29,15 @@ def test_index_valuation_page_does_not_import_provider_or_sync_service():
     assert "fetch_index_official_valuations" not in source
 
 
+def test_index_valuation_renderer_does_not_create_or_initialize_a_store():
+    from etf_trading.nicegui_app.pages import market
+
+    source = inspect.getsource(market._render_index_valuation)
+
+    assert "create_store" not in source
+    assert "index_atomic_snapshot_inputs" not in source
+
+
 def test_market_profile_overview_compact_risk_panel_explains_all_empty_sections(monkeypatch):
     from etf_trading.nicegui_app.pages import market
     from etf_trading.nicegui_app.view_models import IndexProfileMetricSection
@@ -910,8 +919,14 @@ def test_render_shell_uses_lightweight_snapshot_for_maintenance_tasks(monkeypatc
 def test_render_shell_uses_atomic_index_snapshot_for_index_valuation(monkeypatch):
     from etf_trading.nicegui_app import layout
     from etf_trading.nicegui_app import state
+    from etf_trading.nicegui_app.view_models import PlatformSnapshot
 
     calls = []
+    writes = []
+
+    class RecordingStore:
+        def initialize_schema(self):
+            writes.append("initialize_schema")
 
     class FakeElement:
         def classes(self, value):
@@ -936,19 +951,33 @@ def test_render_shell_uses_atomic_index_snapshot_for_index_valuation(monkeypatch
     monkeypatch.setattr(layout, "_render_topbar", lambda snapshot: None)
     monkeypatch.setattr(layout, "_render_page_header", lambda page, active_section: None)
     monkeypatch.setattr(layout, "_render_page", lambda *args, **kwargs: None)
-    monkeypatch.setattr(state, "create_store", lambda: object())
+    monkeypatch.setattr(state, "create_store", RecordingStore)
     monkeypatch.setattr(state, "create_parquet_store", lambda: object())
     monkeypatch.setattr(state, "load_snapshot_cached", lambda *args, **kwargs: calls.append("full") or object())
     monkeypatch.setattr(
         state,
         "load_maintenance_task_snapshot",
-        lambda *args, **kwargs: calls.append("atomic_index") or object(),
+        lambda store: (store.initialize_schema(), calls.append("maintenance"))[-1] or object(),
+    )
+    monkeypatch.setattr(
+        state,
+        "load_index_atomic_shell_snapshot_readonly",
+        lambda *args, **kwargs: calls.append("readonly") or PlatformSnapshot(
+            master=pd.DataFrame(),
+            watchlist=pd.DataFrame(),
+            index_summary=pd.DataFrame(),
+            universe=pd.DataFrame(),
+            gaps=pd.DataFrame(),
+            coverage=pd.DataFrame(),
+            generated_at=datetime(2026, 7, 31),
+        ),
         raising=False,
     )
 
     layout.render_shell("market", "指数估值")
 
-    assert calls == ["atomic_index"]
+    assert calls == ["readonly"]
+    assert writes == []
 
 
 def test_sidebar_links_maintenance_to_task_page(monkeypatch):

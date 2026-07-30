@@ -42,6 +42,28 @@ def _snapshot(label: str) -> PlatformSnapshot:
     )
 
 
+def test_load_index_atomic_shell_snapshot_is_readonly_projection(monkeypatch):
+    published_summary = pd.DataFrame({"index_code": ["000300"], "snapshot_status": ["computed"]})
+    published_at = datetime(2026, 7, 31, 9, 30)
+    result = state.IndexAtomicSnapshotCacheResult(
+        summary=published_summary,
+        details=pd.DataFrame(),
+        status="ready",
+        generated_at=published_at,
+    )
+    monkeypatch.setattr(state, "load_index_atomic_snapshot_readonly", lambda *args, **kwargs: result)
+
+    snapshot = state.load_index_atomic_shell_snapshot_readonly(object())
+
+    assert snapshot.index_summary.equals(published_summary)
+    assert snapshot.generated_at == published_at
+    assert snapshot.master.empty
+    assert snapshot.watchlist.empty
+    assert snapshot.universe.empty
+    assert snapshot.gaps.empty
+    assert snapshot.coverage.empty
+
+
 def _atomic_master() -> pd.DataFrame:
     return pd.DataFrame(
         {

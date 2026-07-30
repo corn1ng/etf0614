@@ -41,7 +41,8 @@ def test_official_index_valuation_comparison_keeps_not_synced_and_stale_official
     from etf_trading.nicegui_app.view_models import official_index_valuation_comparison_rows
 
     summary = _comparison_summary()
-    summary.loc[summary["index_code"] == "000001", ["valuation_support_status", "valuation_freshness_status"]] = "not_synced"
+    summary.loc[summary["index_code"] == "000001", "valuation_support_status"] = "not_synced"
+    summary.loc[summary["index_code"] == "000001", "valuation_freshness_status"] = ""
     summary.loc[summary["index_code"] == "000016", "valuation_freshness_status"] = "stale"
 
     rows = official_index_valuation_comparison_rows(summary)

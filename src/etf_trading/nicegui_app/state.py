@@ -151,6 +151,21 @@ def load_maintenance_task_snapshot(store: SQLiteStore) -> PlatformSnapshot:
     )
 
 
+def load_index_atomic_shell_snapshot_readonly(parquet_store: ParquetStore) -> PlatformSnapshot:
+    """Project a published index-atomic snapshot for the shell without SQLite access."""
+
+    result = load_index_atomic_snapshot_readonly(parquet_store)
+    return PlatformSnapshot(
+        master=pd.DataFrame(),
+        watchlist=pd.DataFrame(),
+        index_summary=result.summary,
+        universe=pd.DataFrame(),
+        gaps=pd.DataFrame(),
+        coverage=pd.DataFrame(),
+        generated_at=result.generated_at or datetime.now(),
+    )
+
+
 def _lightweight_index_summary(coverage: pd.DataFrame) -> pd.DataFrame:
     if coverage.empty or "index_code" not in coverage:
         return pd.DataFrame(columns=["index_code", "latest_date", "data_status"])

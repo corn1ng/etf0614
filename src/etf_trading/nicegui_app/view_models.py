@@ -1491,8 +1491,12 @@ def official_index_valuation_comparison_rows(summary: pd.DataFrame) -> list[dict
             "PB": _format_number(by_code[code].get("pb")),
             "PB 5年分位": _format_index_atomic_percent(by_code[code].get("pb_5y_percentile")),
             "新鲜度": INDEX_PROFILE_STATUS_LABELS.get(
-                _text(by_code[code].get("valuation_freshness_status")),
-                _index_atomic_status_label(by_code[code].get("valuation_freshness_status")),
+                _text(by_code[code].get("valuation_freshness_status"))
+                or _text(by_code[code].get("valuation_support_status")),
+                _index_atomic_status_label(
+                    _text(by_code[code].get("valuation_freshness_status"))
+                    or _text(by_code[code].get("valuation_support_status"))
+                ),
             ),
             "数据来源": _index_atomic_data_source_label(by_code[code].get("valuation_source")),
         }
