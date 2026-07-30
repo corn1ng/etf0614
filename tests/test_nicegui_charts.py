@@ -281,6 +281,39 @@ def test_build_echart_options_uses_custom_visible_window():
     assert options["dataZoom"][1]["endValue"] == dates[120]
 
 
+def test_build_echart_options_supports_line_only_payload_with_visible_dates():
+    payload = [
+        {
+            "chart": {"height": 360},
+            "series": [
+                {
+                    "type": "Line",
+                    "options": {"title": "index_trend_v1"},
+                    "data": [
+                        {"time": "2026-01-02", "value": 1.00},
+                        {"time": "2026-01-02", "value": 1.01},
+                        {"time": "2026-01-03", "value": 1.02},
+                    ],
+                }
+            ],
+        }
+    ]
+
+    options = build_echart_options(payload, visible_start="2026-01-02", visible_end="2026-01-03")
+
+    assert options["xAxis"][0]["data"] == ["2026-01-02", "2026-01-03"]
+    assert options["dataZoom"][0]["startValue"] == "2026-01-02"
+    assert options["dataZoom"][0]["endValue"] == "2026-01-03"
+
+
+def test_build_echart_options_falls_back_to_full_zoom_when_categories_are_empty():
+    options = build_echart_options([{"chart": {"height": 360}, "series": []}], visible_start="2026-01-02")
+
+    assert options["xAxis"][0]["data"] == []
+    assert options["dataZoom"][0]["start"] == 0
+    assert options["dataZoom"][0]["end"] == 100
+
+
 def test_chart_range_window_matches_old_presets_and_custom_dates():
     dates = [date.strftime("%Y-%m-%d") for date in pd.date_range("2024-01-01", periods=620, freq="B")]
     payload = [_candlestick_payload(dates)]
