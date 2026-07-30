@@ -1,5 +1,14 @@
 # Task Memory
 
+## 2026-07-30 - Synchronize official index valuation cache
+
+- Summary: Added an idempotent official-valuation synchronization service for the six explicit Tushare index mappings. It performs a 2004-01-01 first fill, date-bounded incremental updates, deduplicated merges, progress callbacks, response-schema validation, and redacted failure reporting; empty or failed calls leave a successful cache untouched.
+- Verification: `H:\\pythonproject\\etf0614\\etf0614\\.venv-win\\Scripts\\python.exe -m pytest -q --basetemp C:\\Users\\cjj\\AppData\\Local\\Temp\\index-profile-sync-full-final` passed with 456 tests and 1 skipped.
+- Watch out next time:
+  - Call `fetch_index_official_valuations` directly; valuation sync must never fall back to AkShare.
+  - Validate a non-empty response has `trade_date` plus at least one valuation metric before replacing cache contents.
+  - Keep provider errors redacted before they enter a result frame, progress record, UI, or log.
+
 ## 2026-07-19 - Unified Tushare index routing
 
 - Summary: Removed category-based Tushare skips so every index history request reaches Tushare first; AkShare remains the fallback for empty, unsupported, permission, or network failures.
