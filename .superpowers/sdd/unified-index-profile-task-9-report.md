@@ -35,3 +35,23 @@ feat: add index valuation comparison page
 - UI presentation contains only official valuation facts, percentiles, freshness/status, and source.
 - Page interaction does not perform network access, metric calculation, or data writes.
 - Browser QA was not performed; Task 10 owns it.
+
+## Review Follow-up
+
+### RED
+
+Added a route-policy regression plus a rendered-shell lifecycle regression for “指数估值”; both failed because the route selected full snapshot initialization. Added a comparison-row regression for a not-synced official mapping and stale freshness; it failed because the not-synced mapping was filtered. Focused RED: 3 failures, 93 passes.
+
+### GREEN
+
+The valuation section now shares the atomic-index snapshot policy with index health, so shell rendering uses the lightweight maintenance snapshot rather than load_snapshot_cached. Comparison projection excludes only explicit unsupported rows, retains official not-synced/stale rows, and renders their profile-specific Chinese status labels.
+
+### Verification
+
+- Focused GREEN: tests/test_nicegui_app_import.py + tests/test_nicegui_view_models.py — 96 passed.
+- Related: tests/test_nicegui_navigation.py + tests/test_nicegui_app_import.py + tests/test_nicegui_view_models.py + tests/test_nicegui_state_cache.py — 129 passed.
+- Full: 519 passed, 1 skipped, 2 existing pandas warnings.
+
+### Follow-up Commit
+
+fix: keep index valuation comparison readonly

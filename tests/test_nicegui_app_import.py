@@ -844,6 +844,7 @@ def test_maintenance_task_routes_use_lightweight_snapshot():
     assert layout.snapshot_mode_for_route("maintenance", "数据体检") == "full"
     assert layout.snapshot_mode_for_route("maintenance", "缺口明细") == "full"
     assert layout.snapshot_mode_for_route("market", "指数体检") == "atomic_index"
+    assert layout.snapshot_mode_for_route("market", "指数估值") == "atomic_index"
     assert layout.snapshot_mode_for_route("etf-data", "原子指标") == "maintenance_tasks"
     assert layout.snapshot_mode_for_route("etf-data", "ETF行情") == "maintenance_tasks"
     assert layout.snapshot_mode_for_route("etf-data", "搜索加入") == "maintenance_tasks"
@@ -904,6 +905,50 @@ def test_render_shell_uses_lightweight_snapshot_for_maintenance_tasks(monkeypatc
     layout.render_shell("maintenance", "补齐任务")
 
     assert calls == ["maintenance_tasks"]
+
+
+def test_render_shell_uses_atomic_index_snapshot_for_index_valuation(monkeypatch):
+    from etf_trading.nicegui_app import layout
+    from etf_trading.nicegui_app import state
+
+    calls = []
+
+    class FakeElement:
+        def classes(self, value):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def row(self):
+            return FakeElement()
+
+        def column(self):
+            return FakeElement()
+
+    monkeypatch.setattr(layout, "ui", FakeUi())
+    monkeypatch.setattr(layout, "apply_theme", lambda: None)
+    monkeypatch.setattr(layout, "_render_sidebar", lambda active_slug: None)
+    monkeypatch.setattr(layout, "_render_topbar", lambda snapshot: None)
+    monkeypatch.setattr(layout, "_render_page_header", lambda page, active_section: None)
+    monkeypatch.setattr(layout, "_render_page", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state, "create_store", lambda: object())
+    monkeypatch.setattr(state, "create_parquet_store", lambda: object())
+    monkeypatch.setattr(state, "load_snapshot_cached", lambda *args, **kwargs: calls.append("full") or object())
+    monkeypatch.setattr(
+        state,
+        "load_maintenance_task_snapshot",
+        lambda *args, **kwargs: calls.append("atomic_index") or object(),
+        raising=False,
+    )
+
+    layout.render_shell("market", "指数估值")
+
+    assert calls == ["atomic_index"]
 
 
 def test_sidebar_links_maintenance_to_task_page(monkeypatch):

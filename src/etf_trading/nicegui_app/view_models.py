@@ -1477,7 +1477,7 @@ def official_index_valuation_comparison_rows(summary: pd.DataFrame) -> list[dict
         for row in summary.to_dict("records")
         if (
             str(row.get("index_code", "")) in OFFICIAL_INDEX_VALUATION_TS_CODES
-            and _text(row.get("valuation_support_status")) == "supported"
+            and _text(row.get("valuation_support_status")) != "unsupported"
         )
     }
     return [
@@ -1490,7 +1490,10 @@ def official_index_valuation_comparison_rows(summary: pd.DataFrame) -> list[dict
             "PE-TTM 5年分位": _format_index_atomic_percent(by_code[code].get("pe_ttm_5y_percentile")),
             "PB": _format_number(by_code[code].get("pb")),
             "PB 5年分位": _format_index_atomic_percent(by_code[code].get("pb_5y_percentile")),
-            "新鲜度": _index_atomic_status_label(by_code[code].get("valuation_freshness_status")),
+            "新鲜度": INDEX_PROFILE_STATUS_LABELS.get(
+                _text(by_code[code].get("valuation_freshness_status")),
+                _index_atomic_status_label(by_code[code].get("valuation_freshness_status")),
+            ),
             "数据来源": _index_atomic_data_source_label(by_code[code].get("valuation_source")),
         }
         for code in OFFICIAL_INDEX_VALUATION_TS_CODES

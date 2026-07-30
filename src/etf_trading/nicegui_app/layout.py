@@ -66,7 +66,7 @@ def snapshot_mode_for_route(page_slug: str | None, section: str | None) -> str:
     active_section = active_section_for_route(page, section)
     if page.slug == "maintenance" and active_section in MAINTENANCE_TASK_SECTIONS:
         return MAINTENANCE_TASK_SNAPSHOT_MODE
-    if page.slug == "market" and active_section == "指数体检":
+    if page.slug == "market" and active_section in {"指数体检", "指数估值"}:
         return ATOMIC_INDEX_SNAPSHOT_MODE
     if page.slug == "etf-data" and active_section in LIGHTWEIGHT_ETF_SECTIONS:
         return MAINTENANCE_TASK_SNAPSHOT_MODE

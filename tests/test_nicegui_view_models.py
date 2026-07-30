@@ -36,6 +36,22 @@ def test_official_index_valuation_comparison_uses_supported_published_rows_only(
     assert rows[2]["PE-TTM 5年分位"] == "18.0%"
     assert "801010" not in {row["指数代码"] for row in rows}
 
+
+def test_official_index_valuation_comparison_keeps_not_synced_and_stale_official_rows():
+    from etf_trading.nicegui_app.view_models import official_index_valuation_comparison_rows
+
+    summary = _comparison_summary()
+    summary.loc[summary["index_code"] == "000001", ["valuation_support_status", "valuation_freshness_status"]] = "not_synced"
+    summary.loc[summary["index_code"] == "000016", "valuation_freshness_status"] = "stale"
+
+    rows = official_index_valuation_comparison_rows(summary)
+    states = {row["指数代码"]: row["新鲜度"] for row in rows}
+
+    assert "000001" in states
+    assert states["000001"] == "官方估值尚未同步"
+    assert states["000016"] == "估值数据已过期"
+    assert "801010" not in states
+
 from etf_trading.nicegui_app.view_models import (
     ATOMIC_HEALTH_COLUMNS,
     ATOMIC_OPPORTUNITY_COLUMNS,
