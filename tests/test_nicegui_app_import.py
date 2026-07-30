@@ -19,6 +19,33 @@ def test_market_dialog_uses_five_profile_tabs_and_no_builder_import():
     assert "OfficialIndexValuationSyncService" not in source
 
 
+def test_market_profile_table_binds_row_click_and_projects_only_index_code(monkeypatch):
+    from etf_trading.nicegui_app.pages import market
+
+    captured: dict[str, object] = {}
+    opened: list[tuple[object, str]] = []
+
+    class FakeTable:
+        def on(self, event_type, handler, **kwargs):
+            captured["event_type"] = event_type
+            captured["handler"] = handler
+            captured.update(kwargs)
+            return self
+
+    class FakeEvent:
+        args = "000300"
+
+    result = object()
+    monkeypatch.setattr(market, "_open_index_profile_dialog", lambda snapshot, code: opened.append((snapshot, code)))
+
+    market._bind_index_profile_row_click(FakeTable(), result)
+
+    assert captured["event_type"] == "row-click"
+    assert captured["js_handler"] == "(_event, row) => emit(row.index_code)"
+    captured["handler"](FakeEvent())
+    assert opened == [(result, "000300")]
+
+
 def test_index_valuation_page_does_not_import_provider_or_sync_service():
     from etf_trading.nicegui_app.pages import market
 

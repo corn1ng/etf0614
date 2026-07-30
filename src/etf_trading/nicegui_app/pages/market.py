@@ -205,9 +205,10 @@ def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
         table_rows = _index_atomic_table_rows(rows)
         with table_area:
             if table_rows:
-                render_table(table_rows, row_key="index_code", pagination=15, compact=True, ui_module=ui).classes(
+                table = render_table(table_rows, row_key="index_code", pagination=15, compact=True, ui_module=ui).classes(
                     "workbench-data-table workbench-data-table--compact w-full"
-                ).on("rowClick", lambda event: _open_index_profile_dialog(holder["result"], _event_row_code(event, "index_code")))
+                )
+                _bind_index_profile_row_click(table, holder["result"])
             else:
                 empty_state("没有匹配的指数", "请调整核心/研究池或搜索条件。")
 
@@ -239,6 +240,16 @@ def _index_atomic_table_rows(rows: list[dict[str, object]]) -> list[dict[str, ob
         projected["index_code"] = row.get("index_code", "")
         result.append(projected)
     return result
+
+
+def _bind_index_profile_row_click(table, result) -> None:
+    """Open a stored profile from QTable's supported row-click event only."""
+
+    table.on(
+        "row-click",
+        lambda event: _open_index_profile_dialog(result, str(getattr(event, "args", "") or "")),
+        js_handler="(_event, row) => emit(row.index_code)",
+    )
 
 
 def _open_index_profile_dialog(result, index_code: str) -> None:
