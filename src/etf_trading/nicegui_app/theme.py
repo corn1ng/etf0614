@@ -806,6 +806,7 @@ body {
 .tone-danger { color: var(--wb-red); }
 .index-profile-dialog {
   width: min(1180px, 92vw);
+  max-width: min(1180px, 92vw) !important;
   max-height: 92vh;
   overflow-y: auto;
   border-radius: 18px;
@@ -879,7 +880,7 @@ body {
   .index-atomic-overview-grid { grid-template-columns: 1fr; }
   .index-atomic-dialog { overflow-x: clip; }
   .index-atomic-detail-grid { grid-template-columns: 1fr; }
-  .index-profile-dialog { width: min(100%, 96vw); max-height: 96vh; padding: 12px; }
+  .index-profile-dialog { width: 96vw; max-width: 96vw !important; max-height: 96vh; padding: 12px; }
   .index-profile-summary-grid,
   .index-profile-primary-grid,
   .index-profile-secondary-grid,

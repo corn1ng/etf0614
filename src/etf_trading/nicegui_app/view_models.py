@@ -256,7 +256,9 @@ class IndexProfileView:
     summary_cards: tuple[IndexProfileSummaryCard, ...]
     valuation: IndexProfileValuationSection
     trend: IndexProfileTrendSection
+    overview_trend: IndexProfileTrendSection
     trend_risk_sections: tuple[IndexProfileMetricSection, ...]
+    overview_trend_risk_sections: tuple[IndexProfileMetricSection, ...]
     events: tuple[IndexAtomicOverviewEvent, ...]
     all_groups: tuple[IndexAtomicOverviewEvidenceGroup, ...]
     quality: tuple[IndexAtomicOverviewMetric, ...]
@@ -357,6 +359,21 @@ INDEX_PROFILE_ALL_GROUPS = (
     ("momentum_return", "动量与收益"),
     ("drawdown_risk", "回撤与风险"),
     ("trading_activity", "成交活跃度"),
+)
+
+INDEX_PROFILE_OVERVIEW_TREND_METRIC_KEYS = frozenset(
+    {
+        "ma_20",
+        "ma_60",
+        "close_above_ma_20",
+        "close_above_ma_60",
+        "range_20_high",
+        "range_20_low",
+    }
+)
+INDEX_PROFILE_OVERVIEW_TREND_RISK_METRICS = (
+    ("动量与收益", ("return_20", "return_60", "rsi_14", "up_day_ratio_20")),
+    ("回撤与风险", ("drawdown_250", "max_drawdown_250", "annualized_volatility_20", "annualized_volatility_60")),
 )
 
 INDEX_ATOMIC_DISPLAY_COLUMNS = (
@@ -914,6 +931,7 @@ def index_profile_view(
     valuation_as_of_date = _profile_date(summary.get("valuation_as_of_date"), rows.get("valuation_as_of_date"))
     valuation = _profile_valuation_section(summary, rows)
     trend = _profile_trend_section(records, rows)
+    overview_trend = _profile_trend_section(records, rows, metric_keys=INDEX_PROFILE_OVERVIEW_TREND_METRIC_KEYS)
 
     return IndexProfileView(
         identity=identity,
@@ -922,7 +940,9 @@ def index_profile_view(
         summary_cards=_profile_summary_cards(summary, rows),
         valuation=valuation,
         trend=trend,
+        overview_trend=overview_trend,
         trend_risk_sections=_profile_trend_risk_sections(records),
+        overview_trend_risk_sections=_profile_overview_trend_risk_sections(rows),
         events=_profile_events(rows),
         all_groups=_profile_all_groups(records),
         quality=_profile_quality(summary, records, rows),
@@ -1029,12 +1049,15 @@ def _profile_valuation_metric(
 def _profile_trend_section(
     records: list[dict[str, object]],
     rows: dict[str, dict[str, object]],
+    *,
+    metric_keys: frozenset[str] | None = None,
 ) -> IndexProfileTrendSection:
     close = _overview_metric(rows.get("close"), "最新收盘")
     trend_records = [
         row for row in records
         if _text(row.get("group_key")) in {"price_ma", "ma_cross", "range_position"}
         and _text(row.get("metric_key")) != "close"
+        and (metric_keys is None or _text(row.get("metric_key")) in metric_keys)
     ]
     trend_rows = tuple(
         _overview_metric(row, _index_atomic_detail_label(_text(row.get("metric_key")), row.get("metric_label")))
@@ -1057,6 +1080,18 @@ def _profile_trend_risk_sections(records: list[dict[str, object]]) -> tuple[Inde
     return tuple(
         IndexProfileMetricSection(title, tuple(_index_atomic_detail_item(row) for row in records if selector(row)))
         for title, selector in selectors
+    )
+
+
+def _profile_overview_trend_risk_sections(
+    rows: dict[str, dict[str, object]],
+) -> tuple[IndexProfileMetricSection, ...]:
+    return tuple(
+        IndexProfileMetricSection(
+            title,
+            tuple(_index_atomic_detail_item(rows[key]) for key in metric_keys if key in rows),
+        )
+        for title, metric_keys in INDEX_PROFILE_OVERVIEW_TREND_RISK_METRICS
     )
 
 

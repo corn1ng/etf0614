@@ -292,6 +292,43 @@ def test_index_profile_view_builds_approved_summary_and_five_domains():
     ]
 
 
+def test_index_profile_overview_uses_stable_representative_atoms_while_detail_keeps_bulk_atoms():
+    details = pd.concat(
+        [
+            _profile_details(),
+            pd.DataFrame(
+                [
+                    _profile_detail("ma_60", 4600.0, group_key="price_ma"),
+                    _profile_detail("ma_120", 4500.0, group_key="price_ma"),
+                    _profile_detail("ma_cross_down_60", False, group_key="ma_cross"),
+                    _profile_detail("range_60_high", False, group_key="range_position"),
+                    _profile_detail("return_20", 0.04, group_key="return_drawdown"),
+                    _profile_detail("return_60", 0.08, group_key="return_drawdown"),
+                    _profile_detail("up_day_ratio_20", 0.65, group_key="momentum_return"),
+                    _profile_detail("max_drawdown_250", -0.12, group_key="drawdown_risk"),
+                    _profile_detail("annualized_volatility_60", 0.18, group_key="drawdown_risk"),
+                    _profile_detail("amount_avg_60", 120_000_000, group_key="trading_activity"),
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    overview_trend_labels = {item.label for item in view.overview_trend.rows}
+    overview_compact_keys = {
+        item.metric_key for section in view.overview_trend_risk_sections for item in section.items
+    }
+    detail_keys = {item.metric_key for section in view.trend_risk_sections for item in section.items}
+
+    assert {"ma_20", "ma_60"} <= overview_trend_labels
+    assert {"ma_120", "ma_cross_down_60", "range_60_high"}.isdisjoint(overview_trend_labels)
+    assert {"return_20", "return_60", "rsi_14", "max_drawdown_250", "annualized_volatility_60"} <= overview_compact_keys
+    assert "amount_avg_60" not in overview_compact_keys
+    assert {"ma_120", "ma_cross_down_60", "range_60_high", "amount_avg_60"} <= detail_keys
+
+
 def test_index_profile_formats_published_boolean_atoms_without_numeric_coercion():
     details = pd.concat(
         [

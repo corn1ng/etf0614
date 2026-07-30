@@ -304,9 +304,9 @@ def _render_index_profile_overview(profile) -> None:
                 ui.label(card.detail if card.available else f"数据不足：{card.detail}").classes("index-profile-card-detail")
     with ui.element("div").classes("index-profile-primary-grid"):
         _render_index_profile_valuation(profile.valuation, compact=True)
-        _render_index_profile_trend(profile.trend)
+        _render_index_profile_trend(profile.overview_trend)
     with ui.element("div").classes("index-profile-secondary-grid"):
-        _render_index_profile_compact_sections(profile.trend_risk_sections)
+        _render_index_profile_compact_sections(profile.overview_trend_risk_sections)
         _render_index_profile_events(profile.events)
         _render_index_profile_availability(profile)
 
