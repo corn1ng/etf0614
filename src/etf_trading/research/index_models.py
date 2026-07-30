@@ -97,6 +97,34 @@ class IndexBacktestResult:
     cancelled_signals: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
+@dataclass(frozen=True)
+class EffectivenessAssessment:
+    """Auditable result of the six pre-committed V1 effectiveness gates."""
+
+    status: str
+    gates: dict[str, bool]
+    values: dict[str, object]
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class IndexResearchOutput:
+    """Deterministic research-matrix output, ready for a later publishing task."""
+
+    results: pd.DataFrame
+    nav: pd.DataFrame
+    trades: pd.DataFrame
+    yearly: pd.DataFrame
+    rolling: pd.DataFrame
+    buffer_comparison: pd.DataFrame
+    stress_results: pd.DataFrame
+    prospective_status: pd.DataFrame
+    group_statistics: pd.DataFrame
+    worst_indices: pd.DataFrame
+    rolling_gate_summary: pd.DataFrame
+    effectiveness: EffectivenessAssessment
+
+
 _LOCKED_CONFIG = IndexResearchConfig(
     strategy_version="index_trend_v1",
     locked_at=date(2026, 7, 30),
