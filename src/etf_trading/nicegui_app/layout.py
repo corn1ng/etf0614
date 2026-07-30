@@ -13,7 +13,13 @@ from .view_models import PlatformSnapshot, platform_data_status_summary
 FULL_SNAPSHOT_MODE = "full"
 MAINTENANCE_TASK_SNAPSHOT_MODE = "maintenance_tasks"
 ATOMIC_INDEX_SNAPSHOT_MODE = "atomic_index"
-SNAPSHOT_MODES = {FULL_SNAPSHOT_MODE, MAINTENANCE_TASK_SNAPSHOT_MODE, ATOMIC_INDEX_SNAPSHOT_MODE}
+INDEX_VALUATION_READONLY_SNAPSHOT_MODE = "index_valuation_readonly"
+SNAPSHOT_MODES = {
+    FULL_SNAPSHOT_MODE,
+    MAINTENANCE_TASK_SNAPSHOT_MODE,
+    ATOMIC_INDEX_SNAPSHOT_MODE,
+    INDEX_VALUATION_READONLY_SNAPSHOT_MODE,
+}
 MAINTENANCE_TASK_SECTIONS = {"补齐任务", "日志与设置"}
 LIGHTWEIGHT_ETF_SECTIONS = {"原子指标", "ETF行情", "搜索加入", "每日计算池"}
 
@@ -25,7 +31,7 @@ def render_shell(page_slug: str | None = None, section: str | None = None) -> No
     page = get_page_by_slug(page_slug)
     active_section = active_section_for_route(page, section)
     mode = snapshot_mode_for_route(page.slug, active_section)
-    if mode == ATOMIC_INDEX_SNAPSHOT_MODE:
+    if mode == INDEX_VALUATION_READONLY_SNAPSHOT_MODE:
         store = None
         parquet_store = state.create_index_atomic_snapshot_reader()
     else:
@@ -71,8 +77,10 @@ def snapshot_mode_for_route(page_slug: str | None, section: str | None) -> str:
     active_section = active_section_for_route(page, section)
     if page.slug == "maintenance" and active_section in MAINTENANCE_TASK_SECTIONS:
         return MAINTENANCE_TASK_SNAPSHOT_MODE
-    if page.slug == "market" and active_section in {"指数体检", "指数估值"}:
+    if page.slug == "market" and active_section == "指数体检":
         return ATOMIC_INDEX_SNAPSHOT_MODE
+    if page.slug == "market" and active_section == "指数估值":
+        return INDEX_VALUATION_READONLY_SNAPSHOT_MODE
     if page.slug == "etf-data" and active_section in LIGHTWEIGHT_ETF_SECTIONS:
         return MAINTENANCE_TASK_SNAPSHOT_MODE
     return FULL_SNAPSHOT_MODE
@@ -86,6 +94,8 @@ def _load_snapshot_for_route(mode: str, store, parquet_store) -> PlatformSnapsho
     if mode == MAINTENANCE_TASK_SNAPSHOT_MODE:
         return state.load_maintenance_task_snapshot(store)
     if mode == ATOMIC_INDEX_SNAPSHOT_MODE:
+        return state.load_maintenance_task_snapshot(store)
+    if mode == INDEX_VALUATION_READONLY_SNAPSHOT_MODE:
         return state.load_index_atomic_shell_snapshot_readonly(parquet_store)
     raise ValueError(f"unknown snapshot mode: {mode}")
 

@@ -95,3 +95,23 @@ The shell now resolves its snapshot mode before constructing stores. Atomic-inde
 ### Follow-up Commit
 
 fix: avoid creating stores for index valuation
+
+## Fourth Review Follow-up
+
+### RED
+
+Added a real empty-directory direct-entry regression for “指数体检”. It failed with no such table: index_catalog because the shared atomic-index shell route skipped schema initialization. The route-policy regression also showed that valuation still used atomic_index. Focused RED: 2 failures, 48 passes.
+
+### GREEN
+
+Added the dedicated index_valuation_readonly shell mode. Only valuation chooses the root-only reader and skips mutable stores. Index health remains atomic_index, again constructs its normal stores, runs the maintenance schema initializer, and can read the index catalog on an empty database. The valuation zero-mkdir lifecycle regression and ordinary route policies remain covered.
+
+### Verification
+
+- Focused GREEN: tests/test_nicegui_app_import.py — 50 passed.
+- Related: navigation, app import, view models, state cache, and index health snapshot tests — 168 passed, 2 existing pandas warnings.
+- Full: 524 passed, 1 skipped, 2 existing pandas warnings.
+
+### Follow-up Commit
+
+fix: separate index valuation readonly route

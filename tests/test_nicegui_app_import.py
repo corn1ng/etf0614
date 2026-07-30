@@ -853,7 +853,7 @@ def test_maintenance_task_routes_use_lightweight_snapshot():
     assert layout.snapshot_mode_for_route("maintenance", "数据体检") == "full"
     assert layout.snapshot_mode_for_route("maintenance", "缺口明细") == "full"
     assert layout.snapshot_mode_for_route("market", "指数体检") == "atomic_index"
-    assert layout.snapshot_mode_for_route("market", "指数估值") == "atomic_index"
+    assert layout.snapshot_mode_for_route("market", "指数估值") == "index_valuation_readonly"
     assert layout.snapshot_mode_for_route("etf-data", "原子指标") == "maintenance_tasks"
     assert layout.snapshot_mode_for_route("etf-data", "ETF行情") == "maintenance_tasks"
     assert layout.snapshot_mode_for_route("etf-data", "搜索加入") == "maintenance_tasks"
@@ -867,9 +867,9 @@ def test_every_nicegui_route_declares_snapshot_policy():
     from etf_trading.nicegui_app.navigation import NICEGUI_PAGES
 
     for page in NICEGUI_PAGES:
-        assert layout.snapshot_mode_for_route(page.slug, None) in {"full", "maintenance_tasks", "atomic_index"}
+        assert layout.snapshot_mode_for_route(page.slug, None) in {"full", "maintenance_tasks", "atomic_index", "index_valuation_readonly"}
         for section in page.sections:
-            assert layout.snapshot_mode_for_route(page.slug, section) in {"full", "maintenance_tasks", "atomic_index"}
+            assert layout.snapshot_mode_for_route(page.slug, section) in {"full", "maintenance_tasks", "atomic_index", "index_valuation_readonly"}
 
 
 def test_render_shell_uses_lightweight_snapshot_for_maintenance_tasks(monkeypatch):
@@ -916,7 +916,7 @@ def test_render_shell_uses_lightweight_snapshot_for_maintenance_tasks(monkeypatc
     assert calls == ["maintenance_tasks"]
 
 
-def test_render_shell_uses_atomic_index_snapshot_for_index_valuation(monkeypatch):
+def test_render_shell_uses_readonly_snapshot_for_index_valuation(monkeypatch):
     from etf_trading.nicegui_app import layout
     from etf_trading.nicegui_app import state
     from etf_trading.nicegui_app.view_models import PlatformSnapshot
@@ -1016,6 +1016,82 @@ def test_render_shell_index_valuation_does_not_create_sqlite_or_parquet_paths(tm
     assert not (tmp_path / "database").exists()
     assert not (tmp_path / "database" / "etf_system.sqlite").exists()
     assert not (tmp_path / "data" / "parquet").exists()
+
+
+def test_render_shell_index_health_initializes_empty_sqlite_before_renderer_reads_catalog(tmp_path, monkeypatch):
+    from etf_trading.nicegui_app import layout
+    from etf_trading.nicegui_app.pages import market
+
+    class FakeProps:
+        def __init__(self, owner):
+            self.owner = owner
+
+        def __call__(self, value):
+            return self.owner
+
+    class FakeElement:
+        def __init__(self, value=None):
+            self.value = value
+            self.props = FakeProps(self)
+
+        def classes(self, value):
+            return self
+
+        def on_value_change(self, handler):
+            return self
+
+        def clear(self):
+            return None
+
+        def update(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def row(self):
+            return FakeElement()
+
+        def column(self):
+            return FakeElement()
+
+        def element(self, tag):
+            return FakeElement()
+
+        def toggle(self, options, value=None):
+            return FakeElement(value)
+
+        def input(self, label):
+            return FakeElement("")
+
+        def button(self, label, icon=None, on_click=None):
+            return FakeElement()
+
+        def link(self, label, target):
+            return FakeElement()
+
+        def label(self, text):
+            return FakeElement()
+
+        def notify(self, message, type=None):
+            return None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(layout, "ui", FakeUi())
+    monkeypatch.setattr(market, "ui", FakeUi())
+    monkeypatch.setattr(layout, "apply_theme", lambda: None)
+    monkeypatch.setattr(layout, "_render_sidebar", lambda active_slug: None)
+    monkeypatch.setattr(layout, "_render_topbar", lambda snapshot: None)
+    monkeypatch.setattr(layout, "_render_page_header", lambda page, active_section: None)
+    monkeypatch.setattr(market, "_render_audit", lambda page_slug: None)
+
+    layout.render_shell("market", "指数体检")
+
+    assert (tmp_path / "database" / "etf_system.sqlite").exists()
 
 
 def test_sidebar_links_maintenance_to_task_page(monkeypatch):
