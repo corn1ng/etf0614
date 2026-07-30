@@ -210,6 +210,7 @@ VALUE_LABELS = {
     "valuation": "估值",
     "UPDATED": "已补齐",
     "INITIALIZED": "已初始化",
+    "CURRENT": "本地缓存已是最新",
     "REPAIRED": "已修复",
     "SKIPPED": "已是最新",
     "STALE": "行情仍滞后",

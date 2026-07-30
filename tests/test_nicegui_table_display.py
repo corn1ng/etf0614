@@ -272,6 +272,20 @@ def test_table_rows_translate_uppercase_stale_maintenance_status_to_chinese():
     assert display == [{"index_code": "930633", "status": "行情仍滞后"}]
 
 
+def test_table_rows_translate_official_valuation_sync_statuses_to_chinese():
+    display = table_rows(
+        [
+            {"status": "INITIALIZED"},
+            {"status": "UPDATED"},
+            {"status": "CURRENT"},
+            {"status": "EMPTY"},
+            {"status": "FAILED"},
+        ]
+    )
+
+    assert [row["status"] for row in display] == ["已初始化", "已补齐", "本地缓存已是最新", "无数据", "失败"]
+
+
 def test_table_rows_translate_maintenance_dataset_and_job_codes_to_chinese():
     rows = [
         {

@@ -4,6 +4,7 @@ import json
 import pandas as pd
 
 from etf_trading.data.initialization import IndexHistoryProgress
+from etf_trading.data.index_valuation_service import OfficialIndexValuationProgress
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 
 
@@ -38,18 +39,28 @@ class _FakeCatalogMaintenanceService:
             ]
         )
 
+
     def verify_index_baseline_evidence(self, through):
         self.calls.append(("baseline_evidence", {"through": through}))
+        return pd.DataFrame(
+            [{"index_code": "000300", "evidence_status": "OFFICIAL", "completeness_status": "COMPLETE"}]
+        )
+
+
+class _FakeOfficialValuationSyncService:
+    def sync_all(self, through, on_progress=None):
+        if on_progress is not None:
+            on_progress(OfficialIndexValuationProgress(1, 1, "000300", "UPDATED"))
         return pd.DataFrame(
             [
                 {
                     "index_code": "000300",
-                    "evidence_status": "OFFICIAL",
-                    "completeness_status": "COMPLETE",
+                    "status": "UPDATED",
+                    "fetched_rows": 1,
+                    "message": "写入 1 行估值",
                 }
             ]
         )
-
 
 def test_catalog_maintenance_runner_persists_history_incomplete_result(monkeypatch, tmp_path):
     from etf_trading.nicegui_app import maintenance_tasks
@@ -106,6 +117,51 @@ def test_catalog_maintenance_runner_verifies_baseline_evidence_without_history_d
         {"index_code": "000300", "evidence_status": "OFFICIAL", "completeness_status": "COMPLETE"}
     ]
     assert service.calls == [("baseline_evidence", {"through": "2026-07-10"})]
+
+
+def test_official_valuation_runner_persists_progress_and_result(monkeypatch, tmp_path):
+    from etf_trading.nicegui_app import maintenance_tasks
+
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    runner = maintenance_tasks.OfficialIndexValuationMaintenanceRunner(
+        store,
+        ParquetStore(tmp_path / "parquet"),
+        service_factory=_FakeOfficialValuationSyncService,
+    )
+
+    async def run_inline(callback):
+        return callback()
+
+    monkeypatch.setattr(maintenance_tasks.run, "io_bound", run_inline)
+    task = store.create_maintenance_task_run("official_index_valuation_sync", progress_total=6)
+
+    asyncio.run(runner._run(task.task_id, "2026-07-29"))
+
+    persisted = store.get_maintenance_task_run(task.task_id)
+    assert persisted is not None
+    assert persisted.state == "success"
+    assert persisted.progress_done == 1
+    assert persisted.progress_total == 1
+    assert persisted.progress_detail == "000300 UPDATED"
+    assert json.loads(persisted.result_json) == [
+        {"index_code": "000300", "status": "UPDATED", "fetched_rows": 1, "message": "写入 1 行估值"}
+    ]
+
+
+def test_official_valuation_runner_marks_orphaned_running_task_interrupted(tmp_path):
+    from etf_trading.nicegui_app import maintenance_tasks
+
+    store = SQLiteStore(tmp_path / "etf.sqlite")
+    store.initialize_schema()
+    task = store.create_maintenance_task_run("official_index_valuation_sync", progress_total=6)
+    runner = maintenance_tasks.OfficialIndexValuationMaintenanceRunner(store, ParquetStore(tmp_path / "parquet"))
+
+    reconciled = runner.reconcile_interrupted()
+
+    assert reconciled is not None
+    assert reconciled.task_id == task.task_id
+    assert reconciled.state == "interrupted"
 
 
 def test_index_history_batch_runner_deduplicates_running_task_and_persists_progress(monkeypatch, tmp_path):

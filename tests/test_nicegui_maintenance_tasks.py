@@ -420,6 +420,7 @@ def test_render_tasks_restores_persisted_atomic_snapshot_result_after_page_refre
 
     monkeypatch.setattr(maintenance, "ui", FakeUi())
     monkeypatch.setattr(maintenance, "IndexHistoryBatchRunner", FakeHistoryRunner)
+    monkeypatch.setattr(maintenance, "OfficialIndexValuationMaintenanceRunner", FakeHistoryRunner)
     monkeypatch.setattr(maintenance, "IndexAtomicSnapshotMaintenanceRunner", FakeAtomicRunner)
     monkeypatch.setattr(maintenance, "IndexCatalogMaintenanceRunner", FakeCatalogRunner)
     monkeypatch.setattr(maintenance, "_render_task_center", lambda container, status: captured.append(status))
@@ -494,10 +495,20 @@ def test_catalog_index_tasks_show_atomic_snapshot_rebuild_help(monkeypatch):
         maintenance.MaintenanceTaskStatus(),
         object(),
         object(),
+        object(),
     )
 
     assert "重建指数原子指标" in buttons
     assert "只读取本地指数历史；初始化、补齐或修复历史后，请手动重建。" in labels
+
+
+def test_catalog_panel_exposes_explicit_official_valuation_sync():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    source = inspect.getsource(maintenance._render_catalog_index_tasks)
+
+    assert '"同步官方指数估值"' in source
+    assert "_start_official_index_valuation_sync_task" in source
 
 
 def test_task_center_renders_idle_and_running_states(monkeypatch):
@@ -1388,6 +1399,7 @@ def test_render_tasks_restores_persisted_index_batch_after_page_refresh(monkeypa
 
     monkeypatch.setattr(maintenance, "ui", FakeUi())
     monkeypatch.setattr(maintenance, "IndexHistoryBatchRunner", FakeRunner)
+    monkeypatch.setattr(maintenance, "OfficialIndexValuationMaintenanceRunner", FakeRunner)
     monkeypatch.setattr(maintenance, "_render_task_center", lambda container, status: captured.append(status))
     monkeypatch.setattr(maintenance, "_render_master_tasks", lambda *args: None)
     monkeypatch.setattr(maintenance, "_render_etf_history_tasks", lambda *args: None)
@@ -1535,6 +1547,7 @@ def test_persisted_index_timer_does_not_replace_another_active_task(monkeypatch)
     )
     monkeypatch.setattr(maintenance, "ui", FakeUi())
     monkeypatch.setattr(maintenance, "IndexHistoryBatchRunner", FakeRunner)
+    monkeypatch.setattr(maintenance, "OfficialIndexValuationMaintenanceRunner", FakeRunner)
     monkeypatch.setattr(maintenance, "_render_task_center", lambda container, status: captured.append(status.title))
     monkeypatch.setattr(maintenance, "_render_master_tasks", lambda *args: None)
     def render_active_etf_task(*args):

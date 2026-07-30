@@ -12,7 +12,14 @@ import pandas as pd
 from nicegui import background_tasks, run
 
 from etf_trading.data.initialization import IndexHistoryProgress, InitializationService
-from etf_trading.data.provider_runtime import consume_provider_notices, summarize_provider_notices
+from etf_trading.data.index_valuation_service import OfficialIndexValuationProgress, OfficialIndexValuationSyncService
+from etf_trading.data.index_valuations import OFFICIAL_INDEX_VALUATION_TS_CODES
+from etf_trading.data.provider_runtime import (
+    consume_provider_notices,
+    load_provider_settings,
+    redact_provider_text,
+    summarize_provider_notices,
+)
 from etf_trading.data.providers.factory import create_data_provider
 from etf_trading.data.storage import MaintenanceTaskRun, ParquetStore, SQLiteStore
 from etf_trading.nicegui_app.state import (
@@ -29,6 +36,8 @@ _ACTIVE_INDEX_TASK_KEYS: set[tuple[str, int]] = set()
 INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE = "index_atomic_snapshot_rebuild"
 _ACTIVE_INDEX_ATOMIC_SNAPSHOT_TASK_KEYS: set[tuple[str, int]] = set()
 _INDEX_ATOMIC_SNAPSHOT_START_LOCK = RLock()
+OFFICIAL_INDEX_VALUATION_SYNC_TASK_TYPE = "official_index_valuation_sync"
+_ACTIVE_OFFICIAL_VALUATION_TASK_KEYS: set[tuple[str, int]] = set()
 INDEX_MAINTENANCE_TASK_TYPES = {
     "index_catalog_sync": "同步指数目录",
     "index_source_validation": "验证指数数据源",
@@ -307,6 +316,98 @@ def _successfully_calculated_count(summary: pd.DataFrame) -> int:
     if "snapshot_status" not in summary:
         return int(len(summary))
     return int(summary["snapshot_status"].fillna("").astype(str).eq("computed").sum())
+
+
+class OfficialIndexValuationMaintenanceRunner:
+    """Synchronize official index valuations in a durable maintenance task."""
+
+    def __init__(
+        self,
+        store: SQLiteStore,
+        parquet_store: ParquetStore,
+        *,
+        service_factory: Callable[[], OfficialIndexValuationSyncService] | None = None,
+    ) -> None:
+        self.store = store
+        self.parquet_store = parquet_store
+        self.service_factory = service_factory or self._default_service
+
+    def start(self, through: str) -> MaintenanceTaskRun:
+        self.reconcile_interrupted()
+        running = self.store.get_running_maintenance_task_run(OFFICIAL_INDEX_VALUATION_SYNC_TASK_TYPE)
+        if running is not None:
+            return running
+
+        task = self.store.create_maintenance_task_run(
+            OFFICIAL_INDEX_VALUATION_SYNC_TASK_TYPE,
+            progress_total=len(OFFICIAL_INDEX_VALUATION_TS_CODES),
+        )
+        key = self._task_key(task.task_id)
+        _ACTIVE_OFFICIAL_VALUATION_TASK_KEYS.add(key)
+        try:
+            background_tasks.create(self._run(task.task_id, through), name=f"official-index-valuation-{task.task_id}")
+        except Exception as exc:
+            _ACTIVE_OFFICIAL_VALUATION_TASK_KEYS.discard(key)
+            self.store.update_maintenance_task_run(task.task_id, state="failed", error_message=redact_provider_text(exc))
+            raise
+        return task
+
+    def latest(self) -> MaintenanceTaskRun | None:
+        self.reconcile_interrupted()
+        return self.store.get_latest_maintenance_task_run(OFFICIAL_INDEX_VALUATION_SYNC_TASK_TYPE)
+
+    def reconcile_interrupted(self) -> MaintenanceTaskRun | None:
+        running = self.store.get_running_maintenance_task_run(OFFICIAL_INDEX_VALUATION_SYNC_TASK_TYPE)
+        if running is None or self._task_key(running.task_id) in _ACTIVE_OFFICIAL_VALUATION_TASK_KEYS:
+            return None
+        return self.store.mark_maintenance_task_interrupted(running.task_id, "服务器已重启，任务未继续执行")
+
+    async def _run(self, task_id: int, through: str) -> None:
+        service: OfficialIndexValuationSyncService | None = None
+        try:
+            def on_progress(progress: OfficialIndexValuationProgress) -> None:
+                self.store.update_maintenance_task_run(
+                    task_id,
+                    progress_done=progress.done,
+                    progress_total=progress.total,
+                    progress_detail=f"{progress.index_code} {progress.status}",
+                )
+
+            service = self.service_factory()
+
+            def action() -> pd.DataFrame:
+                return service.sync_all(through, on_progress=on_progress)
+
+            result = await run.io_bound(action)
+            result_json = result.to_json(orient="records", date_format="iso")
+            task = self.store.get_maintenance_task_run(task_id)
+            self.store.update_maintenance_task_run(
+                task_id,
+                state="success",
+                progress_done=len(result),
+                progress_total=max(task.progress_total if task is not None else 0, len(result)),
+                result_json=result_json,
+            )
+        except Exception as exc:  # noqa: BLE001 - persist a redacted failure for recovery after a page reload
+            secrets = getattr(service, "secrets", ()) if service is not None else ()
+            self.store.update_maintenance_task_run(
+                task_id,
+                state="failed",
+                error_message=redact_provider_text(exc, secrets=secrets),
+            )
+        finally:
+            _ACTIVE_OFFICIAL_VALUATION_TASK_KEYS.discard(self._task_key(task_id))
+
+    def _default_service(self) -> OfficialIndexValuationSyncService:
+        settings = load_provider_settings()
+        return OfficialIndexValuationSyncService(
+            create_data_provider(settings),
+            self.parquet_store,
+            secrets=(settings.token,),
+        )
+
+    def _task_key(self, task_id: int) -> tuple[str, int]:
+        return (str(Path(self.store.db_path).resolve()), task_id)
 
 
 class IndexHistoryBatchRunner:
