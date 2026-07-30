@@ -208,3 +208,46 @@ It succeeded with run ID `20260730T171153615471Z-7c2d72a190`, cutoff
 `2026-07-28`, 232 results rows, four stress rows, two prospective rows, and all
 ten artifacts. Strict loader reload succeeded; the limited two-index package is
 truthfully `failed` rather than a full-universe success claim.
+
+## Third review hardening
+
+The third review added four final evidence-boundary tests. RED command:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_report.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-third-review-red
+```
+
+Result: `26 passed, 3 failed in 4.24s`, proving that a long calendar preview
+could hide a stage row, a non-empty summary section could be marked empty, and a
+core performance value could be malformed.
+
+The annual/stage section now has two dedicated stable previews under the fixed
+heading, so stage rows cannot be consumed by calendar-year truncation. Empty
+summary sections must have exactly one all-null payload row; non-empty sections
+cannot contain a placeholder row. All core performance metrics are numeric and
+finite in result, stress, and worst-index evidence, and group/rolling summaries
+are also numeric/finite. Gate display `value` is checked against its authoritative
+`value_json`, preventing redundant-value tampering.
+
+Focused verification:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_report.py tests\test_index_research_validation.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-third-review-focused
+```
+
+Result: `52 passed in 15.61s`.
+
+Full verification:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-third-review-full
+```
+
+Result: `552 passed, 1 skipped in 43.69s`.
+
+Real two-index smoke wrote only to
+`C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-third-review-smoke` and
+completed with run ID `20260730T172210497990Z-5dfa036a50`. It has ten artifacts,
+cutoff `2026-07-28`, `official_count=2`, `limited_run=true`, and truthful failed
+status. Strict load rehydrated 232 result rows, four stress rows, and two
+prospective-status rows.

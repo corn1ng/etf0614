@@ -241,6 +241,47 @@ def test_report_keeps_best_and_worst_rows_when_more_than_ten_indexes():
     assert "best" in section and "worst" in section
 
 
+def test_report_renders_stage_preview_separately_from_many_calendar_years():
+    output = sample_output()
+    calendar = pd.concat([output.results.iloc[[0]].assign(period_type="calendar_year", period_label=str(2000 + year)) for year in range(12)], ignore_index=True)
+    stage = output.results.iloc[[0]].assign(period_type="stage", period_label="stage_2015")
+    markdown = render_index_research_markdown(replace(output, results=pd.concat([calendar, stage], ignore_index=True)), sample_run_meta("stage-preview"))
+    annual_section = markdown.split("## 年度/阶段", 1)[1].split("## 最好与最差指数", 1)[0]
+    assert "stage_2015" in annual_section
+
+
+def test_loader_rejects_is_empty_tampering_and_gate_value_display_tampering(tmp_path: Path):
+    published = publish_index_research(sample_output(), tmp_path, sample_run_meta("first"))
+    run_dir = tmp_path / "runs" / published.run_id
+    summary_path = run_dir / "index_strategy_summary.csv"
+    summary = pd.read_csv(summary_path)
+    summary.loc[summary["section"] == "stress_results", "is_empty"] = True
+    summary.to_csv(summary_path, index=False)
+    with pytest.raises(ValueError, match="summary"):
+        load_latest_index_research(tmp_path)
+
+    publish_index_research(sample_output(), tmp_path, sample_run_meta("second"))
+    summary_path = tmp_path / "runs" / "second" / "index_strategy_summary.csv"
+    summary = pd.read_csv(summary_path)
+    gate = summary.index[summary["section"] == "effectiveness_gate"][0]
+    summary.loc[gate, "value"] = 0.9
+    summary.to_csv(summary_path, index=False)
+    (tmp_path / "latest.json").write_text(json.dumps({"run_id": "second"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="gate"):
+        load_latest_index_research(tmp_path)
+
+
+def test_loader_rejects_non_finite_or_non_numeric_core_performance_evidence(tmp_path: Path):
+    published = publish_index_research(sample_output(), tmp_path, sample_run_meta("first"))
+    results_path = tmp_path / "runs" / published.run_id / "index_backtest_results.csv"
+    results = pd.read_csv(results_path)
+    results["annualized_return"] = results["annualized_return"].astype(object)
+    results.loc[0, "annualized_return"] = "not-a-number"
+    results.to_csv(results_path, index=False)
+    with pytest.raises(ValueError, match="annualized_return"):
+        load_latest_index_research(tmp_path)
+
+
 def test_run_and_publish_marks_limited_run_and_uses_sorted_catalog(tmp_path: Path):
     calls: list[list[str]] = []
 

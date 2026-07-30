@@ -208,7 +208,12 @@ def render_index_research_markdown(output: IndexResearchOutput, run_meta: Mappin
     lines.extend(_table_section("0/2/3% 缓冲诊断", output.buffer_comparison))
     lines.extend(_table_section("双倍费用", output.stress_results))
     annual_and_stage = output.results[output.results["period_type"].isin(["calendar_year", "stage"])] if "period_type" in output.results else output.yearly
-    lines.extend(_table_section("年度/阶段", annual_and_stage))
+    calendar_years = annual_and_stage[annual_and_stage["period_type"] == "calendar_year"] if "period_type" in annual_and_stage else annual_and_stage
+    stages = annual_and_stage[annual_and_stage["period_type"] == "stage"] if "period_type" in annual_and_stage else pd.DataFrame()
+    lines.extend(["", "## 年度/阶段", "", "### 自然年"])
+    lines.extend(_table_section_body(calendar_years, limit=10))
+    lines.extend(["", "### 阶段"])
+    lines.extend(_table_section_body(stages, limit=10))
     lines.extend(_table_section("最好与最差指数", _best_and_worst_indices(output.results), limit=20))
     reference = output.results[output.results.get("cohort", pd.Series(dtype="object")) == "reference"] if "cohort" in output.results else pd.DataFrame()
     lines.extend(_table_section("扩展样本", reference))
@@ -324,10 +329,16 @@ def _unpack_summary(summary: pd.DataFrame) -> dict[str, pd.DataFrame]:
         missing = set(columns).difference(rows.columns)
         if missing:
             raise ValueError("index research summary section is missing stored columns")
-        if bool(rows["is_empty"].iloc[0]):
+        is_empty = bool(rows["is_empty"].iloc[0])
+        payload = rows.loc[:, columns]
+        if is_empty:
+            if len(rows) != 1 or not payload.iloc[0].isna().all():
+                raise ValueError("index research summary empty section payload is invalid")
             sections[section] = _restore_summary_dtypes(pd.DataFrame(columns=columns), dtypes)
         else:
-            restored = rows.loc[:, columns].reset_index(drop=True)
+            if payload.isna().all(axis=1).any():
+                raise ValueError("index research summary non-empty section has placeholder payload")
+            restored = payload.reset_index(drop=True)
             sections[section] = _restore_summary_dtypes(restored, dtypes)
     gates = sections["effectiveness_gate"]
     if set(gates.get("name", pd.Series(dtype="object"))) != set(_GATE_NAMES) or len(gates) != len(_GATE_NAMES):
@@ -380,12 +391,16 @@ def _complete_empty_schema(frame: pd.DataFrame, required: frozenset[str]) -> pd.
 
 def _table_section(title: str, frame: pd.DataFrame, *, limit: int = 10) -> list[str]:
     lines = ["", f"## {title}"]
+    return [*lines, *_table_section_body(frame, limit=limit)]
+
+
+def _table_section_body(frame: pd.DataFrame, *, limit: int = 10) -> list[str]:
     if frame.empty:
-        return [*lines, "- 无可报告数据。"]
+        return ["- 无可报告数据。"]
     preview = frame.head(limit).copy()
     for column in preview.select_dtypes(include=["datetime", "datetimetz"]).columns:
         preview[column] = preview[column].astype(str)
-    return [*lines, preview.to_markdown(index=False)]
+    return [preview.to_markdown(index=False)]
 
 
 def _best_and_worst_indices(results: pd.DataFrame) -> pd.DataFrame:
@@ -521,6 +536,7 @@ def _validate_cross_artifact_consistency(
     _validate_frame_schema(trades, "index_backtest_trades.csv")
     _validate_frame_schema(exclusions, "index_strategy_exclusions.csv")
     _validate_nav(nav)
+    _validate_summary_numeric_sections(sections)
     status = sections["effectiveness_status"]
     if len(status) != 1:
         raise ValueError("index research summary must have one effectiveness status row")
@@ -545,6 +561,9 @@ def _validate_cross_artifact_consistency(
             raise ValueError("index research summary gate value payload is invalid") from exc
         if actual_value != _json_safe(expected_value) or actual_reason != expected_reason:
             raise ValueError("index research summary gate rows disagree with metadata evidence")
+        display_value = None if pd.isna(row.value) else row.value
+        if not _summary_values_match(display_value, actual_value):
+            raise ValueError("index research summary gate display value disagrees with authoritative value_json")
     cohorts = results[["index_code", "cohort"]].drop_duplicates()
     official_count = int((cohorts["cohort"] == "official").sum())
     reference_count = int((cohorts["cohort"] == "reference").sum())
@@ -568,6 +587,36 @@ def _validate_frame_schema(frame: pd.DataFrame, artifact: str) -> None:
             values = pd.to_numeric(frame[column], errors="coerce")
             if values.isna().any() or not values.map(math.isfinite).all():
                 raise ValueError(f"index research {artifact} has an invalid {column}")
+    for column in _PERFORMANCE_COLUMNS.intersection(frame.columns):
+        values = pd.to_numeric(frame[column], errors="coerce")
+        if values.isna().any() or not values.map(math.isfinite).all():
+            raise ValueError(f"index research {artifact} has an invalid {column}")
+
+
+def _validate_summary_numeric_sections(sections: Mapping[str, pd.DataFrame]) -> None:
+    _validate_frame_schema(sections["stress_results"], "index_backtest_results.csv")
+    worst = sections["worst_indices"]
+    for column in _PERFORMANCE_COLUMNS:
+        values = pd.to_numeric(worst[column], errors="coerce")
+        if values.isna().any() or not values.map(math.isfinite).all():
+            raise ValueError("index research summary worst_indices has invalid performance evidence")
+    for section, columns in (("group_statistics", ("mean", "median", "q25", "q75", "count")), ("rolling_gate_summary", ("eligible_windows", "passing_windows", "pass_rate"))):
+        frame = sections[section]
+        for column in columns:
+            values = pd.to_numeric(frame[column], errors="coerce")
+            if values.isna().any() or not values.map(math.isfinite).all():
+                raise ValueError(f"index research summary {section} has invalid {column}")
+
+
+def _summary_values_match(display: object, authoritative: object) -> bool:
+    if display is None and authoritative is None:
+        return True
+    if isinstance(authoritative, (int, float)) and not isinstance(authoritative, bool):
+        try:
+            return math.isclose(float(display), float(authoritative), rel_tol=1e-12, abs_tol=1e-12)
+        except (TypeError, ValueError):
+            return False
+    return display == authoritative
 
 
 def _validate_nav(nav: pd.DataFrame) -> None:
