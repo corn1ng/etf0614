@@ -518,6 +518,7 @@ class IndexResearchPageController:
         )
 
     def load_evidence(self) -> IndexResearchPageState:
+        expected_completed_identity = _current_completed_identity(self.job_manager.snapshot())
         loaded, status, diagnostic = _load_index_research_for_page(self.report_root, loader=self.loader)
         stale = False
         if loaded is not None:
@@ -529,9 +530,14 @@ class IndexResearchPageController:
         self._evidence_status = "stale" if loaded is not None and stale else status
         self._diagnostic = diagnostic
         self._limited = bool(loaded is not None and loaded.run_meta.get("limited_run"))
-        completed = self.job_manager.snapshot()
-        if getattr(completed, "status", "idle") == "completed":
-            self.last_loaded_completed_job_id, self.last_loaded_completed_run_id = _completed_job_identity(completed)
+        current_completed_identity = _current_completed_identity(self.job_manager.snapshot())
+        if (
+            loaded is not None
+            and expected_completed_identity is not None
+            and current_completed_identity == expected_completed_identity
+            and str(getattr(loaded, "run_id", "")) == str(expected_completed_identity[1] or "")
+        ):
+            self.last_loaded_completed_job_id, self.last_loaded_completed_run_id = expected_completed_identity
         return self.state
 
     def poll(self) -> bool:
@@ -554,6 +560,10 @@ def _completed_job_identity(snapshot) -> tuple[str | None, str | None]:
     if job_id is None and run_id is None:
         return (f"legacy-snapshot:{id(snapshot)}", None)
     return (job_id, run_id)
+
+
+def _current_completed_identity(snapshot) -> tuple[str | None, str | None] | None:
+    return _completed_job_identity(snapshot) if getattr(snapshot, "status", "idle") == "completed" else None
 
 
 def index_research_layout_order() -> tuple[str, str, str]:

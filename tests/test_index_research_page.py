@@ -125,7 +125,7 @@ def test_page_controller_reloads_each_completed_job_identity_once_and_refresh_ma
 
     def loader(_root):
         calls["loader"] += 1
-        return SimpleNamespace(run_meta={"limited_run": False})
+        return SimpleNamespace(run_id=manager.current.run_id, run_meta={"limited_run": False})
 
     controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=lambda *_: False)
     controller.load_evidence()
@@ -138,6 +138,68 @@ def test_page_controller_reloads_each_completed_job_identity_once_and_refresh_ma
     controller.load_evidence()  # explicit refresh while b is completed
     assert controller.poll() is False
     assert calls == {"loader": 4}
+
+
+def test_evidence_load_does_not_mark_new_completed_job_when_loader_returns_old_run():
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    class Manager:
+        def __init__(self):
+            self.current = SimpleNamespace(status="completed", job_id="a", run_id="run-a")
+
+        def snapshot(self):
+            return self.current
+
+    manager = Manager()
+    calls = {"loader": 0}
+
+    def loader(_root):
+        calls["loader"] += 1
+        if calls["loader"] == 1:
+            manager.current = SimpleNamespace(status="completed", job_id="b", run_id="run-b")
+            return SimpleNamespace(run_id="run-a", run_meta={"limited_run": False})
+        return SimpleNamespace(run_id="run-b", run_meta={"limited_run": False})
+
+    controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=lambda *_: False)
+    controller.load_evidence()
+
+    assert (controller.last_loaded_completed_job_id, controller.last_loaded_completed_run_id) != ("b", "run-b")
+    assert controller.poll() is True
+    assert calls == {"loader": 2}
+    assert controller.poll() is False
+
+
+def test_matching_completed_identity_and_loaded_run_do_not_reload_on_later_polls():
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    manager = SimpleNamespace(snapshot=lambda: SimpleNamespace(status="completed", job_id="a", run_id="run-a"))
+    calls = {"loader": 0}
+
+    def loader(_root):
+        calls["loader"] += 1
+        return SimpleNamespace(run_id="run-a", run_meta={"limited_run": False})
+
+    controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=lambda *_: False)
+    controller.load_evidence()
+    assert controller.poll() is False
+    assert controller.poll() is False
+    assert calls == {"loader": 1}
+
+
+@pytest.mark.parametrize("exc", [ValueError("latest index research pointer is missing"), OSError("unavailable")])
+def test_invalid_or_missing_evidence_never_marks_completed_identity(exc):
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    manager = SimpleNamespace(snapshot=lambda: SimpleNamespace(status="completed", job_id="a", run_id="run-a"))
+    controller = IndexResearchPageController(
+        "reports", object(), manager,
+        loader=lambda _root: (_ for _ in ()).throw(exc),
+        stale_checker=lambda *_: False,
+    )
+
+    controller.load_evidence()
+    assert controller.last_loaded_completed_job_id is None
+    assert controller.last_loaded_completed_run_id is None
 
 
 def test_cancel_handler_updates_widgets_and_running_text_uses_snapshot_message():
