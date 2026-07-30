@@ -7,9 +7,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from etf_trading.research.index_backtest import run_buy_hold
+from etf_trading.research.index_backtest import run_buy_hold, run_index_backtest
 from etf_trading.research.index_metrics import summarize_index_result
 from etf_trading.research.index_models import IndexAdmissionResult, IndexBacktestCosts, IndexResearchConfig
+from etf_trading.research.index_trend_v1 import IndexTrendV1
 from etf_trading.research.index_validation import (
     IndexResearchCancelled,
     build_rolling_windows,
@@ -45,6 +46,15 @@ def test_five_year_windows_use_calendar_boundaries_and_exclude_incomplete_tail()
         (2015, 2019),
     ]
     assert all(window.end.month == 12 and window.end.day == 31 for window in windows)
+
+
+def test_research_uses_raw_history_coverage_for_rolling_windows_before_indicator_warmup():
+    output = run_index_research(
+        admission_for({"000300": long_frame("2005-01-03", "2011-12-30")}, cohorts={"000300": "official"}),
+        make_config(),
+    )
+
+    assert "2005-2009" in set(output.rolling["period_label"])
 
 
 def test_rolling_windows_require_january_and_december_coverage_for_every_year():
@@ -247,6 +257,26 @@ def test_buy_hold_summary_includes_initial_execution_cost_in_returns():
 
     assert summary["total_return"] < 0
     assert summary["annualized_return"] < 0
+
+
+def test_initial_capital_is_a_shared_undated_risk_path_for_v1_and_buy_hold():
+    frame = long_frame("2024-01-02", "2024-05-31")
+    frame.loc[:, ["open", "high", "low", "close"]] = [100.0, 101.0, 99.0, 100.0]
+    costs = IndexBacktestCosts(commission_rate=0.001, slippage_rate=0.001)
+    v1 = run_index_backtest("000300", frame, IndexTrendV1(), costs)
+    buy_hold = run_buy_hold("000300", frame, costs)
+
+    v1_metrics = summarize_index_result(v1)
+    buy_hold_metrics = summarize_index_result(buy_hold)
+
+    assert v1.initial_nav == buy_hold.initial_nav == 1.0
+    assert v1_metrics["annualization_periods"] == len(v1.nav)
+    assert buy_hold_metrics["annualization_periods"] == len(buy_hold.nav)
+    assert v1_metrics["annualization_periods"] == buy_hold_metrics["annualization_periods"]
+    assert buy_hold_metrics["total_return"] < 0
+    assert buy_hold_metrics["max_drawdown"] < 0
+    assert buy_hold_metrics["volatility"] > 0
+    assert buy_hold_metrics["drawdown_start"] is None
 
 
 def make_config() -> IndexResearchConfig:

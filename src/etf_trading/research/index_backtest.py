@@ -131,7 +131,7 @@ def run_buy_hold(index_code: str, frame: pd.DataFrame, costs: IndexBacktestCosts
             nav = cash + shares * close_price
             weight = 0.0 if nav == 0 else shares * close_price / nav
             nav_rows.append({"trade_date": trade_date, "nav": nav, "weight": weight})
-    return _result(trades, nav_rows, [], initial_nav=1.0)
+    return _result(trades, nav_rows, [])
 
 
 def _prepare_prices(frame: pd.DataFrame) -> pd.DataFrame:
@@ -217,7 +217,7 @@ def _result(
     nav_rows: list[dict[str, object]],
     cancellations: list[dict[str, object]],
     *,
-    initial_nav: float | None = None,
+    initial_nav: float = 1.0,
 ) -> IndexBacktestResult:
     return IndexBacktestResult(
         trades=trades,

@@ -95,9 +95,9 @@ class IndexBacktestResult:
     trades: list[IndexBacktestTrade] = field(default_factory=list)
     nav: pd.DataFrame = field(default_factory=pd.DataFrame)
     cancelled_signals: pd.DataFrame = field(default_factory=pd.DataFrame)
-    # A pre-first-observation capital base, used only where the runner has one
-    # without fabricating an extra dated NAV row (currently buy-and-hold).
-    initial_nav: float | None = None
+    # Undated capital immediately before the first close valuation.  It is part
+    # of every strategy's risk path without fabricating a duplicate NAV date.
+    initial_nav: float = 1.0
 
 
 @dataclass(frozen=True)

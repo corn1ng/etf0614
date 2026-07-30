@@ -23,7 +23,7 @@ from etf_trading.research.index_trend_v1 import IndexTrendV1
 
 
 class IndexResearchCancelled(RuntimeError):
-    """Raised before an index starts when a caller cancels the research run."""
+    """Raised at an index pre/post boundary or final publish boundary on cancellation."""
 
 
 class RollingWindow(NamedTuple):
@@ -130,7 +130,10 @@ def run_index_research(
                     nav_rows.extend(_nav_records(context, "stage", label, stage))
                     trade_rows.extend(_trade_records(context, "stage", label, stage))
 
-            for window in build_rolling_windows(frame.loc[frame["trade_date"] >= start], years=config.rolling_years, step_years=config.rolling_step_years):
+            # Coverage is determined from the admitted raw history, not the later
+            # MA/ATR-ready date.  The window backtest still starts flat on Jan 1;
+            # missing indicators merely suppress V1 signals until they warm up.
+            for window in build_rolling_windows(frame, years=config.rolling_years, step_years=config.rolling_step_years):
                 rolling = _run_pair(code, frame, window.start, window.end, config, default_costs)
                 label = f"{window.start.year}-{window.end.year}"
                 records = _result_records(context, "rolling_5y", label, window.start, window.end, rolling, config)

@@ -86,3 +86,30 @@ Result: `47 passed in 9.57s`.
 
 Review focused suite (`validation`, Task 2, and Task 3 neighbors): `54 passed in
 9.56s`.  Review full suite: `520 passed, 1 skipped in 37.93s`.
+
+## Second review hardening
+
+Second-review RED command:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_validation.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-second-review-red
+```
+
+Result: 2 expected failures.  The integration case omitted the `2005-2009`
+rolling window because coverage was checked after MA/ATR warm-up, and V1 had no
+initial capital base while buy-and-hold did.
+
+The follow-up now determines rolling coverage from the admitted, sorted raw date
+history; each backtest still starts empty on January 1, and unavailable indicators
+only prevent V1 signals.  Every `IndexBacktestResult` has an undated initial NAV
+of 1.0.  Metrics include it in return, annualization period count, volatility,
+drawdown, and Calmar without adding a synthetic trade date.  If a drawdown peak is
+that virtual starting capital, `drawdown_start` is stably `None`.  The frame-only
+annual summary deliberately retains its existing first-observed-NAV semantics and
+does not assign initial entry costs to a calendar year.  The cancellation exception
+documentation now names the before-index, after-index, and final-publication
+boundaries.
+
+Second-review GREEN: validation plus backtest/metrics: `49 passed in 11.75s`;
+validation plus Task 2/3 neighbors: `56 passed in 11.56s`; full suite: `522
+passed, 1 skipped in 40.18s`.

@@ -33,7 +33,9 @@ def summarize_index_result(
     """Summarize one index result without treating an open position as a completed trade.
 
     Annualized return is a 252-observed-period CAGR, volatility uses daily returns
-    with ``ddof=0``, and Sharpe is CAGR divided by that volatility.  Recovery days
+    with ``ddof=0``, and Sharpe is CAGR divided by that volatility.  The undated
+    ``initial_nav`` is the first value in all risk calculations; the annualization
+    period count is therefore the number of dated close observations. Recovery days
     run from the most recent peak before the selected trough to its recovery.
     ``cost_drag`` is cumulative explicit transaction cost in NAV/cash units, not
     the final-NAV difference between costed and uncosted portfolios.
@@ -50,7 +52,11 @@ def summarize_index_result(
 
 
 def summarize_nav_by_year(nav: pd.DataFrame) -> pd.DataFrame:
-    """Summarize each calendar year from that year's first NAV to its last NAV."""
+    """Summarize each year from its first observed NAV to its last observed NAV.
+
+    This frame-only helper intentionally does not reconstruct or allocate an
+    undated initial-capital value (and thus cannot allocate first-buy costs).
+    """
 
     frame = _normalized_nav(nav)
     if frame.empty:
@@ -59,7 +65,7 @@ def summarize_nav_by_year(nav: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for year, segment in frame.groupby(frame["trade_date"].dt.year, sort=True):
         row: dict[str, object] = {"year": int(year)}
-        row.update(_nav_metrics(segment.reset_index(drop=True)))
+        row.update(_nav_metrics(segment.reset_index(drop=True), initial_nav=None))
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -93,27 +99,36 @@ def _nav_metrics(nav: pd.DataFrame, *, initial_nav: float | None = None) -> dict
     annualized_return = 0.0
     volatility = 0.0
     sharpe = 0.0
+    annualization_periods = 0
     if initial_nav is not None:
         if not math.isfinite(initial_nav) or initial_nav <= 0:
             raise ValueError("initial_nav must be finite and positive")
         # The base is capital immediately before the first dated close valuation,
         # so there are ``len(nav)`` observed holding periods for annualization.
         total_return = float(nav["nav"].iloc[-1] / initial_nav - 1.0)
-        annualized_return = _annualized_return(total_return, len(nav))
+        annualization_periods = len(nav)
+        annualized_return = _annualized_return(total_return, annualization_periods)
     elif len(nav) >= 2:
         total_return = float(nav["nav"].iloc[-1] / nav["nav"].iloc[0] - 1.0)
-        annualized_return = _annualized_return(total_return, len(nav) - 1)
-    if len(nav) >= 2:
+        annualization_periods = len(nav) - 1
+        annualized_return = _annualized_return(total_return, annualization_periods)
+    if initial_nav is not None:
+        daily_returns = pd.Series([initial_nav, *nav["nav"].tolist()], dtype=float).pct_change().iloc[1:]
+    elif len(nav) >= 2:
         daily_returns = nav["nav"].pct_change().iloc[1:]
+    else:
+        daily_returns = pd.Series(dtype=float)
+    if not daily_returns.empty:
         volatility = float(daily_returns.std(ddof=0) * math.sqrt(TRADING_DAYS_PER_YEAR))
         sharpe = 0.0 if volatility == 0 else annualized_return / volatility
 
-    drawdown_metrics = _drawdown_metrics(nav)
+    drawdown_metrics = _drawdown_metrics(nav, initial_nav=initial_nav)
     max_drawdown = float(drawdown_metrics["max_drawdown"])
     calmar = 0.0 if max_drawdown == 0 else annualized_return / abs(max_drawdown)
     return {
         "total_return": round(total_return, 6),
         "annualized_return": round(annualized_return, 6),
+        "annualization_periods": annualization_periods,
         "volatility": round(volatility, 6),
         "sharpe": round(sharpe, 6),
         "max_drawdown": round(max_drawdown, 6),
@@ -128,6 +143,7 @@ def _zero_nav_metrics() -> dict[str, object]:
     return {
         "total_return": 0.0,
         "annualized_return": 0.0,
+        "annualization_periods": 0,
         "volatility": 0.0,
         "sharpe": 0.0,
         "max_drawdown": 0.0,
@@ -141,11 +157,12 @@ def _zero_nav_metrics() -> dict[str, object]:
     }
 
 
-def _drawdown_metrics(nav: pd.DataFrame) -> dict[str, object]:
+def _drawdown_metrics(nav: pd.DataFrame, *, initial_nav: float | None = None) -> dict[str, object]:
     if nav.empty:
         return _zero_nav_metrics()
-    running_max = nav["nav"].cummax()
-    drawdowns = nav["nav"] / running_max - 1.0
+    path = pd.Series([initial_nav, *nav["nav"].tolist()], dtype=float) if initial_nav is not None else nav["nav"].reset_index(drop=True)
+    running_max = path.cummax()
+    drawdowns = path / running_max - 1.0
     trough_index = int(drawdowns.idxmin())
     max_drawdown = float(drawdowns.iloc[trough_index])
     if max_drawdown == 0:
@@ -159,16 +176,16 @@ def _drawdown_metrics(nav: pd.DataFrame) -> dict[str, object]:
         }
 
     peak_nav = float(running_max.iloc[trough_index])
-    peak_candidates = nav.index[(nav.index <= trough_index) & (nav["nav"] == peak_nav)]
+    peak_candidates = path.index[(path.index <= trough_index) & (path == peak_nav)]
     peak_index = int(peak_candidates[-1])
-    recovered_indices = nav.index[(nav.index > trough_index) & (nav["nav"] >= peak_nav)]
+    recovered_indices = path.index[(path.index > trough_index) & (path >= peak_nav)]
     recovered = len(recovered_indices) > 0
     recovery_index = int(recovered_indices[0]) if recovered else None
     return {
         "max_drawdown": max_drawdown,
-        "drawdown_start": _date_text(nav["trade_date"].iloc[peak_index]),
-        "drawdown_trough": _date_text(nav["trade_date"].iloc[trough_index]),
-        "drawdown_recovery": _date_text(nav["trade_date"].iloc[recovery_index]) if recovered else None,
+        "drawdown_start": _path_date(nav, peak_index, initial_nav),
+        "drawdown_trough": _path_date(nav, trough_index, initial_nav),
+        "drawdown_recovery": _path_date(nav, recovery_index, initial_nav) if recovered else None,
         "drawdown_recovered": recovered,
         "recovery_trading_days": recovery_index - peak_index if recovered else None,
     }
@@ -180,6 +197,12 @@ def _annualized_return(total_return: float, periods: int) -> float:
     if total_return <= -1.0:
         return -1.0
     return (1.0 + total_return) ** (TRADING_DAYS_PER_YEAR / periods) - 1.0
+
+
+def _path_date(nav: pd.DataFrame, path_index: int | None, initial_nav: float | None) -> str | None:
+    if path_index is None or (initial_nav is not None and path_index == 0):
+        return None
+    return _date_text(nav["trade_date"].iloc[path_index - 1 if initial_nav is not None else path_index])
 
 
 def _closed_round_trips(trades: list[IndexBacktestTrade], nav: pd.DataFrame) -> list[_ClosedRoundTrip]:
