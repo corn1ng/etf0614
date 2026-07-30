@@ -34,6 +34,7 @@ from etf_trading.nicegui_app.view_models import (
     index_data_status_notice,
     index_profile_view,
     market_overview,
+    official_index_valuation_comparison_rows,
 )
 
 
@@ -60,6 +61,8 @@ def render(snapshot: PlatformSnapshot, section: str, parquet_store=None) -> None
         _render_overview(snapshot)
     elif section == "指数体检":
         _render_index_health(snapshot, parquet_store)
+    elif section == "指数估值":
+        _render_index_valuation(parquet_store)
     elif section == "指数买卖参考":
         _render_index_reference(snapshot)
     else:
@@ -82,6 +85,35 @@ def _render_overview(snapshot: PlatformSnapshot) -> None:
     else:
         empty_state("暂无指数状态", "到数据维护补齐指数历史后再查看市场总览。")
     _render_audit("market")
+
+
+def _render_index_valuation(parquet_store) -> None:
+    """Render official valuation atoms from the published snapshot only."""
+
+    if parquet_store is None:
+        _render_index_valuation_empty_state()
+        return
+
+    definitions, coverage = index_atomic_snapshot_inputs(create_store())
+    result = load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+    rows = official_index_valuation_comparison_rows(result.summary)
+    if result.status in {"missing", "failed"} or not rows:
+        _render_index_valuation_empty_state()
+        return
+
+    ui.label("仅展示已发布统一快照中的官方估值与独立分位；不计算、不排序评分，也不作交易结论。").classes("workbench-chart-note")
+    if result.status != "ready":
+        ui.label(f"快照状态：{_status_text(result.status, '数据不足')}；请在数据维护完成补齐后重新读取。").classes(
+            "workbench-chart-note"
+        )
+    render_table(rows, row_key="指数代码", pagination=15, compact=True, ui_module=ui).classes(
+        "workbench-data-table workbench-data-table--compact w-full"
+    )
+
+
+def _render_index_valuation_empty_state() -> None:
+    empty_state("暂无可展示的官方指数估值", "请前往数据维护 -> 补齐任务，同步官方估值并重建统一指数快照。")
+    ui.link("前往数据维护 -> 补齐任务", f"/page/maintenance/{quote('补齐任务', safe='')}").classes("text-sm font-semibold")
 
 
 def _render_index_reference(snapshot: PlatformSnapshot) -> None:

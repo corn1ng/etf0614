@@ -24,7 +24,7 @@ NICEGUI_PAGES: tuple[NicePageSpec, ...] = (
         slug="market",
         label="市场地图",
         caption="观察指数和市场参与状态，不承载 ETF 行情下钻。",
-        sections=("市场总览", "指数体检", "指数买卖参考", "指数K线"),
+        sections=("市场总览", "指数体检", "指数估值", "指数买卖参考", "指数K线"),
     ),
     NicePageSpec(
         slug="etf-data",

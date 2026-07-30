@@ -8,6 +8,7 @@ import math
 
 import pandas as pd
 
+from etf_trading.data.index_valuations import OFFICIAL_INDEX_VALUATION_TS_CODES
 from etf_trading.research.atomic_indicators import build_etf_atomic_indicator_snapshot
 
 
@@ -1466,6 +1467,37 @@ def _format_number(value: object) -> str:
     return f"{float(value):.2f}"
 
 
+def official_index_valuation_comparison_rows(summary: pd.DataFrame) -> list[dict[str, object]]:
+    """Project supported official valuation atoms from the published snapshot."""
+
+    if summary.empty or "index_code" not in summary:
+        return []
+    by_code = {
+        str(row["index_code"]): row
+        for row in summary.to_dict("records")
+        if (
+            str(row.get("index_code", "")) in OFFICIAL_INDEX_VALUATION_TS_CODES
+            and _text(row.get("valuation_support_status")) == "supported"
+        )
+    }
+    return [
+        {
+            "指数代码": code,
+            "指数名称": _text(by_code[code].get("index_name")) or "数据不足",
+            "估值日期": _format_index_atomic_date(by_code[code].get("valuation_as_of_date")),
+            "静态PE": _format_number(by_code[code].get("pe_static")),
+            "PE-TTM": _format_number(by_code[code].get("pe_ttm")),
+            "PE-TTM 5年分位": _format_index_atomic_percent(by_code[code].get("pe_ttm_5y_percentile")),
+            "PB": _format_number(by_code[code].get("pb")),
+            "PB 5年分位": _format_index_atomic_percent(by_code[code].get("pb_5y_percentile")),
+            "新鲜度": _index_atomic_status_label(by_code[code].get("valuation_freshness_status")),
+            "数据来源": _index_atomic_data_source_label(by_code[code].get("valuation_source")),
+        }
+        for code in OFFICIAL_INDEX_VALUATION_TS_CODES
+        if code in by_code
+    ]
+
+
 def _format_index_detail_value(value: object) -> str:
     if _missing(value) or value == "":
         return ""
@@ -1624,6 +1656,7 @@ def _index_atomic_status_label(value: object) -> str:
         INDEX_ATOMIC_SNAPSHOT_STATUS_LABELS.get(text)
         or INDEX_ATOMIC_METRIC_STATUS_LABELS.get(text)
         or INDEX_ATOMIC_HISTORY_COMPLETENESS_LABELS.get(text)
+        or INDEX_PROFILE_STATUS_LABELS.get(text)
         or text
     )
 

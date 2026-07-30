@@ -17,7 +17,7 @@ def test_nicegui_primary_navigation_matches_workbench_flow():
 def test_nicegui_sections_keep_market_and_etf_boundaries():
     sections_by_slug = {page.slug: section_options(page) for page in NICEGUI_PAGES}
 
-    assert sections_by_slug["market"] == ["市场总览", "指数体检", "指数买卖参考", "指数K线"]
+    assert sections_by_slug["market"] == ["市场总览", "指数体检", "指数估值", "指数买卖参考", "指数K线"]
     assert sections_by_slug["etf-data"] == ["ETF总览", "原子指标", "ETF行情", "搜索加入", "每日计算池", "指数样本池"]
     assert sections_by_slug["research"] == ["策略库", "新建策略", "运行回测", "策略比较", "ETF复盘", "指数过滤实验"]
     assert sections_by_slug["maintenance"] == ["数据体检", "缺口明细", "补齐任务", "日志与设置"]
@@ -33,3 +33,9 @@ def test_nicegui_navigation_defaults_are_safe():
     assert default_section(page) == "行动摘要"
     assert get_page_by_slug("missing").slug == "action"
     assert resolve_section(page, "不存在") == "行动摘要"
+
+
+def test_market_navigation_places_index_valuation_after_healthcheck():
+    market_page = next(page for page in NICEGUI_PAGES if page.slug == "market")
+
+    assert market_page.sections == ("市场总览", "指数体检", "指数估值", "指数买卖参考", "指数K线")

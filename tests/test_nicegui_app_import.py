@@ -19,6 +19,16 @@ def test_market_dialog_uses_five_profile_tabs_and_no_builder_import():
     assert "OfficialIndexValuationSyncService" not in source
 
 
+def test_index_valuation_page_does_not_import_provider_or_sync_service():
+    from etf_trading.nicegui_app.pages import market
+
+    source = inspect.getsource(market)
+
+    assert "TushareProvider" not in source
+    assert "OfficialIndexValuationSyncService" not in source
+    assert "fetch_index_official_valuations" not in source
+
+
 def test_market_profile_overview_compact_risk_panel_explains_all_empty_sections(monkeypatch):
     from etf_trading.nicegui_app.pages import market
     from etf_trading.nicegui_app.view_models import IndexProfileMetricSection
@@ -87,7 +97,7 @@ def test_market_page_declares_snapshot_states_fixed_columns_and_readonly_reload(
         "index-atomic-dialog",
     ):
         assert text in source
-    assert source.count("load_index_atomic_snapshot_readonly") == 3
+    assert source.count("load_index_atomic_snapshot_readonly") == 4
     assert "index_atomic_snapshot_inputs(create_store())" in source
     assert '"computed": "已计算"' in source
     assert "IndexAtomicFilters(pool=str(pool.value or \"core\")" in source

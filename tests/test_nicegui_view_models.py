@@ -3,6 +3,39 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
+
+def _comparison_summary():
+    codes = ["399006", "801010", "000300", "000001", "399001", "000905", "000016"]
+    return pd.DataFrame(
+        [
+            {
+                "index_code": code,
+                "index_name": f"指数{code}",
+                "valuation_support_status": "unsupported" if code == "801010" else "supported",
+                "valuation_as_of_date": "2026-07-29",
+                "pe_static": 11.9,
+                "pe_ttm": 11.6,
+                "pe_ttm_5y_percentile": 0.18,
+                "pb": 1.24,
+                "pb_5y_percentile": 0.22,
+                "valuation_freshness_status": "fresh",
+                "valuation_source": "tushare_index_dailybasic",
+            }
+            for code in codes
+        ]
+    )
+
+
+def test_official_index_valuation_comparison_uses_supported_published_rows_only():
+    from etf_trading.nicegui_app.view_models import official_index_valuation_comparison_rows
+
+    rows = official_index_valuation_comparison_rows(_comparison_summary())
+
+    assert [row["指数代码"] for row in rows] == ["000001", "000016", "000300", "000905", "399001", "399006"]
+    assert rows[2]["PE-TTM"] == "11.60"
+    assert rows[2]["PE-TTM 5年分位"] == "18.0%"
+    assert "801010" not in {row["指数代码"] for row in rows}
+
 from etf_trading.nicegui_app.view_models import (
     ATOMIC_HEALTH_COLUMNS,
     ATOMIC_OPPORTUNITY_COLUMNS,
