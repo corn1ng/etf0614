@@ -1176,7 +1176,7 @@ def _overview_metric(row: dict[str, object] | None, label: str) -> IndexAtomicOv
     metric_key = _text(row.get("metric_key"))
     raw_value = row.get("value")
     value = _format_index_atomic_detail_value(metric_key, raw_value)
-    if metric_key == "close" or metric_key.startswith("ma_"):
+    if (metric_key == "close" or metric_key.startswith("ma_")) and not _index_atomic_boolean_metric(metric_key):
         try:
             if not math.isfinite(float(raw_value)):
                 return IndexAtomicOverviewMetric(label, "数据不足", "数据不足", "快照中该原子指标不是有限数值")

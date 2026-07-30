@@ -292,6 +292,35 @@ def test_index_profile_view_builds_approved_summary_and_five_domains():
     ]
 
 
+def test_index_profile_formats_published_boolean_atoms_without_numeric_coercion():
+    details = pd.concat(
+        [
+            _profile_details(),
+            pd.DataFrame(
+                [
+                    _profile_detail("ma_cross_up_20", "False", group_key="ma_cross", reason="字符串布尔原子"),
+                    _profile_detail("ma_cross_down_20", True, group_key="ma_cross", reason="原生布尔原子"),
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    rows = {item.label: item for item in view.trend.rows}
+    assert (rows["ma_cross_up_20"].value, rows["ma_cross_up_20"].status, rows["ma_cross_up_20"].reason) == (
+        "否",
+        "已计算",
+        "字符串布尔原子",
+    )
+    assert (rows["ma_cross_down_20"].value, rows["ma_cross_down_20"].status, rows["ma_cross_down_20"].reason) == (
+        "是",
+        "已计算",
+        "原生布尔原子",
+    )
+
+
 def test_index_profile_view_hides_valuation_tracks_when_unsupported():
     summary = _profile_summary() | {
         "index_code": "801010", "index_name": "农林牧渔", "valuation_support_status": "unsupported",
