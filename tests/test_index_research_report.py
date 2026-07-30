@@ -104,6 +104,46 @@ def test_json_rejects_non_finite_metadata_values(tmp_path: Path):
         publish_index_research(sample_output(), tmp_path, meta)
 
 
+def test_summary_round_trip_restores_every_task4_structured_output(tmp_path: Path):
+    output = sample_output()
+    publish_index_research(output, tmp_path, sample_run_meta("full-round-trip"))
+    loaded = load_latest_index_research(tmp_path)
+
+    assert_records_equal(loaded.stress_results, output.stress_results)
+    assert_records_equal(loaded.prospective_status, output.prospective_status)
+    assert_records_equal(loaded.group_statistics, output.group_statistics)
+    assert_records_equal(loaded.worst_indices, output.worst_indices)
+    assert_records_equal(loaded.rolling_gate_summary, output.rolling_gate_summary)
+
+
+def test_publish_rejects_effectiveness_metadata_that_disagrees_with_output_and_preserves_latest(tmp_path: Path):
+    first = publish_index_research(sample_output(), tmp_path, sample_run_meta("first"))
+    inconsistent = sample_run_meta("inconsistent")
+    inconsistent["status"] = "passed"
+
+    with pytest.raises(ValueError, match="effectiveness"):
+        publish_index_research(sample_output(), tmp_path, inconsistent)
+
+    assert load_latest_index_research(tmp_path).run_id == first.run_id
+
+
+def test_loader_rejects_weak_trade_schema_and_missing_summary_section(tmp_path: Path):
+    published = publish_index_research(sample_output(), tmp_path, sample_run_meta("first"))
+    run_dir = tmp_path / "runs" / published.run_id
+    (run_dir / "index_backtest_trades.csv").write_text("index_code\n000300\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="schema"):
+        load_latest_index_research(tmp_path)
+
+    publish_index_research(sample_output(), tmp_path, sample_run_meta("second"))
+    second_dir = tmp_path / "runs" / "second"
+    summary = pd.read_csv(second_dir / "index_strategy_summary.csv")
+    summary = summary[summary["section"] != "prospective_status"]
+    summary.to_csv(second_dir / "index_strategy_summary.csv", index=False)
+    (tmp_path / "latest.json").write_text(json.dumps({"run_id": "second"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="summary"):
+        load_latest_index_research(tmp_path)
+
+
 def test_chinese_report_has_ordered_sections_gates_failure_reason_and_index_warning():
     output = sample_output()
     markdown = render_index_research_markdown(output, sample_run_meta("report"))
@@ -117,6 +157,8 @@ def test_chinese_report_has_ordered_sections_gates_failure_reason_and_index_warn
     assert "median_calmar_improves" in markdown and "实际值" in markdown and "阈值" in markdown
     assert "指数理论回测" in markdown and "不是 ETF 可实现收益" in markdown
     assert "尚无前瞻样本" in markdown
+    assert "stage_2020" in markdown
+    assert "side" in markdown and "best" in markdown and "worst" in markdown
 
 
 def test_run_and_publish_marks_limited_run_and_uses_sorted_catalog(tmp_path: Path):
@@ -184,8 +226,14 @@ def sample_output(code: str = "000300") -> IndexResearchOutput:
     return IndexResearchOutput(
         results=results,
         nav=pd.DataFrame([{"index_code": code, "period_type": "full_history", "period_label": "full_history", "strategy_name": "index_trend_v1", "trade_date": pd.Timestamp("2020-01-02"), "nav": 1.0, "weight": 0.0}]),
-        trades=pd.DataFrame([{"index_code": code, "action": "BUY"}]),
-        yearly=results.assign(period_type="calendar_year"),
+        trades=pd.DataFrame([{
+            "index_code": code, "period_type": "full_history", "period_label": "full_history",
+            "strategy_name": "index_trend_v1", "signal_date": "2020-01-01", "trade_date": "2020-01-02",
+            "action": "BUY", "execution_price": 100.0, "weight_before": 0.0, "weight_after": 1.0,
+            "commission": 0.01, "delay_days": 1, "reason": "test", "trigger_rules": "[]",
+            "reference_price": 100.0, "slippage_cost": 0.02,
+        }]),
+        yearly=pd.concat([results.assign(period_type="calendar_year"), results.assign(period_type="stage", period_label="stage_2020")], ignore_index=True),
         rolling=results.assign(period_type="rolling_5y"),
         buffer_comparison=pd.DataFrame([{"index_code": code, "cohort": "official", "buffer_rate": 0.02, "whipsaw_trade_rate": 0.1, "annualized_trade_count": 2.0}]),
         stress_results=results.assign(period_label="stress_double_cost"),
@@ -217,7 +265,11 @@ def sample_run_meta(run_id: str) -> dict[str, object]:
             "buffer_reduces_whipsaw_rate_and_trades": True,
             "stress_keeps_first_four_gates": True,
         },
-        "gate_values": {"drawdown_win_rate": 0.4},
+        "gate_values": {"drawdown_win_rate": 0.4, "official_index_count": 1},
         "gate_reasons": ["drawdown_win_rate:样本不足"],
         "exclusions": [],
     }
+
+
+def assert_records_equal(actual: pd.DataFrame, expected: pd.DataFrame) -> None:
+    assert actual.fillna("<NA>").astype(str).to_dict("records") == expected.fillna("<NA>").astype(str).to_dict("records")

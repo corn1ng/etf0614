@@ -41,15 +41,25 @@ _RUN_META_REQUIRED = frozenset({
     "official_count", "reference_count", "exclusion_count", "status", "gates", "gate_values",
     "gate_reasons", "exclusions",
 })
+_GATE_NAMES = (
+    "drawdown_win_rate", "median_drawdown_reduction", "median_calmar_improves",
+    "median_return_is_retained", "buffer_reduces_whipsaw_rate_and_trades",
+    "stress_keeps_first_four_gates",
+)
+_SUMMARY_SECTIONS = (
+    "effectiveness_status", "effectiveness_gate", "group_statistics", "worst_indices",
+    "rolling_gate_summary", "stress_results", "prospective_status",
+)
 _CSV_REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
-    "index_backtest_results.csv": frozenset({"index_code", "period_type", "strategy_name"}),
-    "index_backtest_trades.csv": frozenset({"index_code"}),
-    "index_strategy_summary.csv": frozenset({"section"}),
-    "index_strategy_yearly.csv": frozenset({"index_code", "period_type", "strategy_name"}),
-    "index_strategy_rolling_5y.csv": frozenset({"index_code", "period_type", "strategy_name"}),
-    "index_strategy_buffer_comparison.csv": frozenset({"index_code", "buffer_rate"}),
+    "index_backtest_results.csv": frozenset({"index_code", "name", "cohort", "market", "index_type", "period_type", "period_label", "period_start", "period_end", "strategy_name"}),
+    "index_backtest_trades.csv": frozenset({"index_code", "period_type", "period_label", "strategy_name", "signal_date", "trade_date", "action", "execution_price", "weight_before", "weight_after", "commission", "delay_days", "reason", "trigger_rules"}),
+    "index_strategy_summary.csv": frozenset({"section", "columns_json", "dtypes_json", "is_empty"}),
+    "index_strategy_yearly.csv": frozenset({"index_code", "period_type", "period_label", "period_start", "period_end", "strategy_name"}),
+    "index_strategy_rolling_5y.csv": frozenset({"index_code", "period_type", "period_label", "period_start", "period_end", "strategy_name"}),
+    "index_strategy_buffer_comparison.csv": frozenset({"index_code", "cohort", "buffer_rate", "whipsaw_trade_rate", "annualized_trade_count"}),
     "index_strategy_exclusions.csv": frozenset({"index_code", "name", "reason_code"}),
 }
+_NAV_REQUIRED_COLUMNS = frozenset({"index_code", "period_type", "period_label", "strategy_name", "trade_date", "nav", "weight"})
 
 
 @dataclass(frozen=True)
@@ -77,6 +87,11 @@ class LoadedIndexResearch:
     exclusions: pd.DataFrame
     nav: pd.DataFrame
     report_markdown: str
+    stress_results: pd.DataFrame
+    prospective_status: pd.DataFrame
+    group_statistics: pd.DataFrame
+    worst_indices: pd.DataFrame
+    rolling_gate_summary: pd.DataFrame
 
 
 def publish_index_research(
@@ -91,6 +106,7 @@ def publish_index_research(
     """
 
     meta = _normalise_run_meta(run_meta)
+    _validate_output_and_meta(output, meta)
     root = Path(report_root)
     runs = root / "runs"
     run_id = str(meta["run_id"])
@@ -132,19 +148,31 @@ def load_latest_index_research(report_root: str | Path) -> LoadedIndexResearch:
     run_dir = root / "runs" / run_id
     _validate_run_directory(run_dir, run_id)
     meta = _read_meta(run_dir / "index_trend_strategy_run.json", run_id)
+    summary = _read_csv(run_dir / "index_strategy_summary.csv")
+    sections = _unpack_summary(summary)
+    results = _read_csv(run_dir / "index_backtest_results.csv")
+    trades = _read_csv(run_dir / "index_backtest_trades.csv")
+    exclusions = _read_csv(run_dir / "index_strategy_exclusions.csv")
+    nav = _read_nav(run_dir / "index_strategy_nav.parquet")
+    _validate_cross_artifact_consistency(meta, results, trades, exclusions, nav, sections)
     return LoadedIndexResearch(
         run_id=run_id,
         run_dir=run_dir,
         run_meta=meta,
-        results=_read_csv(run_dir / "index_backtest_results.csv"),
-        trades=_read_csv(run_dir / "index_backtest_trades.csv"),
-        summary=_read_csv(run_dir / "index_strategy_summary.csv"),
+        results=results,
+        trades=trades,
+        summary=summary,
         yearly=_read_csv(run_dir / "index_strategy_yearly.csv"),
         rolling=_read_csv(run_dir / "index_strategy_rolling_5y.csv"),
         buffer_comparison=_read_csv(run_dir / "index_strategy_buffer_comparison.csv"),
-        exclusions=_read_csv(run_dir / "index_strategy_exclusions.csv"),
-        nav=pd.read_parquet(run_dir / "index_strategy_nav.parquet"),
+        exclusions=exclusions,
+        nav=nav,
         report_markdown=(run_dir / "index_trend_strategy_report.md").read_text(encoding="utf-8"),
+        stress_results=sections["stress_results"],
+        prospective_status=sections["prospective_status"],
+        group_statistics=sections["group_statistics"],
+        worst_indices=sections["worst_indices"],
+        rolling_gate_summary=sections["rolling_gate_summary"],
     )
 
 
@@ -176,7 +204,7 @@ def render_index_research_markdown(output: IndexResearchOutput, run_meta: Mappin
     lines.extend(_table_section("0/2/3% 缓冲诊断", output.buffer_comparison))
     lines.extend(_table_section("双倍费用", output.stress_results))
     lines.extend(_table_section("年度/阶段", output.yearly))
-    lines.extend(_table_section("最好与最差指数", output.worst_indices))
+    lines.extend(_table_section("最好与最差指数", _best_and_worst_indices(output.results)))
     reference = output.results[output.results.get("cohort", pd.Series(dtype="object")) == "reference"] if "cohort" in output.results else pd.DataFrame()
     lines.extend(_table_section("扩展样本", reference))
     exclusions = _exclusions_frame(meta)
@@ -222,35 +250,113 @@ def run_and_publish_index_research(
 
 def _write_artifacts(directory: Path, output: IndexResearchOutput, meta: dict[str, object]) -> None:
     _write_csv(directory / "index_backtest_results.csv", output.results)
-    _write_csv(directory / "index_backtest_trades.csv", output.trades)
+    _write_csv(directory / "index_backtest_trades.csv", _complete_empty_schema(output.trades, _CSV_REQUIRED_COLUMNS["index_backtest_trades.csv"]))
     _write_csv(directory / "index_strategy_summary.csv", _summary_frame(output))
     _write_csv(directory / "index_strategy_yearly.csv", output.yearly)
     _write_csv(directory / "index_strategy_rolling_5y.csv", output.rolling)
     _write_csv(directory / "index_strategy_buffer_comparison.csv", output.buffer_comparison)
     _write_csv(directory / "index_strategy_exclusions.csv", _exclusions_frame(meta))
-    output.nav.to_parquet(directory / "index_strategy_nav.parquet", index=False)
+    _complete_empty_schema(output.nav, _NAV_REQUIRED_COLUMNS).to_parquet(directory / "index_strategy_nav.parquet", index=False)
     (directory / "index_trend_strategy_report.md").write_text(render_index_research_markdown(output, meta), encoding="utf-8")
     (directory / "index_trend_strategy_run.json").write_text(_json_dumps(meta), encoding="utf-8")
 
 
 def _summary_frame(output: IndexResearchOutput) -> pd.DataFrame:
-    gate_rows = pd.DataFrame([
-        {"section": "effectiveness_gate", "name": name, "passed": passed,
-         "value": output.effectiveness.values.get(name),
+    status = pd.DataFrame([{
+        "status": output.effectiveness.status,
+        "gates_json": _json_dumps(output.effectiveness.gates),
+        "values_json": _json_dumps(output.effectiveness.values),
+        "reasons_json": _json_dumps(list(output.effectiveness.reasons)),
+    }])
+    gates = pd.DataFrame([
+        {"name": name, "passed": passed, "value": output.effectiveness.values.get(name),
          "reason": "; ".join(reason for reason in output.effectiveness.reasons if reason.startswith(f"{name}:"))}
         for name, passed in output.effectiveness.gates.items()
     ])
-    status = pd.DataFrame([{"section": "effectiveness_status", "name": "overall", "passed": output.effectiveness.status == "passed", "value": output.effectiveness.status, "reason": "; ".join(output.effectiveness.reasons)}])
-    groups = output.group_statistics.copy()
-    if not groups.empty:
-        groups.insert(0, "section", "group_statistics")
-    rolling = output.rolling_gate_summary.copy()
-    if not rolling.empty:
-        rolling.insert(0, "section", "rolling_gate_summary")
-    worst = output.worst_indices.copy()
-    if not worst.empty:
-        worst.insert(0, "section", "worst_indices")
-    return pd.concat([status, gate_rows, groups, rolling, worst], ignore_index=True, sort=False)
+    return pd.concat([
+        _pack_summary_section("effectiveness_status", status),
+        _pack_summary_section("effectiveness_gate", gates),
+        _pack_summary_section("group_statistics", output.group_statistics),
+        _pack_summary_section("worst_indices", output.worst_indices),
+        _pack_summary_section("rolling_gate_summary", output.rolling_gate_summary),
+        _pack_summary_section("stress_results", output.stress_results),
+        _pack_summary_section("prospective_status", output.prospective_status),
+    ], ignore_index=True, sort=False)
+
+
+def _pack_summary_section(section: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """Store heterogeneous Task 4 tables losslessly in one sectioned CSV."""
+
+    source = frame.copy()
+    columns = list(source.columns)
+    if source.empty:
+        source = pd.DataFrame([{column: None for column in columns}])
+        empty = True
+    else:
+        empty = False
+    source.insert(0, "is_empty", empty)
+    source.insert(0, "dtypes_json", _json_dumps({column: str(dtype) for column, dtype in frame.dtypes.items()}))
+    source.insert(0, "columns_json", _json_dumps(columns))
+    source.insert(0, "section", section)
+    return source
+
+
+def _unpack_summary(summary: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    if not set(_SUMMARY_SECTIONS).issubset(set(summary["section"].dropna())):
+        raise ValueError("index research summary is missing a required section")
+    sections: dict[str, pd.DataFrame] = {}
+    for section in _SUMMARY_SECTIONS:
+        rows = summary[summary["section"] == section].copy()
+        if rows.empty or rows["columns_json"].nunique(dropna=True) != 1 or rows["is_empty"].nunique(dropna=True) != 1:
+            raise ValueError("index research summary section schema is invalid")
+        try:
+            columns = json.loads(str(rows["columns_json"].iloc[0]))
+            dtypes = json.loads(str(rows["dtypes_json"].iloc[0]))
+        except json.JSONDecodeError as exc:
+            raise ValueError("index research summary columns_json is invalid") from exc
+        if not isinstance(columns, list) or not all(isinstance(column, str) for column in columns) or not isinstance(dtypes, dict):
+            raise ValueError("index research summary columns_json is invalid")
+        missing = set(columns).difference(rows.columns)
+        if missing:
+            raise ValueError("index research summary section is missing stored columns")
+        if bool(rows["is_empty"].iloc[0]):
+            sections[section] = pd.DataFrame(columns=columns)
+        else:
+            restored = rows.loc[:, columns].reset_index(drop=True)
+            sections[section] = _restore_summary_dtypes(restored, dtypes)
+    gates = sections["effectiveness_gate"]
+    if set(gates.get("name", pd.Series(dtype="object"))) != set(_GATE_NAMES) or len(gates) != len(_GATE_NAMES):
+        raise ValueError("index research summary must contain six unique effectiveness gates")
+    return sections
+
+
+def _restore_summary_dtypes(frame: pd.DataFrame, dtypes: Mapping[str, object]) -> pd.DataFrame:
+    result = frame.copy()
+    for column, dtype in dtypes.items():
+        if column not in result:
+            continue
+        dtype_name = str(dtype)
+        if dtype_name.startswith("datetime"):
+            result[column] = pd.to_datetime(result[column], errors="raise")
+        elif dtype_name.startswith("int") or dtype_name.startswith("Int"):
+            result[column] = pd.to_numeric(result[column], errors="raise").astype(dtype_name)
+        elif dtype_name.startswith("float"):
+            result[column] = pd.to_numeric(result[column], errors="raise").astype(dtype_name)
+        elif dtype_name in {"bool", "boolean"}:
+            result[column] = result[column].astype(dtype_name)
+        elif dtype_name.startswith("string"):
+            result[column] = result[column].astype("string")
+    return result
+
+
+def _complete_empty_schema(frame: pd.DataFrame, required: frozenset[str]) -> pd.DataFrame:
+    if frame.empty:
+        result = frame.copy()
+        for column in required:
+            if column not in result:
+                result[column] = pd.Series(dtype="object")
+        return result
+    return frame
 
 
 def _table_section(title: str, frame: pd.DataFrame) -> list[str]:
@@ -261,6 +367,20 @@ def _table_section(title: str, frame: pd.DataFrame) -> list[str]:
     for column in preview.select_dtypes(include=["datetime", "datetimetz"]).columns:
         preview[column] = preview[column].astype(str)
     return [*lines, preview.to_markdown(index=False)]
+
+
+def _best_and_worst_indices(results: pd.DataFrame) -> pd.DataFrame:
+    required = {"index_code", "cohort", "period_type", "strategy_name", "annualized_return"}
+    if not required.issubset(results.columns):
+        return pd.DataFrame(columns=["side", *sorted(required)])
+    base = results[(results["cohort"] == "official") & (results["period_type"] == "full_history") & (results["strategy_name"] == "index_trend_v1")].copy()
+    if base.empty:
+        return pd.DataFrame(columns=["side", *results.columns])
+    base["annualized_return"] = pd.to_numeric(base["annualized_return"], errors="coerce")
+    base = base.dropna(subset=["annualized_return"])
+    best = base.sort_values(["annualized_return", "index_code"], ascending=[False, True], kind="stable").head(10).assign(side="best")
+    worst = base.sort_values(["annualized_return", "index_code"], ascending=[True, True], kind="stable").head(10).assign(side="worst")
+    return pd.concat([best, worst], ignore_index=True)
 
 
 def _gate_detail(name: str, values: Mapping[str, object]) -> tuple[object, str]:
@@ -305,8 +425,10 @@ def _normalise_run_meta(run_meta: Mapping[str, object]) -> dict[str, object]:
             raise ValueError(f"run metadata {key} must be a non-negative integer")
     if str(meta["status"]) not in {"passed", "failed"}:
         raise ValueError("run metadata status must be passed or failed")
-    if not isinstance(meta["gates"], dict) or len(meta["gates"]) != 6 or not all(type(value) is bool for value in meta["gates"].values()):
+    if not isinstance(meta["gates"], dict) or set(meta["gates"]) != set(_GATE_NAMES) or not all(type(value) is bool for value in meta["gates"].values()):
         raise ValueError("run metadata must contain six boolean gates")
+    if meta["status"] != ("passed" if all(meta["gates"].values()) else "failed"):
+        raise ValueError("run metadata effectiveness status disagrees with its gates")
     if not isinstance(meta["gate_values"], dict) or not isinstance(meta["gate_reasons"], list) or not isinstance(meta["exclusions"], list):
         raise ValueError("run metadata has invalid audit fields")
     return _json_safe(meta)
@@ -337,6 +459,100 @@ def _build_run_meta(config_path: Path, config: IndexResearchConfig, admission: I
     }
 
 
+def _validate_output_and_meta(output: IndexResearchOutput, meta: Mapping[str, object]) -> None:
+    assessment = output.effectiveness
+    if set(assessment.gates) != set(_GATE_NAMES) or not all(type(value) is bool for value in assessment.gates.values()):
+        raise ValueError("output effectiveness must contain the fixed six boolean gates")
+    expected_status = "passed" if all(assessment.gates.values()) else "failed"
+    if assessment.status != expected_status or meta["status"] != expected_status:
+        raise ValueError("effectiveness status must exactly match all six gates")
+    if dict(meta["gates"]) != assessment.gates:
+        raise ValueError("effectiveness gates in metadata disagree with output")
+    if _json_safe(meta["gate_values"]) != _json_safe(assessment.values):
+        raise ValueError("effectiveness values in metadata disagree with output")
+    if list(meta["gate_reasons"]) != _json_safe(list(assessment.reasons)):
+        raise ValueError("effectiveness reasons in metadata disagree with output")
+    if {"index_code", "cohort"}.issubset(output.results.columns):
+        cohorts = output.results[["index_code", "cohort"]].drop_duplicates()
+        official_count = int((cohorts["cohort"] == "official").sum())
+        reference_count = int((cohorts["cohort"] == "reference").sum())
+        if meta["official_count"] != official_count or meta["reference_count"] != reference_count:
+            raise ValueError("run metadata cohort counts disagree with structured results")
+    exclusions = _exclusions_frame(meta)
+    if meta["exclusion_count"] != len(exclusions):
+        raise ValueError("run metadata exclusion count disagrees with exclusions")
+    _validate_frame_schema(output.results, "index_backtest_results.csv")
+    _validate_frame_schema(_complete_empty_schema(output.trades, _CSV_REQUIRED_COLUMNS["index_backtest_trades.csv"]), "index_backtest_trades.csv")
+    _validate_frame_schema(output.yearly, "index_strategy_yearly.csv")
+    _validate_frame_schema(output.rolling, "index_strategy_rolling_5y.csv")
+    _validate_frame_schema(output.buffer_comparison, "index_strategy_buffer_comparison.csv")
+    _validate_frame_schema(exclusions, "index_strategy_exclusions.csv")
+    _validate_nav(_complete_empty_schema(output.nav, _NAV_REQUIRED_COLUMNS))
+    _validate_meta_cutoff(meta, output.results, output.trades, output.nav)
+
+
+def _validate_cross_artifact_consistency(
+    meta: Mapping[str, object], results: pd.DataFrame, trades: pd.DataFrame,
+    exclusions: pd.DataFrame, nav: pd.DataFrame, sections: Mapping[str, pd.DataFrame],
+) -> None:
+    _validate_frame_schema(results, "index_backtest_results.csv")
+    _validate_frame_schema(trades, "index_backtest_trades.csv")
+    _validate_frame_schema(exclusions, "index_strategy_exclusions.csv")
+    _validate_nav(nav)
+    status = sections["effectiveness_status"]
+    if len(status) != 1:
+        raise ValueError("index research summary must have one effectiveness status row")
+    try:
+        gates = json.loads(str(status["gates_json"].iloc[0]))
+        values = json.loads(str(status["values_json"].iloc[0]))
+        reasons = json.loads(str(status["reasons_json"].iloc[0]))
+    except (KeyError, json.JSONDecodeError) as exc:
+        raise ValueError("index research summary effectiveness payload is invalid") from exc
+    if status["status"].iloc[0] != meta["status"] or gates != meta["gates"] or values != meta["gate_values"] or reasons != meta["gate_reasons"]:
+        raise ValueError("index research summary effectiveness disagrees with metadata")
+    if exclusions.fillna("").to_dict("records") != _exclusions_frame(meta).fillna("").to_dict("records"):
+        raise ValueError("index research exclusions disagree with metadata")
+    _validate_meta_cutoff(meta, results, trades, nav)
+
+
+def _validate_frame_schema(frame: pd.DataFrame, artifact: str) -> None:
+    required = _CSV_REQUIRED_COLUMNS[artifact]
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(f"index research {artifact} schema is invalid; missing={sorted(missing)}")
+    for column in ("period_start", "period_end", "signal_date", "trade_date"):
+        if column in frame and not frame.empty and pd.to_datetime(frame[column], errors="coerce").isna().any():
+            raise ValueError(f"index research {artifact} has an invalid {column}")
+    for column in ("buffer_rate", "whipsaw_trade_rate", "annualized_trade_count", "execution_price", "weight_before", "weight_after", "commission", "delay_days"):
+        if column in frame and not frame.empty:
+            values = pd.to_numeric(frame[column], errors="coerce")
+            if values.isna().any() or not values.map(math.isfinite).all():
+                raise ValueError(f"index research {artifact} has an invalid {column}")
+
+
+def _validate_nav(nav: pd.DataFrame) -> None:
+    missing = _NAV_REQUIRED_COLUMNS.difference(nav.columns)
+    if missing:
+        raise ValueError(f"index research NAV schema is invalid; missing={sorted(missing)}")
+    if nav.empty:
+        return
+    dates = pd.to_datetime(nav["trade_date"], errors="coerce")
+    values = pd.to_numeric(nav["nav"], errors="coerce")
+    weights = pd.to_numeric(nav["weight"], errors="coerce")
+    if dates.isna().any() or values.isna().any() or weights.isna().any() or not values.map(math.isfinite).all() or not weights.map(math.isfinite).all():
+        raise ValueError("index research NAV has invalid dates or numbers")
+
+
+def _validate_meta_cutoff(meta: Mapping[str, object], results: pd.DataFrame, trades: pd.DataFrame, nav: pd.DataFrame) -> None:
+    dates: list[pd.Timestamp] = []
+    for frame, column in ((results, "period_end"), (trades, "signal_date"), (trades, "trade_date"), (nav, "trade_date")):
+        if column in frame and not frame.empty:
+            parsed = pd.to_datetime(frame[column], errors="coerce").dropna()
+            dates.extend(pd.Timestamp(value).normalize() for value in parsed)
+    if dates and pd.Timestamp(meta["data_cutoff"]).normalize() < max(dates):
+        raise ValueError("run metadata data_cutoff is earlier than structured evidence")
+
+
 def _validate_run_directory(directory: Path, run_id: str) -> None:
     if not directory.is_dir():
         raise ValueError("latest index research run directory is missing")
@@ -349,12 +565,16 @@ def _validate_run_directory(directory: Path, run_id: str) -> None:
         path = directory / name
         if not path.stat().st_size:
             raise ValueError(f"required index research artifact is empty: {name}")
-    _read_meta(directory / "index_trend_strategy_run.json", run_id)
-    for name in REQUIRED_ARTIFACTS:
-        path = directory / name
-        if name.endswith(".csv"):
-            _read_csv(path)
-    pd.read_parquet(directory / "index_strategy_nav.parquet")
+    meta = _read_meta(directory / "index_trend_strategy_run.json", run_id)
+    results = _read_csv(directory / "index_backtest_results.csv")
+    trades = _read_csv(directory / "index_backtest_trades.csv")
+    summary = _read_csv(directory / "index_strategy_summary.csv")
+    exclusions = _read_csv(directory / "index_strategy_exclusions.csv")
+    _read_csv(directory / "index_strategy_yearly.csv")
+    _read_csv(directory / "index_strategy_rolling_5y.csv")
+    _read_csv(directory / "index_strategy_buffer_comparison.csv")
+    nav = _read_nav(directory / "index_strategy_nav.parquet")
+    _validate_cross_artifact_consistency(meta, results, trades, exclusions, nav, _unpack_summary(summary))
     (directory / "index_trend_strategy_report.md").read_text(encoding="utf-8")
 
 
@@ -390,7 +610,18 @@ def _read_csv(path: Path) -> pd.DataFrame:
     missing = required.difference(frame.columns)
     if missing:
         raise ValueError(f"index research CSV schema is invalid: {path.name}; missing={sorted(missing)}")
+    if path.name != "index_strategy_summary.csv":
+        _validate_frame_schema(frame, path.name)
     return frame
+
+
+def _read_nav(path: Path) -> pd.DataFrame:
+    try:
+        nav = pd.read_parquet(path)
+    except (OSError, ValueError) as exc:
+        raise ValueError("index research NAV is unreadable") from exc
+    _validate_nav(nav)
+    return nav
 
 
 def _write_csv(path: Path, frame: pd.DataFrame) -> None:
@@ -402,9 +633,13 @@ def _replace_latest_pointer(root: Path, run_id: str) -> None:
     try:
         temporary.write_text(_json_dumps({"run_id": run_id}), encoding="utf-8")
         os.replace(temporary, root / "latest.json")
-    finally:
+    except Exception:
         if temporary.exists():
-            temporary.unlink()
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+        raise
 
 
 def _safe_run_id(run_id: str) -> bool:

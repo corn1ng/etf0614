@@ -108,3 +108,55 @@ records that there is no prospective sample after the lock date.
 - The two-index smoke is explicitly limited and is not a full-universe conclusion.
   The first phase remains an index theoretical backtest, not ETF implementation
   evidence.
+
+## Review hardening
+
+Independent review identified that the original package did not losslessly reload
+all Task 4 structured outputs and did not cross-check metadata against the output.
+The follow-up first added discriminating tests and ran:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_report.py tests\test_index_research_validation.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-review-red
+```
+
+RED result: `38 passed, 5 failed in 12.97s`, covering missing structured reload,
+metadata/output effectiveness disagreement, weak trade schema, absent best/worst
+labels, and stress reasons leaking into the formal-gate namespace.
+
+The package now stores all heterogeneous Task 4 tables in the summary CSV with
+explicit `section`, stored column names and dtype schema. Loader reconstruction
+returns separate `stress_results`, `prospective_status`, `group_statistics`,
+`worst_indices`, and `rolling_gate_summary` frames. It validates every fixed
+section, six unique gates, CSV/NAV fields and date/numeric evidence, plus metadata
+against result/trade/NAV/exclusion/summary evidence before formal rename and on
+load. Empty trades retain their full schema. The report derives stable official
+full-history V1 top/bottom ten rows marked `best`/`worst`, while the structured
+summary retains Task 4's original worst-index table.
+
+Stress-gate evaluation now uses local reason collection and prefixes all stress
+evidence with `stress_keeps_first_four_gates:`; a stress failure can no longer
+make a formal gate's report reason appear failed. Temporary pointer cleanup is
+best effort and cannot replace the original pointer-update exception.
+
+GREEN focused suite:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_report.py tests\test_index_research_validation.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-review-green2
+```
+
+Result: `43 passed in 13.84s`.
+
+Full suite:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-review-full
+```
+
+Result: `543 passed, 1 skipped in 42.29s`.
+
+Real two-index regression smoke reused only the main workspace's read-only local
+Parquet root and wrote to `C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-review-smoke`.
+It completed with run ID `20260730T165423581757Z-9cbbaed2f0`, 10 artifacts,
+`official_count=2`, `limited_run=true`, and truthful `failed` status. Strict
+reload succeeded and recovered 4 stress rows, 2 prospective rows, and 12 group
+statistic rows.

@@ -175,6 +175,17 @@ def test_stress_gate_recomputes_first_four_gates_under_stress_costs():
     assert assessment.status == "failed"
 
 
+def test_stress_failure_reasons_do_not_leak_into_formal_gate_namespaces():
+    stress = paired_results(cohort="official", v1_return=0.01, buy_hold_return=0.10)
+    assessment = evaluate_effectiveness(paired_results(cohort="official"), buffer_rows(), stress, make_config())
+
+    assert assessment.gates["median_calmar_improves"] is True
+    assert assessment.gates["median_return_is_retained"] is True
+    assert not any(reason.startswith("median_calmar_improves:") for reason in assessment.reasons)
+    assert not any(reason.startswith("median_return_is_retained:") for reason in assessment.reasons)
+    assert any(reason.startswith("stress_keeps_first_four_gates:") for reason in assessment.reasons)
+
+
 def test_each_failed_gate_has_an_auditable_reason_with_its_name():
     failed = paired_results(v1_drawdown=-0.60, v1_return=0.01).assign(
         calmar=lambda rows: np.where(rows["strategy_name"] == "index_trend_v1", 0.5, 0.8)

@@ -449,11 +449,13 @@ def _buffer_gate(buffer: pd.DataFrame, config: IndexResearchConfig, reasons: lis
 
 
 def _stress_gate(stress: pd.DataFrame, config: IndexResearchConfig, reasons: list[str], values: dict[str, object]) -> bool:
-    pairs = _paired_full_history(stress, reasons)
-    gates, stress_values = _first_four_gates(pairs, config, reasons)
+    stress_reasons: list[str] = []
+    pairs = _paired_full_history(stress, stress_reasons)
+    gates, stress_values = _first_four_gates(pairs, config, stress_reasons)
     values["stress_first_four_gates"] = gates
     values.update({f"stress_{key}": value for key, value in stress_values.items()})
     passed = all(gates.values())
+    reasons.extend(f"stress_keeps_first_four_gates:{reason}" for reason in stress_reasons)
     if not passed:
         reasons.append(f"stress_keeps_first_four_gates:first_four={gates}")
     return passed
