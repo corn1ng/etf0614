@@ -205,6 +205,67 @@ def test_missing_amount_only_marks_expanded_activity_atoms_missing(tmp_path):
     assert _detail_status(details, "000300", "rsi_14") == "computed"
 
 
+@pytest.mark.parametrize(
+    "invalid_close",
+    [0.0, -1.0, np.nan, np.inf, -np.inf],
+    ids=["zero", "negative", "nan", "positive_infinity", "negative_infinity"],
+)
+def test_expanded_price_atoms_reject_nonpositive_or_nonfinite_close(tmp_path, invalid_close):
+    prices = _price_history(300)
+    prices.loc[prices.index[-1], "close"] = invalid_close
+    store = _store_with_index_prices(tmp_path, "000300", prices)
+
+    _, details = build_index_atomic_snapshot(store, (_definition("000300"),))
+
+    for metric_key in (
+        "ma_20_change_20",
+        "ma_60_change_20",
+        "ma_120_change_20",
+        "rsi_14",
+        "up_day_ratio_20",
+        "max_drawdown_60",
+        "max_drawdown_120",
+        "max_drawdown_250",
+        "annualized_volatility_20",
+        "annualized_volatility_60",
+        "downside_volatility_60",
+        "atr_14_pct",
+    ):
+        assert _detail_status(details, "000300", metric_key) == "calculation_failed"
+        assert pd.isna(_detail_value(details, "000300", metric_key))
+
+
+@pytest.mark.parametrize(
+    ("metric_key", "minimum_rows"),
+    [
+        ("ma_20_change_20", 40),
+        ("ma_60_change_20", 80),
+        ("ma_120_change_20", 140),
+        ("rsi_14", 15),
+        ("up_day_ratio_20", 21),
+        ("max_drawdown_60", 60),
+        ("max_drawdown_120", 120),
+        ("max_drawdown_250", 250),
+        ("annualized_volatility_20", 21),
+        ("annualized_volatility_60", 61),
+        ("downside_volatility_60", 61),
+        ("atr_14_pct", 15),
+        ("amount_avg_60", 60),
+        ("amount_vs_avg_20", 20),
+        ("amount_vs_avg_60", 60),
+    ],
+)
+def test_expanded_atoms_require_their_exact_minimum_history_rows(tmp_path, metric_key, minimum_rows):
+    minimum_store = _store_with_index_prices(tmp_path / "minimum", "000300", _price_history(minimum_rows))
+    _, minimum_details = build_index_atomic_snapshot(minimum_store, (_definition("000300"),))
+
+    short_store = _store_with_index_prices(tmp_path / "short", "000300", _price_history(minimum_rows - 1))
+    _, short_details = build_index_atomic_snapshot(short_store, (_definition("000300"),))
+
+    assert _detail_status(minimum_details, "000300", metric_key) == "computed"
+    assert _detail_status(short_details, "000300", metric_key) == "insufficient_history"
+
+
 def test_snapshot_preserves_catalog_order_and_never_reads_valuation_parquet(tmp_path, monkeypatch):
     store = _store_with_index_prices(tmp_path, "000300", _price_history(260))
     store.write_index_prices("000905", _price_history(260).assign(index_code="000905"))

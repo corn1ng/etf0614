@@ -354,10 +354,19 @@ def _atomic_metric_rows(
         value, status, reason = _maximum_drawdown(close, window)
         rows.append(_detail(index_code, "return_drawdown", f"max_drawdown_{window}", f"{window}日最大回撤", value, status, reason, latest_date, sample_count, data_source))
 
+    atr_close_values, atr_close_status, atr_close_reason = _positive_finite_close_tail(close, 1)
+    atr_close = pd.NA if atr_close_values is None else float(atr_close_values.iloc[-1])
     value, status, reason = _atr_14(data, close)
     rows.append(_detail(index_code, "volatility_volume", "atr_14", "ATR14", value, status, reason, latest_date, sample_count, data_source))
     atr_value, atr_status, atr_reason = value, status, reason
-    value, status, reason = _atr_percent(atr_value, atr_status, atr_reason, close_value, close_status, close_reason)
+    value, status, reason = _atr_percent(
+        atr_value,
+        atr_status,
+        atr_reason,
+        atr_close,
+        atr_close_status,
+        atr_close_reason,
+    )
     rows.append(_detail(index_code, "volatility_volume", "atr_14_pct", "ATR14占收盘价比例", value, status, reason, latest_date, sample_count, data_source))
     value, status, reason = _return_std_20(close)
     rows.append(_detail(index_code, "volatility_volume", "return_std_20", "20日收益率标准差", value, status, reason, latest_date, sample_count, data_source))
@@ -410,6 +419,21 @@ def _tail(close: pd.Series | None, rows: int, column: str) -> tuple[pd.Series | 
     values = close.iloc[-rows:]
     if values.isna().any():
         return None, "missing_input", f"最近 {rows} 行 {column} 存在缺失值"
+    return values, "computed", "已从本地指数历史计算"
+
+
+def _positive_finite_close_tail(close: pd.Series | None, rows: int) -> tuple[pd.Series | None, str, str]:
+    if close is None:
+        return None, "missing_input", "缺少 close 字段"
+    if len(close) < rows:
+        return None, "insufficient_history", f"本地指数历史只有 {len(close)} 行，少于计算所需 {rows} 行"
+    values = close.iloc[-rows:]
+    try:
+        numeric_values = values.to_numpy(dtype=float)
+    except (TypeError, ValueError):
+        return None, "calculation_failed", "收盘价包含非正或非有限值"
+    if (~np.isfinite(numeric_values) | (numeric_values <= 0)).any():
+        return None, "calculation_failed", "收盘价包含非正或非有限值"
     return values, "computed", "已从本地指数历史计算"
 
 
@@ -536,14 +560,14 @@ def _return_std_20(close: pd.Series | None) -> tuple[object, str, str]:
 
 
 def _annualized_volatility(close: pd.Series | None, window: int) -> tuple[object, str, str]:
-    values, status, reason = _tail(close, window + 1, "close")
+    values, status, reason = _positive_finite_close_tail(close, window + 1)
     if values is None:
         return pd.NA, status, reason
     return float(values.pct_change().iloc[1:].std() * np.sqrt(252)), "computed", "按日收益率样本标准差年化"
 
 
 def _maximum_drawdown(close: pd.Series | None, window: int) -> tuple[object, str, str]:
-    values, status, reason = _tail(close, window, "close")
+    values, status, reason = _positive_finite_close_tail(close, window)
     if values is None:
         return pd.NA, status, reason
     drawdowns = values / values.cummax() - 1
@@ -551,7 +575,7 @@ def _maximum_drawdown(close: pd.Series | None, window: int) -> tuple[object, str
 
 
 def _rsi_14(close: pd.Series | None) -> tuple[object, str, str]:
-    values, status, reason = _tail(close, 15, "close")
+    values, status, reason = _positive_finite_close_tail(close, 15)
     if values is None:
         return pd.NA, status, reason
     changes = values.diff().iloc[1:]
@@ -563,7 +587,7 @@ def _rsi_14(close: pd.Series | None) -> tuple[object, str, str]:
 
 
 def _ma_change(close: pd.Series | None, ma_window: int, lookback: int = 20) -> tuple[object, str, str]:
-    values, status, reason = _tail(close, ma_window + lookback, "close")
+    values, status, reason = _positive_finite_close_tail(close, ma_window + lookback)
     if values is None:
         return pd.NA, status, reason
     moving_average = values.rolling(ma_window).mean().dropna()
@@ -574,7 +598,7 @@ def _ma_change(close: pd.Series | None, ma_window: int, lookback: int = 20) -> t
 
 
 def _up_day_ratio_20(close: pd.Series | None) -> tuple[object, str, str]:
-    values, status, reason = _tail(close, 21, "close")
+    values, status, reason = _positive_finite_close_tail(close, 21)
     if values is None:
         return pd.NA, status, reason
     returns = values.pct_change().iloc[1:]
@@ -582,7 +606,7 @@ def _up_day_ratio_20(close: pd.Series | None) -> tuple[object, str, str]:
 
 
 def _downside_volatility_60(close: pd.Series | None) -> tuple[object, str, str]:
-    values, status, reason = _tail(close, 61, "close")
+    values, status, reason = _positive_finite_close_tail(close, 61)
     if values is None:
         return pd.NA, status, reason
     returns = values.pct_change().iloc[1:].to_numpy(dtype=float)
@@ -598,12 +622,12 @@ def _atr_percent(
     close_status: str,
     close_reason: str,
 ) -> tuple[object, str, str]:
-    if atr_status != "computed":
-        return pd.NA, atr_status, atr_reason
     if close_status != "computed":
         return pd.NA, close_status, close_reason
-    if float(close_value) <= 0:
-        return pd.NA, "calculation_failed", "最新收盘价非正，无法计算ATR比例"
+    if atr_status != "computed":
+        return pd.NA, atr_status, atr_reason
+    if not np.isfinite(float(atr_value)):
+        return pd.NA, "calculation_failed", "ATR14非有限，无法计算ATR比例"
     return float(atr_value) / float(close_value), "computed", "ATR14除以最新正收盘价"
 
 
