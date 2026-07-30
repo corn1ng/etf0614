@@ -403,8 +403,10 @@ def _render_index_profile_trend_risk(profile) -> None:
 def _render_index_profile_all_groups(groups) -> None:
     with ui.element("div").classes("index-profile-section-grid"):
         for group in groups:
-            with ui.element("section").classes("index-profile-panel"):
-                ui.label(group.title).classes("index-profile-panel-title")
+            with ui.expansion(
+                group.title,
+                value=group.title == "价格与均线",
+            ).classes("index-profile-panel index-profile-all-group"):
                 if not group.items:
                     ui.label("数据不足").classes("index-profile-reason")
                 for item in group.items:

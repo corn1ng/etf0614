@@ -101,6 +101,54 @@ def test_market_profile_overview_compact_risk_panel_explains_all_empty_sections(
     assert "数据不足" in fake_ui.labels
 
 
+def test_market_profile_all_groups_use_independent_scoped_expansions(monkeypatch):
+    from etf_trading.nicegui_app.pages import market
+
+    expansions: list[tuple[str, bool, object]] = []
+    labels: list[str] = []
+
+    class FakeElement:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def classes(self, _classes):
+            return self
+
+    class FakeUi:
+        def element(self, _tag):
+            return FakeElement()
+
+        def expansion(self, title, *, value=False):
+            expansion = FakeElement()
+            expansions.append((title, value, expansion))
+            return expansion
+
+        def label(self, value):
+            labels.append(value)
+            return FakeElement()
+
+    fake_ui = FakeUi()
+    monkeypatch.setattr(market, "ui", fake_ui)
+    groups = tuple(
+        type("Group", (), {"title": title, "items": ()})()
+        for title in ("价格与均线", "均线穿越", "技术指标")
+    )
+
+    market._render_index_profile_all_groups(groups)
+
+    assert [(title, value) for title, value, _expansion in expansions] == [
+        ("价格与均线", True),
+        ("均线穿越", False),
+        ("技术指标", False),
+    ]
+    assert len({id(expansion) for _title, _value, expansion in expansions}) == len(groups)
+    assert labels == ["数据不足"] * len(groups)
+    assert "ui.expansion(" in inspect.getsource(market._render_index_profile_all_groups)
+
+
 def test_market_page_uses_readonly_atomic_snapshot_and_no_legacy_health_builder():
     source = Path("src/etf_trading/nicegui_app/pages/market.py").read_text(encoding="utf-8")
 
