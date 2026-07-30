@@ -50,12 +50,16 @@ _SUMMARY_SECTIONS = (
     "effectiveness_status", "effectiveness_gate", "group_statistics", "worst_indices",
     "rolling_gate_summary", "stress_results", "prospective_status",
 )
+_PERFORMANCE_COLUMNS = frozenset({
+    "annualized_return", "volatility", "sharpe", "max_drawdown", "calmar", "total_return",
+    "avg_exposure", "trade_count", "trades_per_year", "whipsaw_trade_rate",
+})
 _CSV_REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
-    "index_backtest_results.csv": frozenset({"index_code", "name", "cohort", "market", "index_type", "period_type", "period_label", "period_start", "period_end", "strategy_name"}),
+    "index_backtest_results.csv": frozenset({"index_code", "name", "cohort", "market", "index_type", "period_type", "period_label", "period_start", "period_end", "strategy_name"}) | _PERFORMANCE_COLUMNS,
     "index_backtest_trades.csv": frozenset({"index_code", "period_type", "period_label", "strategy_name", "signal_date", "trade_date", "action", "execution_price", "weight_before", "weight_after", "commission", "delay_days", "reason", "trigger_rules"}),
     "index_strategy_summary.csv": frozenset({"section", "columns_json", "dtypes_json", "is_empty"}),
-    "index_strategy_yearly.csv": frozenset({"index_code", "period_type", "period_label", "period_start", "period_end", "strategy_name"}),
-    "index_strategy_rolling_5y.csv": frozenset({"index_code", "period_type", "period_label", "period_start", "period_end", "strategy_name"}),
+    "index_strategy_yearly.csv": frozenset({"index_code", "period_type", "period_label", "period_start", "period_end", "strategy_name"}) | _PERFORMANCE_COLUMNS,
+    "index_strategy_rolling_5y.csv": frozenset({"index_code", "period_type", "period_label", "period_start", "period_end", "strategy_name"}) | _PERFORMANCE_COLUMNS,
     "index_strategy_buffer_comparison.csv": frozenset({"index_code", "cohort", "buffer_rate", "whipsaw_trade_rate", "annualized_trade_count"}),
     "index_strategy_exclusions.csv": frozenset({"index_code", "name", "reason_code"}),
 }
@@ -203,8 +207,9 @@ def render_index_research_markdown(output: IndexResearchOutput, run_meta: Mappin
     lines.extend(_table_section("五年滚动稳定性", output.rolling))
     lines.extend(_table_section("0/2/3% 缓冲诊断", output.buffer_comparison))
     lines.extend(_table_section("双倍费用", output.stress_results))
-    lines.extend(_table_section("年度/阶段", output.yearly))
-    lines.extend(_table_section("最好与最差指数", _best_and_worst_indices(output.results)))
+    annual_and_stage = output.results[output.results["period_type"].isin(["calendar_year", "stage"])] if "period_type" in output.results else output.yearly
+    lines.extend(_table_section("年度/阶段", annual_and_stage))
+    lines.extend(_table_section("最好与最差指数", _best_and_worst_indices(output.results), limit=20))
     reference = output.results[output.results.get("cohort", pd.Series(dtype="object")) == "reference"] if "cohort" in output.results else pd.DataFrame()
     lines.extend(_table_section("扩展样本", reference))
     exclusions = _exclusions_frame(meta)
@@ -269,7 +274,7 @@ def _summary_frame(output: IndexResearchOutput) -> pd.DataFrame:
         "reasons_json": _json_dumps(list(output.effectiveness.reasons)),
     }])
     gates = pd.DataFrame([
-        {"name": name, "passed": passed, "value": output.effectiveness.values.get(name),
+        {"name": name, "passed": passed, "value": output.effectiveness.values.get(name), "value_json": _json_dumps({"value": output.effectiveness.values.get(name)}),
          "reason": "; ".join(reason for reason in output.effectiveness.reasons if reason.startswith(f"{name}:"))}
         for name, passed in output.effectiveness.gates.items()
     ])
@@ -302,12 +307,12 @@ def _pack_summary_section(section: str, frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _unpack_summary(summary: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    if not set(_SUMMARY_SECTIONS).issubset(set(summary["section"].dropna())):
-        raise ValueError("index research summary is missing a required section")
+    if set(summary["section"].dropna()) != set(_SUMMARY_SECTIONS):
+        raise ValueError("index research summary section set is invalid")
     sections: dict[str, pd.DataFrame] = {}
     for section in _SUMMARY_SECTIONS:
         rows = summary[summary["section"] == section].copy()
-        if rows.empty or rows["columns_json"].nunique(dropna=True) != 1 or rows["is_empty"].nunique(dropna=True) != 1:
+        if rows.empty or rows["columns_json"].nunique(dropna=True) != 1 or rows["dtypes_json"].nunique(dropna=True) != 1 or rows["is_empty"].nunique(dropna=True) != 1:
             raise ValueError("index research summary section schema is invalid")
         try:
             columns = json.loads(str(rows["columns_json"].iloc[0]))
@@ -320,13 +325,25 @@ def _unpack_summary(summary: pd.DataFrame) -> dict[str, pd.DataFrame]:
         if missing:
             raise ValueError("index research summary section is missing stored columns")
         if bool(rows["is_empty"].iloc[0]):
-            sections[section] = pd.DataFrame(columns=columns)
+            sections[section] = _restore_summary_dtypes(pd.DataFrame(columns=columns), dtypes)
         else:
             restored = rows.loc[:, columns].reset_index(drop=True)
             sections[section] = _restore_summary_dtypes(restored, dtypes)
     gates = sections["effectiveness_gate"]
     if set(gates.get("name", pd.Series(dtype="object"))) != set(_GATE_NAMES) or len(gates) != len(_GATE_NAMES):
         raise ValueError("index research summary must contain six unique effectiveness gates")
+    required_by_section = {
+        "effectiveness_status": {"status", "gates_json", "values_json", "reasons_json"},
+        "effectiveness_gate": {"name", "passed", "value", "value_json", "reason"},
+        "group_statistics": {"group_type", "group_value", "metric", "mean", "median", "q25", "q75", "count"},
+        "worst_indices": {"index_code", "cohort"} | _PERFORMANCE_COLUMNS,
+        "rolling_gate_summary": {"eligible_windows", "passing_windows", "pass_rate"},
+        "stress_results": _CSV_REQUIRED_COLUMNS["index_backtest_results.csv"],
+        "prospective_status": {"index_code", "cohort", "status", "reason"},
+    }
+    for section, required in required_by_section.items():
+        if not required.issubset(sections[section].columns):
+            raise ValueError("index research summary section schema is invalid")
     return sections
 
 
@@ -346,6 +363,8 @@ def _restore_summary_dtypes(frame: pd.DataFrame, dtypes: Mapping[str, object]) -
             result[column] = result[column].astype(dtype_name)
         elif dtype_name.startswith("string"):
             result[column] = result[column].astype("string")
+        elif dtype_name == "str":
+            result[column] = result[column].astype("str")
     return result
 
 
@@ -359,11 +378,11 @@ def _complete_empty_schema(frame: pd.DataFrame, required: frozenset[str]) -> pd.
     return frame
 
 
-def _table_section(title: str, frame: pd.DataFrame) -> list[str]:
+def _table_section(title: str, frame: pd.DataFrame, *, limit: int = 10) -> list[str]:
     lines = ["", f"## {title}"]
     if frame.empty:
         return [*lines, "- 无可报告数据。"]
-    preview = frame.head(10).copy()
+    preview = frame.head(limit).copy()
     for column in preview.select_dtypes(include=["datetime", "datetimetz"]).columns:
         preview[column] = preview[column].astype(str)
     return [*lines, preview.to_markdown(index=False)]
@@ -436,8 +455,10 @@ def _normalise_run_meta(run_meta: Mapping[str, object]) -> dict[str, object]:
 
 def _build_run_meta(config_path: Path, config: IndexResearchConfig, admission: IndexAdmissionResult, output: IndexResearchOutput, limit: int | None) -> dict[str, object]:
     metadata = admission.metadata if not admission.metadata.empty else pd.DataFrame(columns=["cohort"])
-    cutoff_dates = [pd.to_datetime(frame["trade_date"], errors="coerce").max() for frame in admission.frames.values() if not frame.empty]
-    cutoff = max((value for value in cutoff_dates if pd.notna(value)), default=pd.Timestamp(config.locked_at)).date().isoformat()
+    result_ends = pd.to_datetime(output.results.get("period_end", pd.Series(dtype="object")), errors="coerce").dropna()
+    if result_ends.empty:
+        raise ValueError("research output has no period_end cutoff evidence")
+    cutoff = result_ends.max().date().isoformat()
     exclusions = admission.exclusions.to_dict("records") if not admission.exclusions.empty else []
     return {
         "run_id": f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex[:10]}",
@@ -482,6 +503,7 @@ def _validate_output_and_meta(output: IndexResearchOutput, meta: Mapping[str, ob
     if meta["exclusion_count"] != len(exclusions):
         raise ValueError("run metadata exclusion count disagrees with exclusions")
     _validate_frame_schema(output.results, "index_backtest_results.csv")
+    _validate_frame_schema(output.stress_results, "index_backtest_results.csv")
     _validate_frame_schema(_complete_empty_schema(output.trades, _CSV_REQUIRED_COLUMNS["index_backtest_trades.csv"]), "index_backtest_trades.csv")
     _validate_frame_schema(output.yearly, "index_strategy_yearly.csv")
     _validate_frame_schema(output.rolling, "index_strategy_rolling_5y.csv")
@@ -510,6 +532,24 @@ def _validate_cross_artifact_consistency(
         raise ValueError("index research summary effectiveness payload is invalid") from exc
     if status["status"].iloc[0] != meta["status"] or gates != meta["gates"] or values != meta["gate_values"] or reasons != meta["gate_reasons"]:
         raise ValueError("index research summary effectiveness disagrees with metadata")
+    gate_rows = sections["effectiveness_gate"]
+    for row in gate_rows.itertuples(index=False):
+        if type(row.passed) is not bool or row.passed != meta["gates"][row.name]:
+            raise ValueError("index research summary gate rows disagree with metadata gates")
+        expected_value = meta["gate_values"].get(row.name)
+        expected_reason = "; ".join(reason for reason in meta["gate_reasons"] if reason.startswith(f"{row.name}:"))
+        actual_reason = "" if pd.isna(row.reason) else str(row.reason)
+        try:
+            actual_value = json.loads(str(row.value_json))["value"]
+        except json.JSONDecodeError as exc:
+            raise ValueError("index research summary gate value payload is invalid") from exc
+        if actual_value != _json_safe(expected_value) or actual_reason != expected_reason:
+            raise ValueError("index research summary gate rows disagree with metadata evidence")
+    cohorts = results[["index_code", "cohort"]].drop_duplicates()
+    official_count = int((cohorts["cohort"] == "official").sum())
+    reference_count = int((cohorts["cohort"] == "reference").sum())
+    if official_count != meta["official_count"] or reference_count != meta["reference_count"]:
+        raise ValueError("index research metadata cohort counts disagree with results")
     if exclusions.fillna("").to_dict("records") != _exclusions_frame(meta).fillna("").to_dict("records"):
         raise ValueError("index research exclusions disagree with metadata")
     _validate_meta_cutoff(meta, results, trades, nav)
@@ -549,7 +589,16 @@ def _validate_meta_cutoff(meta: Mapping[str, object], results: pd.DataFrame, tra
         if column in frame and not frame.empty:
             parsed = pd.to_datetime(frame[column], errors="coerce").dropna()
             dates.extend(pd.Timestamp(value).normalize() for value in parsed)
-    if dates and pd.Timestamp(meta["data_cutoff"]).normalize() < max(dates):
+    if "period_end" not in results or results.empty:
+        raise ValueError("index research results must provide period_end cutoff evidence")
+    result_ends = pd.to_datetime(results["period_end"], errors="coerce")
+    if result_ends.isna().any():
+        raise ValueError("index research results has invalid period_end cutoff evidence")
+    expected_cutoff = result_ends.max().normalize()
+    actual_cutoff = pd.Timestamp(meta["data_cutoff"]).normalize()
+    if actual_cutoff != expected_cutoff:
+        raise ValueError("run metadata data_cutoff must exactly equal structured evidence cutoff")
+    if dates and actual_cutoff < max(dates):
         raise ValueError("run metadata data_cutoff is earlier than structured evidence")
 
 

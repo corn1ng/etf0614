@@ -144,6 +144,72 @@ def test_loader_rejects_weak_trade_schema_and_missing_summary_section(tmp_path: 
         load_latest_index_research(tmp_path)
 
 
+def test_publisher_rejects_results_without_core_performance_evidence(tmp_path: Path):
+    output = sample_output()
+    output = replace(output, results=output.results.drop(columns=["annualized_return", "volatility", "sharpe", "max_drawdown", "calmar"]))
+    with pytest.raises(ValueError, match="annualized_return"):
+        publish_index_research(output, tmp_path, sample_run_meta("missing-performance"))
+
+
+def test_loader_rejects_unknown_summary_section_and_conflicting_dtype_declaration(tmp_path: Path):
+    published = publish_index_research(sample_output(), tmp_path, sample_run_meta("first"))
+    summary_path = tmp_path / "runs" / published.run_id / "index_strategy_summary.csv"
+    summary = pd.read_csv(summary_path)
+    unknown = summary.iloc[[0]].copy()
+    unknown["section"] = "unknown"
+    pd.concat([summary, unknown], ignore_index=True).to_csv(summary_path, index=False)
+    with pytest.raises(ValueError, match="summary"):
+        load_latest_index_research(tmp_path)
+
+    publish_index_research(sample_output(), tmp_path, sample_run_meta("second"))
+    second_summary_path = tmp_path / "runs" / "second" / "index_strategy_summary.csv"
+    second_summary = pd.read_csv(second_summary_path)
+    rows = second_summary.index[second_summary["section"] == "stress_results"]
+    second_summary.loc[rows[1], "dtypes_json"] = "{}"
+    second_summary.to_csv(second_summary_path, index=False)
+    (tmp_path / "latest.json").write_text(json.dumps({"run_id": "second"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="summary"):
+        load_latest_index_research(tmp_path)
+
+
+def test_empty_summary_section_round_trips_columns_and_dtypes(tmp_path: Path):
+    output = sample_output()
+    empty_groups = output.group_statistics.iloc[0:0].copy()
+    published = publish_index_research(replace(output, group_statistics=empty_groups), tmp_path, sample_run_meta("empty-groups"))
+    loaded = load_latest_index_research(tmp_path)
+    assert list(loaded.group_statistics.columns) == list(empty_groups.columns)
+    assert [str(dtype) for dtype in loaded.group_statistics.dtypes] == [str(dtype) for dtype in empty_groups.dtypes]
+
+
+def test_loader_rejects_results_cohort_or_summary_gate_tampering(tmp_path: Path):
+    published = publish_index_research(sample_output(), tmp_path, sample_run_meta("first"))
+    run_dir = tmp_path / "runs" / published.run_id
+    results_path = run_dir / "index_backtest_results.csv"
+    results = pd.read_csv(results_path)
+    results["cohort"] = "reference"
+    results.to_csv(results_path, index=False)
+    with pytest.raises(ValueError, match="cohort"):
+        load_latest_index_research(tmp_path)
+
+    publish_index_research(sample_output(), tmp_path, sample_run_meta("second"))
+    second_dir = tmp_path / "runs" / "second"
+    summary_path = second_dir / "index_strategy_summary.csv"
+    summary = pd.read_csv(summary_path)
+    gate = summary.index[summary["section"] == "effectiveness_gate"][0]
+    summary.loc[gate, "passed"] = True
+    summary.to_csv(summary_path, index=False)
+    (tmp_path / "latest.json").write_text(json.dumps({"run_id": "second"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="gate"):
+        load_latest_index_research(tmp_path)
+
+
+def test_publish_rejects_future_or_non_exact_data_cutoff(tmp_path: Path):
+    future = sample_run_meta("future")
+    future["data_cutoff"] = "2099-01-01"
+    with pytest.raises(ValueError, match="data_cutoff"):
+        publish_index_research(sample_output(), tmp_path, future)
+
+
 def test_chinese_report_has_ordered_sections_gates_failure_reason_and_index_warning():
     output = sample_output()
     markdown = render_index_research_markdown(output, sample_run_meta("report"))
@@ -159,6 +225,20 @@ def test_chinese_report_has_ordered_sections_gates_failure_reason_and_index_warn
     assert "尚无前瞻样本" in markdown
     assert "stage_2020" in markdown
     assert "side" in markdown and "best" in markdown and "worst" in markdown
+
+
+def test_report_keeps_best_and_worst_rows_when_more_than_ten_indexes():
+    output = sample_output()
+    rows = []
+    for number in range(11):
+        row = output.results.iloc[0].copy()
+        row["index_code"] = f"IDX{number:02d}"
+        row["annualized_return"] = number / 100
+        row["period_type"] = "full_history"
+        rows.append(row)
+    markdown = render_index_research_markdown(replace(output, results=pd.DataFrame(rows)), sample_run_meta("eleven"))
+    section = markdown.split("## 最好与最差指数", 1)[1].split("## 扩展样本", 1)[0]
+    assert "best" in section and "worst" in section
 
 
 def test_run_and_publish_marks_limited_run_and_uses_sorted_catalog(tmp_path: Path):
@@ -213,8 +293,11 @@ def sample_output(code: str = "000300") -> IndexResearchOutput:
         "index_code": code, "name": code, "cohort": "official", "market": "CN", "index_type": "broad",
         "period_type": "full_history", "period_label": "full_history", "period_start": "2020-01-01",
         "period_end": "2020-12-31", "strategy_name": "index_trend_v1", "annualized_return": 0.08,
-        "max_drawdown": -0.20, "calmar": 0.4,
+        "volatility": 0.12, "sharpe": 0.66, "max_drawdown": -0.20, "calmar": 0.4,
+        "total_return": 0.1, "avg_exposure": 0.5, "trade_count": 2, "trades_per_year": 1.0,
+        "whipsaw_trade_rate": 0.0,
     }])
+    results = pd.concat([results, results.assign(period_type="stage", period_label="stage_2020")], ignore_index=True)
     assessment = EffectivenessAssessment(
         status="failed",
         gates={"drawdown_win_rate": False, "median_drawdown_reduction": True, "median_calmar_improves": True,
@@ -233,7 +316,7 @@ def sample_output(code: str = "000300") -> IndexResearchOutput:
             "commission": 0.01, "delay_days": 1, "reason": "test", "trigger_rules": "[]",
             "reference_price": 100.0, "slippage_cost": 0.02,
         }]),
-        yearly=pd.concat([results.assign(period_type="calendar_year"), results.assign(period_type="stage", period_label="stage_2020")], ignore_index=True),
+        yearly=results[results["period_type"] == "full_history"].assign(period_type="calendar_year"),
         rolling=results.assign(period_type="rolling_5y"),
         buffer_comparison=pd.DataFrame([{"index_code": code, "cohort": "official", "buffer_rate": 0.02, "whipsaw_trade_rate": 0.1, "annualized_trade_count": 2.0}]),
         stress_results=results.assign(period_label="stress_double_cost"),
@@ -251,7 +334,7 @@ def sample_run_meta(run_id: str) -> dict[str, object]:
         "strategy_version": "index_trend_v1",
         "config_sha256": "a" * 64,
         "locked_at": date(2026, 7, 30),
-        "data_cutoff": "2026-07-30",
+        "data_cutoff": "2020-12-31",
         "run_at": "2026-07-30T00:00:00+00:00",
         "official_count": 1,
         "reference_count": 0,

@@ -160,3 +160,51 @@ It completed with run ID `20260730T165423581757Z-9cbbaed2f0`, 10 artifacts,
 `official_count=2`, `limited_run=true`, and truthful `failed` status. Strict
 reload succeeded and recovered 4 stress rows, 2 prospective rows, and 12 group
 statistic rows.
+
+## Second review hardening
+
+The second review required complete Task 3 performance schemas, exact summary
+section contracts, genuine annual/stage report sourcing, tamper detection, and an
+exact cutoff rule. RED command:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_report.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-second-review-red
+```
+
+Result: `20 passed, 6 failed in 3.72s`. The failures proved the publisher accepted
+missing core performance fields, the summary accepted unknown/conflicting sections,
+empty-section dtype restoration was incomplete, cohort tampering was undetected,
+future cutoffs were accepted, and a 20-row best/worst table was truncated.
+
+The final validation now requires the Task 3 core performance fields in all
+performance result artifacts, full trade/buffer/NAV fields, exact summary section
+membership with unique stored column/dtype declarations, and required fields per
+section. Gate values use a JSON payload per gate so CSV float display precision
+cannot weaken exact metadata comparisons. Loader recomputes cohort counts from the
+results file, verifies each gate row against the status payload and run metadata,
+and requires `data_cutoff` to equal the maximum results `period_end` exactly.
+Annual/stage reporting comes from `output.results`, not an optional yearly subset;
+best and worst official full-history V1 rows are separately retained up to ten each.
+
+Final focused suite:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_report.py tests\test_index_research_validation.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-second-review-focused-final2
+```
+
+Result: `49 passed in 15.06s`.
+
+Final full suite:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-second-review-full-final
+```
+
+Result: `549 passed, 1 skipped in 43.65s`.
+
+Real two-index smoke used the read-only main Parquet root and wrote to
+`C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task5-second-review-smoke-final`.
+It succeeded with run ID `20260730T171153615471Z-7c2d72a190`, cutoff
+`2026-07-28`, 232 results rows, four stress rows, two prospective rows, and all
+ten artifacts. Strict loader reload succeeded; the limited two-index package is
+truthfully `failed` rather than a full-universe success claim.
