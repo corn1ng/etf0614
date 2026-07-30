@@ -23,6 +23,7 @@ from etf_trading.data.index_catalog import (
     default_index_catalog,
 )
 from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
+from etf_trading.data.index_valuations import OFFICIAL_INDEX_VALUATION_TS_CODES
 from etf_trading.data.quality import (
     HistoryAssessment,
     HistoryReadiness,
@@ -63,7 +64,7 @@ _ATOMIC_SNAPSHOT_CACHE: dict[str, tuple[str, pd.DataFrame, datetime | None]] = {
 _ATOMIC_SNAPSHOT_ERRORS: dict[str, str] = {}
 _ATOMIC_SNAPSHOT_CACHE_LOCK = RLock()
 ATOMIC_SNAPSHOT_BUILD_MARKER_MAX_AGE_SECONDS = 600.0
-INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 2
+INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 3
 _INDEX_ATOMIC_SNAPSHOT_LOCK = RLock()
 
 
@@ -558,11 +559,21 @@ def _index_atomic_snapshot_source_signature(
         try:
             stat = path.stat()
         except OSError:
-            digest.update(f"|{definition.index_code}|exists=0".encode())
+            digest.update(f"|prices|{definition.index_code}|exists=0".encode())
         else:
             digest.update(
-                f"|{definition.index_code}|exists=1|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}".encode()
+                f"|prices|{definition.index_code}|exists=1|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}".encode()
             )
+        if definition.index_code in OFFICIAL_INDEX_VALUATION_TS_CODES:
+            valuation_path = root / "index_valuations" / f"{definition.index_code}.parquet"
+            try:
+                valuation_stat = valuation_path.stat()
+            except OSError:
+                digest.update(f"|valuations|{definition.index_code}|exists=0".encode())
+            else:
+                digest.update(
+                    f"|valuations|{definition.index_code}|exists=1|size={valuation_stat.st_size}|mtime_ns={valuation_stat.st_mtime_ns}".encode()
+                )
     return digest.hexdigest()
 
 
@@ -878,6 +889,10 @@ _INDEX_ATOMIC_SUMMARY_TEXT_COLUMNS = {
     "ma_250_status",
     "range_20_status",
     "return_20_status",
+    "valuation_support_status",
+    "valuation_as_of_date",
+    "valuation_freshness_status",
+    "valuation_source",
 }
 
 _INDEX_ATOMIC_SUMMARY_BOOLEAN_COLUMNS = {

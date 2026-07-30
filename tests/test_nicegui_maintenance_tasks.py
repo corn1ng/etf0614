@@ -228,6 +228,25 @@ def test_atomic_snapshot_runner_rejects_publish_when_local_history_changes_durin
     assert _snapshot_meta(parquet_store)["task_result_id"] == 99
 
 
+def test_atomic_snapshot_runner_rejects_publish_when_valuation_history_changes_during_build(tmp_path, monkeypatch):
+    def build_snapshot(parquet_store, definitions, *, coverage=None, on_progress=None):
+        del definitions, coverage, on_progress
+        parquet_store.write_index_valuations(
+            "000300",
+            pd.DataFrame({"trade_date": ["2026-07-12"], "pe_ttm": [12.0]}),
+        )
+        return _atomic_summary("000905"), _atomic_details("000905")
+
+    runner, store, parquet_store = _atomic_runner(tmp_path, build_snapshot, monkeypatch)
+    _write_previous_snapshot(parquet_store)
+
+    task = runner.start()
+    failed = _wait_for_terminal_task(store, task.task_id)
+
+    assert failed.state == "failed"
+    assert failed.error_message == "重建指数原子指标失败：本地输入已变化，拒绝发布快照"
+
+
 def test_atomic_snapshot_runner_start_deduplicates_concurrent_calls_per_store(tmp_path, monkeypatch):
     from etf_trading.nicegui_app import maintenance_tasks
 

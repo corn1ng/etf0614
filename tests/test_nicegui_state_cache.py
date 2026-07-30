@@ -8,6 +8,7 @@ import pytest
 
 from etf_trading.data.index_catalog import IndexCatalogEntry, default_index_catalog
 from etf_trading.data.indexes import IndexDefinition
+from etf_trading.data.index_valuations import finalize_index_valuation_frame
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.nicegui_app import state
 from etf_trading.nicegui_app.view_models import IndexAtomicFilters, PlatformSnapshot, build_index_atomic_rows
@@ -86,6 +87,23 @@ def _details(index_code: str) -> pd.DataFrame:
     row = {column: pd.NA for column in INDEX_ATOMIC_DETAIL_COLUMNS}
     row.update({"index_code": index_code, "metric_key": "close", "status": "ready"})
     return pd.DataFrame([row], columns=INDEX_ATOMIC_DETAIL_COLUMNS)
+
+
+def _five_year_valuation_history() -> pd.DataFrame:
+    dates = pd.bdate_range("2021-07-29", "2026-07-29")
+    return finalize_index_valuation_frame(
+        pd.DataFrame(
+            {
+                "trade_date": dates,
+                "pe_ttm": range(1, len(dates) + 1),
+                "pe_static": range(1, len(dates) + 1),
+                "pb": range(1, len(dates) + 1),
+            }
+        ),
+        "000300",
+        "tushare_index_dailybasic",
+        "official",
+    )
 
 
 def _coverage(index_code: str, latest_trade_date: str = "2026-07-12") -> pd.DataFrame:
@@ -359,6 +377,29 @@ def test_readonly_loader_marks_signature_mismatch_stale_and_keeps_previous_rows(
     assert result.summary["index_code"].tolist() == ["000300"]
     assert result.generated_at == datetime(2026, 7, 12, 9, 0)
     assert result.current_latest_date == "2026-07-13"
+
+
+def test_valuation_cache_change_marks_published_snapshot_stale(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    parquet_store.write_index_valuations("000300", _five_year_valuation_history().iloc[:-1])
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 29, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+        expected_input_signature=source_signature,
+    )
+    parquet_store.write_index_valuations("000300", _five_year_valuation_history())
+
+    loaded = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert loaded.status == "stale"
 
 
 def test_atomic_snapshot_meta_records_schema_catalog_source_and_task_result(tmp_path):

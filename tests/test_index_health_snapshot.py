@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from etf_trading.data.indexes import IndexDefinition
+from etf_trading.data.index_valuations import finalize_index_valuation_frame
 from etf_trading.data.storage import ParquetStore
 from etf_trading.research.index_health_snapshot import (
     INDEX_ATOMIC_DETAIL_COLUMNS,
@@ -56,6 +57,24 @@ def _store_with_index_prices(tmp_path, index_code: str, prices: pd.DataFrame) ->
     store = ParquetStore(tmp_path)
     store.write_index_prices(index_code, prices.assign(index_code=index_code))
     return store
+
+
+def _five_year_valuation_history() -> pd.DataFrame:
+    dates = pd.bdate_range("2021-07-29", "2026-07-29")
+    return finalize_index_valuation_frame(
+        pd.DataFrame(
+            {
+                "trade_date": dates,
+                "pe_ttm": np.linspace(9.0, 14.0, len(dates)),
+                "pe_static": np.linspace(9.5, 14.5, len(dates)),
+                "pb": np.linspace(1.0, 1.8, len(dates)),
+                "turnover_rate": np.linspace(0.2, 0.8, len(dates)),
+            }
+        ),
+        "000300",
+        "tushare_index_dailybasic",
+        "official",
+    )
 
 
 def _detail_row(details: pd.DataFrame, index_code: str, metric_key: str) -> pd.Series:
@@ -266,14 +285,9 @@ def test_expanded_atoms_require_their_exact_minimum_history_rows(tmp_path, metri
     assert _detail_status(short_details, "000300", metric_key) == "insufficient_history"
 
 
-def test_snapshot_preserves_catalog_order_and_never_reads_valuation_parquet(tmp_path, monkeypatch):
+def test_snapshot_preserves_catalog_order_when_valuation_history_is_missing(tmp_path):
     store = _store_with_index_prices(tmp_path, "000300", _price_history(260))
     store.write_index_prices("000905", _price_history(260).assign(index_code="000905"))
-    monkeypatch.setattr(
-        store,
-        "read_index_valuations",
-        lambda index_code: (_ for _ in ()).throw(AssertionError(f"unexpected valuation read: {index_code}")),
-    )
     coverage = pd.DataFrame(
         [
             {
@@ -294,6 +308,59 @@ def test_snapshot_preserves_catalog_order_and_never_reads_valuation_parquet(tmp_
     assert summary["catalog_order"].tolist() == [0, 1]
     assert summary.iloc[0]["history_completeness_status"] == "INCOMPLETE"
     assert _detail_value(details, "000905", "history_completeness_status") == "INCOMPLETE"
+
+
+def test_snapshot_merges_supported_valuation_without_blocking_price_atoms(tmp_path):
+    prices = _price_history(300)
+    store = _store_with_index_prices(tmp_path, "000300", prices)
+    valuations = _five_year_valuation_history()
+    store.write_index_valuations(
+        "000300",
+        valuations.loc[valuations["trade_date"] <= prices["trade_date"].iloc[-1] - pd.offsets.BDay(6)],
+    )
+
+    summary, details = build_index_atomic_snapshot(store, (_definition("000300"),))
+
+    row = summary.iloc[0]
+    assert row["valuation_support_status"] == "supported"
+    assert row["valuation_as_of_date"] <= row["latest_date"]
+    assert row["valuation_freshness_status"] == "stale"
+    assert row["pe_ttm_5y_percentile"] == pytest.approx(
+        _detail_value(details, "000300", "pe_ttm_percentile_5y")
+    )
+    assert _detail_status(details, "000300", "ma_20") == "computed"
+    percentile = _detail_row(details, "000300", "pe_ttm_percentile_5y")
+    assert percentile["window_start_date"]
+    assert percentile["window_end_date"] == row["latest_date"]
+
+
+def test_unsupported_valuation_does_not_downgrade_price_snapshot(tmp_path, monkeypatch):
+    store = _store_with_index_prices(tmp_path, "801010", _price_history(300))
+    monkeypatch.setattr(
+        store,
+        "read_index_valuations",
+        lambda index_code: pytest.fail(f"unexpected valuation read: {index_code}"),
+    )
+
+    summary, details = build_index_atomic_snapshot(store, (_definition("801010"),))
+
+    assert summary.iloc[0]["snapshot_status"] == "computed"
+    assert _detail_value(details, "801010", "valuation_support_status") == "unsupported"
+
+
+def test_valuation_read_failure_keeps_price_atoms_available(tmp_path, monkeypatch):
+    store = _store_with_index_prices(tmp_path, "000300", _price_history(300))
+    monkeypatch.setattr(
+        store,
+        "read_index_valuations",
+        lambda index_code: (_ for _ in ()).throw(OSError("valuation cache unavailable")),
+    )
+
+    summary, details = build_index_atomic_snapshot(store, (_definition("000300"),))
+
+    assert summary.iloc[0]["snapshot_status"] == "computed"
+    assert _detail_status(details, "000300", "ma_20") == "computed"
+    assert _detail_status(details, "000300", "valuation_support_status") == "read_failed"
 
 
 def test_snapshot_keeps_the_last_record_for_a_duplicate_trade_date(tmp_path):

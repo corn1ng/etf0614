@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 
 from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
+from etf_trading.data.index_valuations import OFFICIAL_INDEX_VALUATION_TS_CODES
+from etf_trading.research.index_valuation_atoms import build_index_valuation_atoms
 
 
 INDEX_ATOMIC_SUMMARY_COLUMNS = [
@@ -52,6 +54,15 @@ INDEX_ATOMIC_SUMMARY_COLUMNS = [
     "range_20_status",
     "return_20",
     "return_20_status",
+    "valuation_support_status",
+    "valuation_as_of_date",
+    "valuation_freshness_status",
+    "valuation_source",
+    "pe_static",
+    "pe_ttm",
+    "pe_ttm_5y_percentile",
+    "pb",
+    "pb_5y_percentile",
 ]
 
 INDEX_ATOMIC_DETAIL_COLUMNS = [
@@ -65,6 +76,8 @@ INDEX_ATOMIC_DETAIL_COLUMNS = [
     "as_of_date",
     "sample_count",
     "data_source",
+    "window_start_date",
+    "window_end_date",
 ]
 
 _MA_WINDOWS = (20, 60, 120, 250)
@@ -142,6 +155,16 @@ def build_index_atomic_snapshot(
                 summary, details = _failed_snapshot(identity, "read_failed", f"读取指数历史失败：{read_error}")
             else:
                 summary, details = _snapshot_from_prices(identity, prices, max_date, min_history_rows)
+                if summary["latest_date"]:
+                    valuation_details = _valuation_details(
+                        parquet_store,
+                        definition.index_code,
+                        prices,
+                        summary["latest_date"],
+                        max_date,
+                    )
+                    details.extend(valuation_details)
+                    _merge_valuation_summary(summary, valuation_details)
         summary_rows.append(summary)
         detail_rows.extend(details)
         if on_progress is not None:
@@ -261,6 +284,63 @@ def _snapshot_from_prices(
         snapshot_status,
         snapshot_reason,
     ), details
+
+
+def _valuation_details(
+    parquet_store,
+    index_code: str,
+    prices: pd.DataFrame,
+    latest_date: str,
+    as_of_date: pd.Timestamp | None,
+) -> list[dict[str, object]]:
+    prepared_prices = _prepare_prices(prices, as_of_date)
+    price_date = pd.Timestamp(latest_date)
+    supported = index_code in OFFICIAL_INDEX_VALUATION_TS_CODES
+    if not supported:
+        return build_index_valuation_atoms(
+            index_code,
+            pd.DataFrame(),
+            price_date,
+            prepared_prices["trade_date"],
+            supported=False,
+        )
+
+    valuations, read_error = _read_frame(lambda: parquet_store.read_index_valuations(index_code))
+    atoms = build_index_valuation_atoms(
+        index_code,
+        valuations,
+        price_date,
+        prepared_prices["trade_date"],
+        supported=True,
+    )
+    if not read_error:
+        return atoms
+
+    for atom in atoms:
+        atom["status"] = "read_failed"
+        atom["reason"] = f"读取本地官方估值失败：{read_error}"
+        if atom["metric_key"] != "valuation_support_status":
+            atom["value"] = pd.NA
+            atom["as_of_date"] = ""
+            atom["data_source"] = ""
+    return atoms
+
+
+def _merge_valuation_summary(summary: dict[str, object], details: list[dict[str, object]]) -> None:
+    values = {str(detail["metric_key"]): detail["value"] for detail in details}
+    summary_keys = {
+        "valuation_support_status": "valuation_support_status",
+        "valuation_as_of_date": "valuation_as_of_date",
+        "valuation_freshness_status": "valuation_freshness_status",
+        "valuation_source": "valuation_source",
+        "pe_static": "pe_static",
+        "pe_ttm": "pe_ttm",
+        "pe_ttm_5y_percentile": "pe_ttm_percentile_5y",
+        "pb": "pb",
+        "pb_5y_percentile": "pb_percentile_5y",
+    }
+    for summary_key, metric_key in summary_keys.items():
+        summary[summary_key] = values.get(metric_key, pd.NA)
 
 
 def _failed_snapshot(
@@ -734,6 +814,8 @@ def _detail(
     as_of_date: str = "",
     sample_count: int = 0,
     data_source: str = "",
+    window_start_date: str = "",
+    window_end_date: str = "",
 ) -> dict[str, object]:
     return {
         "index_code": index_code,
@@ -746,6 +828,8 @@ def _detail(
         "as_of_date": as_of_date,
         "sample_count": sample_count,
         "data_source": data_source,
+        "window_start_date": window_start_date,
+        "window_end_date": window_end_date,
     }
 
 
