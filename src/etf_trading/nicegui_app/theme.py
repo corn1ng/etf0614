@@ -807,21 +807,44 @@ body {
 .index-profile-dialog {
   width: min(1180px, 92vw);
   max-width: min(1180px, 92vw) !important;
+  height: min(860px, 92vh);
   max-height: 92vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-radius: 18px;
   padding: 18px;
 }
-.index-profile-header { min-width: 0; }
-.index-profile-title { color: var(--wb-ink); font-size: 18px; font-weight: 800; }
+.index-profile-header { min-width: 0; flex: 0 0 auto; }
+.index-profile-header-copy { min-width: 0; flex: 1 1 auto; }
+.index-profile-title {
+  color: var(--wb-ink);
+  font-size: 18px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.index-profile-close { flex: 0 0 auto; }
 .index-profile-as-of,
 .index-profile-note,
 .index-profile-card-detail,
 .index-profile-reason,
 .index-profile-row-status,
 .index-profile-row-reason { color: var(--wb-muted); font-size: 12px; overflow-wrap: anywhere; }
-.index-profile-tabs { border-bottom: 1px solid var(--wb-line); }
-.index-profile-panels { min-width: 0; }
+.index-profile-tabs {
+  flex: 0 0 auto;
+  min-height: 48px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--wb-line);
+}
+.index-profile-tabs .q-tabs__content { flex-wrap: nowrap; min-width: max-content; }
+.index-profile-panels {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow-x: clip;
+  overflow-y: auto;
+}
 .index-profile-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .index-profile-primary-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.35fr); gap: 14px; margin-top: 14px; }
 .index-profile-secondary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
@@ -880,13 +903,13 @@ body {
   .index-atomic-overview-grid { grid-template-columns: 1fr; }
   .index-atomic-dialog { overflow-x: clip; }
   .index-atomic-detail-grid { grid-template-columns: 1fr; }
-  .index-profile-dialog { width: 96vw; max-width: 96vw !important; max-height: 96vh; padding: 12px; }
+  .index-profile-dialog { width: 96vw; max-width: 96vw !important; height: 96vh; max-height: 96vh; padding: 12px; }
   .index-profile-summary-grid,
   .index-profile-primary-grid,
   .index-profile-secondary-grid,
   .index-profile-detail-grid,
   .index-profile-section-grid { grid-template-columns: minmax(0, 1fr); }
-  .index-profile-tabs { overflow-x: auto; flex-wrap: nowrap; }
+  .index-profile-tabs { overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; }
   .index-profile-trend-row { grid-template-columns: minmax(0, 1fr) auto; }
   .index-profile-row-status { grid-column: 1 / -1; text-align: left; }
 }

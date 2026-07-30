@@ -287,7 +287,7 @@ def _open_index_profile_dialog(result, index_code: str) -> None:
 
 def _render_index_profile_header(profile, close) -> None:
     with ui.row().classes("index-profile-header w-full items-start justify-between gap-2"):
-        with ui.column().classes("gap-0"):
+        with ui.column().classes("index-profile-header-copy gap-0"):
             ui.label(f"指数画像：{profile.identity}").classes("index-profile-title")
             ui.label(f"价格截至：{profile.price_as_of_date} · 估值截至：{profile.valuation_as_of_date}").classes(
                 "index-profile-as-of"

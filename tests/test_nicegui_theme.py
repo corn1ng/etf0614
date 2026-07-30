@@ -20,6 +20,29 @@ def test_theme_scopes_profile_width_grid_and_mobile_rules():
     assert "grid-template-columns: minmax(0, 1fr)" in mobile
 
 
+def test_theme_keeps_index_profile_mobile_controls_visible_and_panels_scrollable():
+    css = WORKBENCH_CSS
+    dialog_rule = css.split(".index-profile-dialog {", 1)[1].split("}", 1)[0]
+    tabs_rule = css.split(".index-profile-tabs {", 1)[1].split("}", 1)[0]
+    panels_rule = css.split(".index-profile-panels {", 1)[1].split("}", 1)[0]
+    title_rule = css.split(".index-profile-title {", 1)[1].split("}", 1)[0]
+    mobile = css.split("@media (max-width: 720px)", 1)[1]
+
+    assert "\n  display: flex;" in dialog_rule
+    assert "\n  flex-direction: column;" in dialog_rule
+    assert "\n  overflow: hidden;" in dialog_rule
+    assert ".index-profile-header { min-width: 0; flex: 0 0 auto; }" in css
+    assert ".index-profile-header-copy { min-width: 0; flex: 1 1 auto; }" in css
+    assert "\n  overflow-wrap: anywhere;" in title_rule
+    assert ".index-profile-close { flex: 0 0 auto; }" in css
+    assert "\n  flex: 0 0 auto;" in tabs_rule
+    assert "\n  min-height: 48px;" in tabs_rule
+    assert "\n  flex: 1 1 0;" in panels_rule
+    assert "\n  min-height: 0;" in panels_rule
+    assert "\n  overflow-y: auto;" in panels_rule
+    assert ".index-profile-tabs { overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; }" in mobile
+
+
 def test_theme_contains_dense_professional_workbench_rules():
     assert ".workbench-shell" in WORKBENCH_CSS
     assert ".workbench-sidebar" in WORKBENCH_CSS
