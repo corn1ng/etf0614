@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import subprocess
@@ -11,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import etf_trading.research.index_report as index_report
 from etf_trading.research.index_models import (
     IndexAdmissionResult,
     IndexResearchOutput,
@@ -410,6 +410,24 @@ def test_loader_resolves_and_audits_locked_config_independently_of_cwd(tmp_path:
     assert load_latest_index_research(tmp_path).run_id == published.run_id
 
 
+def test_locked_config_hash_is_independent_of_platform_line_endings(tmp_path: Path, monkeypatch):
+    source = Path("configs/index_research.yaml").read_text(encoding="utf-8")
+    lf_config = tmp_path / "lf.yaml"
+    crlf_config = tmp_path / "crlf.yaml"
+    lf_config.write_bytes(source.replace("\r\n", "\n").encode("utf-8"))
+    crlf_config.write_bytes(source.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+
+    assert index_report._config_sha256(lf_config) == index_report._config_sha256(crlf_config)
+
+    output = cross_file_consistent_output()
+    meta = run_meta_for_output(output, "cross-platform-config")
+    meta["config_sha256"] = index_report._config_sha256(lf_config)
+    published = publish_index_research(output, tmp_path / "reports", meta)
+    monkeypatch.setattr(index_report, "_LOCKED_CONFIG_PATH", crlf_config)
+
+    assert load_latest_index_research(tmp_path / "reports").run_id == published.run_id
+
+
 def test_loader_rejects_config_hash_that_no_longer_identifies_locked_config(tmp_path: Path):
     output = cross_file_consistent_output()
     published = publish_index_research(output, tmp_path, run_meta_for_output(output, "config-tampering"))
@@ -529,7 +547,7 @@ def sample_run_meta(run_id: str) -> dict[str, object]:
     return {
         "run_id": run_id,
         "strategy_version": "index_trend_v1",
-        "config_sha256": hashlib.sha256(Path("configs/index_research.yaml").read_bytes()).hexdigest(),
+        "config_sha256": index_report._config_sha256(Path("configs/index_research.yaml")),
         "locked_at": date(2026, 7, 30),
         "data_cutoff": "2020-12-31",
         "run_at": "2026-07-30T00:00:00+00:00",

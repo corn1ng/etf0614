@@ -653,3 +653,10 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
   - Metadata, summary, and Markdown can all repeat the same stale conclusion; trust none of them until the six gates have been recalculated from primary structured evidence under the exact hashed lock file.
   - `NaN` checks and `<= 0` checks do not reject positive infinity. Price admission must state and enforce finite-positive semantics explicitly.
   - Gate wording is shared presentation policy. Keep it in the public gate-evidence formatter so report and UI cannot silently diverge or import private report helpers.
+
+## 2026-08-03 - Make locked strategy config hashes portable
+
+- Summary: Canonicalized the locked index-research YAML to UTF-8 with LF newlines before hashing, so the same committed strategy config retains one audit identity across LF and CRLF Git checkouts. Publishing and strict loading now use the same canonical hash contract.
+- Verification: A regression first failed on LF/CRLF copies, then passed after the fix; the merged `main` suite passed 614 tests with 1 skipped, and the existing full-run package `20260730T191223407974Z-eb8fad0d41` strictly reloaded as `failed` from a non-project working directory.
+- Watch out next time:
+  - Audit hashes for text configuration must describe canonical text, not platform-specific checkout bytes; binary evidence artifacts should continue using raw-byte hashes where applicable.

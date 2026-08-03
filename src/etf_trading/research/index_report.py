@@ -491,7 +491,7 @@ def _build_run_meta(config_path: Path, config: IndexResearchConfig, admission: I
     return {
         "run_id": f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex[:10]}",
         "strategy_version": config.strategy_version,
-        "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        "config_sha256": _config_sha256(config_path),
         "locked_at": config.locked_at,
         "data_cutoff": cutoff,
         "run_at": datetime.now(timezone.utc).isoformat(),
@@ -729,10 +729,10 @@ def _validate_recalculated_effectiveness(
     """Recalculate all six gates from primary evidence under the audited lock."""
 
     try:
-        config_bytes = _LOCKED_CONFIG_PATH.read_bytes()
+        config_sha256 = _config_sha256(_LOCKED_CONFIG_PATH)
     except OSError as exc:
         raise ValueError("locked index research config is unavailable") from exc
-    if hashlib.sha256(config_bytes).hexdigest() != meta["config_sha256"]:
+    if config_sha256 != meta["config_sha256"]:
         raise ValueError("index research config_sha256 disagrees with locked config")
     config = load_index_research_config(_LOCKED_CONFIG_PATH)
     recalculated = evaluate_effectiveness(results, buffer_comparison, stress_results, config)
@@ -743,6 +743,14 @@ def _validate_recalculated_effectiveness(
         or list(recalculated.reasons) != meta["gate_reasons"]
     ):
         raise ValueError("recalculated effectiveness disagrees with published gate evidence")
+
+
+def _config_sha256(path: Path) -> str:
+    """Hash semantic UTF-8 config text independently of checkout line endings."""
+
+    text = path.read_text(encoding="utf-8")
+    canonical = text.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _audit_values_match(actual: object, expected: object) -> bool:
