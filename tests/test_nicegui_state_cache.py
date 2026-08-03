@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -8,6 +9,7 @@ import pytest
 
 from etf_trading.data.index_catalog import IndexCatalogEntry, default_index_catalog
 from etf_trading.data.indexes import IndexDefinition
+from etf_trading.data.index_valuations import finalize_index_valuation_frame
 from etf_trading.data.storage import ParquetStore, SQLiteStore
 from etf_trading.nicegui_app import state
 from etf_trading.nicegui_app.view_models import IndexAtomicFilters, PlatformSnapshot, build_index_atomic_rows
@@ -38,6 +40,37 @@ def _snapshot(label: str) -> PlatformSnapshot:
         coverage=pd.DataFrame(),
         generated_at=datetime(2026, 7, 5, 12, 0, 0),
     )
+
+
+def test_load_index_atomic_shell_snapshot_is_readonly_projection(monkeypatch):
+    published_summary = pd.DataFrame({"index_code": ["000300"], "snapshot_status": ["computed"]})
+    published_at = datetime(2026, 7, 31, 9, 30)
+    result = state.IndexAtomicSnapshotCacheResult(
+        summary=published_summary,
+        details=pd.DataFrame(),
+        status="ready",
+        generated_at=published_at,
+    )
+    monkeypatch.setattr(state, "load_index_atomic_snapshot_readonly", lambda *args, **kwargs: result)
+
+    snapshot = state.load_index_atomic_shell_snapshot_readonly(object())
+
+    assert snapshot.index_summary.equals(published_summary)
+    assert snapshot.generated_at == published_at
+    assert snapshot.master.empty
+    assert snapshot.watchlist.empty
+    assert snapshot.universe.empty
+    assert snapshot.gaps.empty
+    assert snapshot.coverage.empty
+
+
+def test_create_index_atomic_snapshot_reader_does_not_create_root(tmp_path):
+    root = tmp_path / "missing" / "parquet"
+
+    reader = state.create_index_atomic_snapshot_reader(root)
+
+    assert reader.root == root
+    assert not root.exists()
 
 
 def _atomic_master() -> pd.DataFrame:
@@ -88,6 +121,23 @@ def _details(index_code: str) -> pd.DataFrame:
     return pd.DataFrame([row], columns=INDEX_ATOMIC_DETAIL_COLUMNS)
 
 
+def _five_year_valuation_history() -> pd.DataFrame:
+    dates = pd.bdate_range("2021-07-29", "2026-07-29")
+    return finalize_index_valuation_frame(
+        pd.DataFrame(
+            {
+                "trade_date": dates,
+                "pe_ttm": range(1, len(dates) + 1),
+                "pe_static": range(1, len(dates) + 1),
+                "pb": range(1, len(dates) + 1),
+            }
+        ),
+        "000300",
+        "tushare_index_dailybasic",
+        "official",
+    )
+
+
 def _coverage(index_code: str, latest_trade_date: str = "2026-07-12") -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -101,6 +151,17 @@ def _coverage(index_code: str, latest_trade_date: str = "2026-07-12") -> pd.Data
 
 def _read_index_atomic_meta(parquet_store: ParquetStore) -> dict[str, object]:
     return json.loads((parquet_store.root / "cache" / "index_atomic_snapshot.meta.json").read_text(encoding="utf-8"))
+
+
+def _change_file_content_preserving_size_and_mtime(path: Path) -> None:
+    metadata = path.stat()
+    content = bytearray(path.read_bytes())
+    assert content
+    content[len(content) // 2] ^= 1
+    path.write_bytes(content)
+    os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    assert path.stat().st_size == metadata.st_size
+    assert path.stat().st_mtime_ns == metadata.st_mtime_ns
 
 
 def _write_atomic_cache(root: Path, signature: str, schema_version: int | None = None) -> None:
@@ -359,6 +420,48 @@ def test_readonly_loader_marks_signature_mismatch_stale_and_keeps_previous_rows(
     assert result.summary["index_code"].tolist() == ["000300"]
     assert result.generated_at == datetime(2026, 7, 12, 9, 0)
     assert result.current_latest_date == "2026-07-13"
+
+
+def test_valuation_cache_change_marks_published_snapshot_stale(tmp_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    coverage = _coverage("000300")
+    parquet_store.write_index_valuations("000300", _five_year_valuation_history().iloc[:-1])
+    source_signature = state._index_atomic_snapshot_source_signature(parquet_store, definitions, coverage)
+    state.write_index_atomic_snapshot(
+        _summary("000300"),
+        _details("000300"),
+        source_signature,
+        datetime(2026, 7, 29, 9, 0),
+        parquet_store,
+        definitions=definitions,
+        coverage=coverage,
+        expected_input_signature=source_signature,
+    )
+    parquet_store.write_index_valuations("000300", _five_year_valuation_history())
+
+    loaded = state.load_index_atomic_snapshot_readonly(parquet_store, definitions, coverage=coverage)
+
+    assert loaded.status == "stale"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    ("indexes/000300.parquet", "index_valuations/000300.parquet"),
+    ids=("price", "supported_valuation"),
+)
+def test_index_atomic_input_signature_detects_content_change_with_preserved_metadata(tmp_path, relative_path):
+    parquet_store = _parquet_store(tmp_path)
+    definitions = (_definition("000300"),)
+    path = parquet_store.root / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"index-input-content")
+
+    before = state._index_atomic_snapshot_source_signature(parquet_store, definitions)
+    _change_file_content_preserving_size_and_mtime(path)
+    after = state._index_atomic_snapshot_source_signature(parquet_store, definitions)
+
+    assert after != before
 
 
 def test_atomic_snapshot_meta_records_schema_catalog_source_and_task_result(tmp_path):

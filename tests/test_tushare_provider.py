@@ -103,3 +103,34 @@ def test_index_daily_uses_csi_symbol_for_hk_catalog_entry():
     provider.fetch_index_daily(entry, "2026-07-01", "2026-07-01")
 
     assert pro.calls[-1][2]["ts_code"] == "H30533.CSI"
+
+
+def test_index_dailybasic_normalizes_all_official_fields():
+    pro = _FakePro({"index_dailybasic": pd.DataFrame({
+        "ts_code": ["000300.SH"],
+        "trade_date": ["20260729"],
+        "total_mv": [51_000_000.0],
+        "float_mv": [42_000_000.0],
+        "total_share": [3_000_000.0],
+        "float_share": [2_500_000.0],
+        "free_share": [1_800_000.0],
+        "turnover_rate": [0.27],
+        "turnover_rate_f": [0.45],
+        "pe": [11.90],
+        "pe_ttm": [11.60],
+        "pb": [1.24],
+    })})
+    provider = TushareProvider(ProviderSettings(token="test", attempts=1), pro_client=pro)
+
+    result = provider.fetch_index_official_valuations("000300", "2026-07-01", "2026-07-29")
+
+    assert pro.calls[0][0] == "index_dailybasic"
+    assert pro.calls[0][2]["ts_code"] == "000300.SH"
+    assert result.loc[0, ["index_code", "pe_static", "pe_ttm", "pb", "turnover_rate", "data_source"]].to_dict() == {
+        "index_code": "000300",
+        "pe_static": 11.90,
+        "pe_ttm": 11.60,
+        "pb": 1.24,
+        "turnover_rate": 0.27,
+        "data_source": "tushare_index_dailybasic",
+    }

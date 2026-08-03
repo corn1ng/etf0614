@@ -21,9 +21,11 @@ from etf_trading.nicegui_app.components.tables import VALUE_LABELS, render_table
 from etf_trading.nicegui_app.maintenance_tasks import (
     INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE,
     INDEX_MAINTENANCE_TASK_TYPES,
+    OFFICIAL_INDEX_VALUATION_SYNC_TASK_TYPE,
     IndexAtomicSnapshotMaintenanceRunner,
     IndexCatalogMaintenanceRunner,
     IndexHistoryBatchRunner,
+    OfficialIndexValuationMaintenanceRunner,
 )
 from etf_trading.nicegui_app.state import invalidate_snapshot_cache
 from etf_trading.nicegui_app.view_models import (
@@ -43,6 +45,7 @@ TASK_RESULT_PREVIEW_LIMIT = 50
 INDEX_TASK_TITLES = {
     "index_history_batch": INDEX_HISTORY_BATCH_TASK_TITLE,
     INDEX_ATOMIC_SNAPSHOT_REBUILD_TASK_TYPE: "重建指数原子指标",
+    OFFICIAL_INDEX_VALUATION_SYNC_TASK_TYPE: "同步官方指数估值",
     **INDEX_MAINTENANCE_TASK_TYPES,
 }
 
@@ -205,6 +208,12 @@ def _catalog_task_message(task_type: str, rows: object) -> str:
         return f"已重建 {calculated}/{total} 个指数的原子指标{suffix}"
     if not isinstance(rows, list):
         rows = []
+    if task_type == OFFICIAL_INDEX_VALUATION_SYNC_TASK_TYPE:
+        statuses = pd.Series([str(row.get("status", "")) for row in rows], dtype=str)
+        return (
+            f"已同步 {len(rows)} 个官方指数估值：新增/更新 {int(statuses.isin(['INITIALIZED', 'UPDATED']).sum())}，"
+            f"本地已最新 {int((statuses == 'CURRENT').sum())}，无数据/失败 {int(statuses.isin(['EMPTY', 'FAILED']).sum())}"
+        )
     if task_type == "index_catalog_sync":
         pools = pd.Series([str(row.get("pool", "")) for row in rows], dtype=str)
         formal = int(pools.isin(["core", "research"]).sum())
@@ -320,12 +329,16 @@ def _render_gap_detail(snapshot: PlatformSnapshot) -> None:
 
 def _render_tasks(snapshot: PlatformSnapshot, store, parquet_store) -> None:
     index_runner = IndexHistoryBatchRunner(store, parquet_store)
+    official_valuation_runner = OfficialIndexValuationMaintenanceRunner(store, parquet_store)
     catalog_runner = IndexCatalogMaintenanceRunner(store, parquet_store) if hasattr(store, "list_index_catalog") else None
     atomic_snapshot_runner = (
         IndexAtomicSnapshotMaintenanceRunner(store, parquet_store) if hasattr(store, "list_index_catalog") else None
     )
     index_runner.reconcile_interrupted()
     persisted_runs = [run for run in [index_runner.latest()] if run is not None]
+    run = official_valuation_runner.latest()
+    if run is not None:
+        persisted_runs.append(run)
     if atomic_snapshot_runner is not None:
         run = atomic_snapshot_runner.latest()
         if run is not None:
@@ -344,6 +357,9 @@ def _render_tasks(snapshot: PlatformSnapshot, store, parquet_store) -> None:
         if task_status.state != "idle" and task_status.title not in set(INDEX_TASK_TITLES.values()):
             return
         runs = [run for run in [index_runner.latest()] if run is not None]
+        run = official_valuation_runner.latest()
+        if run is not None:
+            runs.append(run)
         if atomic_snapshot_runner is not None:
             run = atomic_snapshot_runner.latest()
             if run is not None:
@@ -368,7 +384,15 @@ def _render_tasks(snapshot: PlatformSnapshot, store, parquet_store) -> None:
     _render_etf_history_tasks(snapshot, store, parquet_store, task_center, task_status)
     _render_index_history_tasks(store, parquet_store, task_center, task_status, index_runner)
     if catalog_runner is not None:
-        _render_catalog_index_tasks(store, parquet_store, task_center, task_status, catalog_runner, atomic_snapshot_runner)
+        _render_catalog_index_tasks(
+            store,
+            parquet_store,
+            task_center,
+            task_status,
+            catalog_runner,
+            atomic_snapshot_runner,
+            official_valuation_runner,
+        )
     _render_batch_tasks(store, parquet_store, task_center, task_status)
     ui.label("补齐任务只在点击后执行，避免打开页面自动触发耗时操作。").classes("text-xs text-slate-500")
 
@@ -490,6 +514,7 @@ def _render_catalog_index_tasks(
     task_status: MaintenanceTaskStatus,
     runner: IndexCatalogMaintenanceRunner,
     atomic_snapshot_runner: IndexAtomicSnapshotMaintenanceRunner,
+    official_valuation_runner: OfficialIndexValuationMaintenanceRunner,
 ) -> None:
     end = date.today().isoformat()
     summary = _index_catalog_summary(store)
@@ -526,6 +551,16 @@ def _render_catalog_index_tasks(
                     task_status,
                 ),
             ).props("dense outline")
+            ui.button(
+                "同步官方指数估值",
+                icon="sync",
+                on_click=lambda: _start_official_index_valuation_sync_task(
+                    official_valuation_runner,
+                    str(end_input.value or end),
+                    task_center,
+                    task_status,
+                ),
+            ).props("dense outline")
         ui.label("目录同步和数据源验证不会拉取全历史；全量与修复操作均从 1990-01-01 请求，并可在刷新页面后恢复查看。").classes("text-xs text-slate-500")
         ui.label("只读取本地指数历史；初始化、补齐或修复历史后，请手动重建。").classes("text-xs text-slate-500")
 
@@ -550,6 +585,19 @@ def _start_atomic_snapshot_rebuild_task(
     task_status: MaintenanceTaskStatus,
 ) -> None:
     run = runner.start()
+    restored = _task_status_from_run(run)
+    task_status.__dict__.update(restored.__dict__)
+    _render_task_center(task_center, task_status)
+    ui.notify(task_status.message, type="info")
+
+
+def _start_official_index_valuation_sync_task(
+    runner: OfficialIndexValuationMaintenanceRunner,
+    through: str,
+    task_center,
+    task_status: MaintenanceTaskStatus,
+) -> None:
+    run = runner.start(through)
     restored = _task_status_from_run(run)
     task_status.__dict__.update(restored.__dict__)
     _render_task_center(task_center, task_status)

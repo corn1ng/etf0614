@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from etf_trading.data.provider_runtime import ProviderCapabilityError
+
 if TYPE_CHECKING:
     from etf_trading.data.index_catalog import IndexCatalogEntry
 
@@ -45,6 +47,14 @@ class DataProvider(ABC):
         end_date: date | str,
     ) -> pd.DataFrame:
         raise NotImplementedError
+
+    def fetch_index_official_valuations(
+        self,
+        index_code: str,
+        start_date: date | str,
+        end_date: date | str,
+    ) -> pd.DataFrame:
+        raise ProviderCapabilityError(f"official index valuation is unsupported: {index_code}")
 
     @abstractmethod
     def fetch_trade_calendar(self, market: str, start_date: date | str, end_date: date | str) -> pd.DataFrame:

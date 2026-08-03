@@ -1,8 +1,152 @@
 from datetime import date, datetime
+import inspect
 from pathlib import Path
 
 import pandas as pd
 import pytest
+
+
+def test_market_dialog_uses_five_profile_tabs_and_no_builder_import():
+    from etf_trading.nicegui_app.pages import market
+
+    source = inspect.getsource(market)
+    for label in ("画像总览", "估值详情", "趋势与风险", "全部指标", "数据质量"):
+        assert f'ui.tab("{label}")' in source
+    assert "_open_index_profile_dialog" in source
+    assert "index_profile_view" in source
+    assert "build_index_atomic_snapshot" not in source
+    assert "fetch_index_official_valuations" not in source
+    assert "OfficialIndexValuationSyncService" not in source
+
+
+def test_market_profile_table_binds_qtable_row_click_with_index_code_projection(monkeypatch):
+    from etf_trading.nicegui_app.pages import market
+
+    captured: dict[str, object] = {}
+    opened: list[tuple[object, str]] = []
+
+    class FakeTable:
+        def on(self, event_type, handler, **kwargs):
+            captured["event_type"] = event_type
+            captured["handler"] = handler
+            captured.update(kwargs)
+            return self
+
+    class FakeEvent:
+        args = [{"clientX": 1}, {"index_code": "000300"}, 0]
+
+    result = object()
+    monkeypatch.setattr(market, "_open_index_profile_dialog", lambda snapshot, code: opened.append((snapshot, code)))
+
+    market._bind_index_profile_row_click(FakeTable(), result)
+
+    assert captured["event_type"] == "rowClick"
+    assert captured["args"] == [[], ["index_code"], None]
+    assert "js_handler" not in captured
+    captured["handler"](FakeEvent())
+    assert opened == [(result, "000300")]
+
+
+def test_index_valuation_page_does_not_import_provider_or_sync_service():
+    from etf_trading.nicegui_app.pages import market
+
+    source = inspect.getsource(market)
+
+    assert "TushareProvider" not in source
+    assert "OfficialIndexValuationSyncService" not in source
+    assert "fetch_index_official_valuations" not in source
+
+
+def test_index_valuation_renderer_does_not_create_or_initialize_a_store():
+    from etf_trading.nicegui_app.pages import market
+
+    source = inspect.getsource(market._render_index_valuation)
+
+    assert "create_store" not in source
+    assert "index_atomic_snapshot_inputs" not in source
+
+
+def test_market_profile_overview_compact_risk_panel_explains_all_empty_sections(monkeypatch):
+    from etf_trading.nicegui_app.pages import market
+    from etf_trading.nicegui_app.view_models import IndexProfileMetricSection
+
+    class FakeElement:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def classes(self, _classes):
+            return self
+
+    class FakeUi:
+        labels: list[str] = []
+
+        def element(self, _tag):
+            return FakeElement()
+
+        def label(self, value):
+            self.labels.append(value)
+            return FakeElement()
+
+    fake_ui = FakeUi()
+    monkeypatch.setattr(market, "ui", fake_ui)
+
+    market._render_index_profile_compact_sections(
+        tuple(IndexProfileMetricSection(title, ()) for title in ("趋势结构", "动量与收益", "回撤与风险", "成交活跃度"))
+    )
+
+    assert "动量与风险" in fake_ui.labels
+    assert "数据不足" in fake_ui.labels
+
+
+def test_market_profile_all_groups_use_independent_scoped_expansions(monkeypatch):
+    from etf_trading.nicegui_app.pages import market
+
+    expansions: list[tuple[str, bool, object]] = []
+    labels: list[str] = []
+
+    class FakeElement:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def classes(self, _classes):
+            return self
+
+    class FakeUi:
+        def element(self, _tag):
+            return FakeElement()
+
+        def expansion(self, title, *, value=False):
+            expansion = FakeElement()
+            expansions.append((title, value, expansion))
+            return expansion
+
+        def label(self, value):
+            labels.append(value)
+            return FakeElement()
+
+    fake_ui = FakeUi()
+    monkeypatch.setattr(market, "ui", fake_ui)
+    groups = tuple(
+        type("Group", (), {"title": title, "items": ()})()
+        for title in ("价格与均线", "均线穿越", "技术指标")
+    )
+
+    market._render_index_profile_all_groups(groups)
+
+    assert [(title, value) for title, value, _expansion in expansions] == [
+        ("价格与均线", True),
+        ("均线穿越", False),
+        ("技术指标", False),
+    ]
+    assert len({id(expansion) for _title, _value, expansion in expansions}) == len(groups)
+    assert labels == ["数据不足"] * len(groups)
+    assert "ui.expansion(" in inspect.getsource(market._render_index_profile_all_groups)
 
 
 def test_market_page_uses_readonly_atomic_snapshot_and_no_legacy_health_builder():
@@ -19,7 +163,7 @@ def test_market_page_declares_pool_search_and_tabbed_detail_dialog():
 
     for text in ("核心池", "研究池", "搜索指数", "状态概览", "全部原子指标", "数据质量"):
         assert text in source
-    for forbidden in ("大趋势", "中趋势", "小趋势", "允许开仓", "估值"):
+    for forbidden in ("大趋势", "中趋势", "小趋势", "允许开仓", "综合分", "建议", "市场宽度"):
         assert forbidden not in source
 
 
@@ -38,7 +182,7 @@ def test_market_page_declares_snapshot_states_fixed_columns_and_readonly_reload(
         "index-atomic-dialog",
     ):
         assert text in source
-    assert source.count("load_index_atomic_snapshot_readonly") == 3
+    assert source.count("load_index_atomic_snapshot_readonly") == 4
     assert "index_atomic_snapshot_inputs(create_store())" in source
     assert '"computed": "已计算"' in source
     assert "IndexAtomicFilters(pool=str(pool.value or \"core\")" in source
@@ -785,6 +929,7 @@ def test_maintenance_task_routes_use_lightweight_snapshot():
     assert layout.snapshot_mode_for_route("maintenance", "数据体检") == "full"
     assert layout.snapshot_mode_for_route("maintenance", "缺口明细") == "full"
     assert layout.snapshot_mode_for_route("market", "指数体检") == "atomic_index"
+    assert layout.snapshot_mode_for_route("market", "指数估值") == "index_valuation_readonly"
     assert layout.snapshot_mode_for_route("etf-data", "原子指标") == "maintenance_tasks"
     assert layout.snapshot_mode_for_route("etf-data", "ETF行情") == "maintenance_tasks"
     assert layout.snapshot_mode_for_route("etf-data", "搜索加入") == "maintenance_tasks"
@@ -798,9 +943,9 @@ def test_every_nicegui_route_declares_snapshot_policy():
     from etf_trading.nicegui_app.navigation import NICEGUI_PAGES
 
     for page in NICEGUI_PAGES:
-        assert layout.snapshot_mode_for_route(page.slug, None) in {"full", "maintenance_tasks", "atomic_index"}
+        assert layout.snapshot_mode_for_route(page.slug, None) in {"full", "maintenance_tasks", "atomic_index", "index_valuation_readonly"}
         for section in page.sections:
-            assert layout.snapshot_mode_for_route(page.slug, section) in {"full", "maintenance_tasks", "atomic_index"}
+            assert layout.snapshot_mode_for_route(page.slug, section) in {"full", "maintenance_tasks", "atomic_index", "index_valuation_readonly"}
 
 
 def test_render_shell_uses_lightweight_snapshot_for_maintenance_tasks(monkeypatch):
@@ -845,6 +990,184 @@ def test_render_shell_uses_lightweight_snapshot_for_maintenance_tasks(monkeypatc
     layout.render_shell("maintenance", "补齐任务")
 
     assert calls == ["maintenance_tasks"]
+
+
+def test_render_shell_uses_readonly_snapshot_for_index_valuation(monkeypatch):
+    from etf_trading.nicegui_app import layout
+    from etf_trading.nicegui_app import state
+    from etf_trading.nicegui_app.view_models import PlatformSnapshot
+
+    calls = []
+    writes = []
+
+    class RecordingStore:
+        def initialize_schema(self):
+            writes.append("initialize_schema")
+
+    class FakeElement:
+        def classes(self, value):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def row(self):
+            return FakeElement()
+
+        def column(self):
+            return FakeElement()
+
+    monkeypatch.setattr(layout, "ui", FakeUi())
+    monkeypatch.setattr(layout, "apply_theme", lambda: None)
+    monkeypatch.setattr(layout, "_render_sidebar", lambda active_slug: None)
+    monkeypatch.setattr(layout, "_render_topbar", lambda snapshot: None)
+    monkeypatch.setattr(layout, "_render_page_header", lambda page, active_section: None)
+    monkeypatch.setattr(layout, "_render_page", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state, "create_store", RecordingStore)
+    monkeypatch.setattr(state, "create_parquet_store", lambda: object())
+    monkeypatch.setattr(state, "load_snapshot_cached", lambda *args, **kwargs: calls.append("full") or object())
+    monkeypatch.setattr(
+        state,
+        "load_maintenance_task_snapshot",
+        lambda store: (store.initialize_schema(), calls.append("maintenance"))[-1] or object(),
+    )
+    monkeypatch.setattr(
+        state,
+        "load_index_atomic_shell_snapshot_readonly",
+        lambda *args, **kwargs: calls.append("readonly") or PlatformSnapshot(
+            master=pd.DataFrame(),
+            watchlist=pd.DataFrame(),
+            index_summary=pd.DataFrame(),
+            universe=pd.DataFrame(),
+            gaps=pd.DataFrame(),
+            coverage=pd.DataFrame(),
+            generated_at=datetime(2026, 7, 31),
+        ),
+        raising=False,
+    )
+
+    layout.render_shell("market", "指数估值")
+
+    assert calls == ["readonly"]
+    assert writes == []
+
+
+def test_render_shell_index_valuation_does_not_create_sqlite_or_parquet_paths(tmp_path, monkeypatch):
+    from etf_trading.nicegui_app import layout
+
+    rendered = []
+
+    class FakeElement:
+        def classes(self, value):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def row(self):
+            return FakeElement()
+
+        def column(self):
+            return FakeElement()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(layout, "ui", FakeUi())
+    monkeypatch.setattr(layout, "apply_theme", lambda: None)
+    monkeypatch.setattr(layout, "_render_sidebar", lambda active_slug: None)
+    monkeypatch.setattr(layout, "_render_topbar", lambda snapshot: None)
+    monkeypatch.setattr(layout, "_render_page_header", lambda page, active_section: None)
+    monkeypatch.setattr(layout, "_render_page", lambda *args, **kwargs: rendered.append(kwargs["parquet_store"]))
+
+    layout.render_shell("market", "指数估值")
+
+    assert rendered
+    assert not (tmp_path / "database").exists()
+    assert not (tmp_path / "database" / "etf_system.sqlite").exists()
+    assert not (tmp_path / "data" / "parquet").exists()
+
+
+def test_render_shell_index_health_initializes_empty_sqlite_before_renderer_reads_catalog(tmp_path, monkeypatch):
+    from etf_trading.nicegui_app import layout
+    from etf_trading.nicegui_app.pages import market
+
+    class FakeProps:
+        def __init__(self, owner):
+            self.owner = owner
+
+        def __call__(self, value):
+            return self.owner
+
+    class FakeElement:
+        def __init__(self, value=None):
+            self.value = value
+            self.props = FakeProps(self)
+
+        def classes(self, value):
+            return self
+
+        def on_value_change(self, handler):
+            return self
+
+        def clear(self):
+            return None
+
+        def update(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    class FakeUi:
+        def row(self):
+            return FakeElement()
+
+        def column(self):
+            return FakeElement()
+
+        def element(self, tag):
+            return FakeElement()
+
+        def toggle(self, options, value=None):
+            return FakeElement(value)
+
+        def input(self, label):
+            return FakeElement("")
+
+        def button(self, label, icon=None, on_click=None):
+            return FakeElement()
+
+        def link(self, label, target):
+            return FakeElement()
+
+        def label(self, text):
+            return FakeElement()
+
+        def notify(self, message, type=None):
+            return None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(layout, "ui", FakeUi())
+    monkeypatch.setattr(market, "ui", FakeUi())
+    monkeypatch.setattr(layout, "apply_theme", lambda: None)
+    monkeypatch.setattr(layout, "_render_sidebar", lambda active_slug: None)
+    monkeypatch.setattr(layout, "_render_topbar", lambda snapshot: None)
+    monkeypatch.setattr(layout, "_render_page_header", lambda page, active_section: None)
+    monkeypatch.setattr(market, "_render_audit", lambda page_slug: None)
+
+    layout.render_shell("market", "指数体检")
+
+    assert (tmp_path / "database" / "etf_system.sqlite").exists()
 
 
 def test_sidebar_links_maintenance_to_task_page(monkeypatch):

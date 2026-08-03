@@ -3,12 +3,63 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
+
+def _comparison_summary():
+    codes = ["399006", "801010", "000300", "000001", "399001", "000905", "000016"]
+    return pd.DataFrame(
+        [
+            {
+                "index_code": code,
+                "index_name": f"指数{code}",
+                "valuation_support_status": "unsupported" if code == "801010" else "supported",
+                "valuation_as_of_date": "2026-07-29",
+                "pe_static": 11.9,
+                "pe_ttm": 11.6,
+                "pe_ttm_5y_percentile": 0.18,
+                "pb": 1.24,
+                "pb_5y_percentile": 0.22,
+                "valuation_freshness_status": "fresh",
+                "valuation_source": "tushare_index_dailybasic",
+            }
+            for code in codes
+        ]
+    )
+
+
+def test_official_index_valuation_comparison_uses_supported_published_rows_only():
+    from etf_trading.nicegui_app.view_models import official_index_valuation_comparison_rows
+
+    rows = official_index_valuation_comparison_rows(_comparison_summary())
+
+    assert [row["指数代码"] for row in rows] == ["000001", "000016", "000300", "000905", "399001", "399006"]
+    assert rows[2]["PE-TTM"] == "11.60"
+    assert rows[2]["PE-TTM 5年分位"] == "18.0%"
+    assert "801010" not in {row["指数代码"] for row in rows}
+
+
+def test_official_index_valuation_comparison_keeps_not_synced_and_stale_official_rows():
+    from etf_trading.nicegui_app.view_models import official_index_valuation_comparison_rows
+
+    summary = _comparison_summary()
+    summary.loc[summary["index_code"] == "000001", "valuation_support_status"] = "not_synced"
+    summary.loc[summary["index_code"] == "000001", "valuation_freshness_status"] = ""
+    summary.loc[summary["index_code"] == "000016", "valuation_freshness_status"] = "stale"
+
+    rows = official_index_valuation_comparison_rows(summary)
+    states = {row["指数代码"]: row["新鲜度"] for row in rows}
+
+    assert "000001" in states
+    assert states["000001"] == "官方估值尚未同步"
+    assert states["000016"] == "估值数据已过期"
+    assert "801010" not in states
+
 from etf_trading.nicegui_app.view_models import (
     ATOMIC_HEALTH_COLUMNS,
     ATOMIC_OPPORTUNITY_COLUMNS,
     AtomicIndicatorFilters,
     IndexAtomicFilters,
     IndexHealthFilters,
+    IndexProfileView,
     PlatformSnapshot,
     atomic_data_update_health,
     atomic_data_health_summary,
@@ -28,6 +79,7 @@ from etf_trading.nicegui_app.view_models import (
     index_choice_options,
     index_atomic_detail_groups,
     index_atomic_overview,
+    index_profile_view,
     index_health_detail_rows,
     index_health_filter_options,
     index_health_rows,
@@ -173,6 +225,260 @@ def _overview_detail(metric_key: str, value: object, *, status: str = "computed"
         "metric_label": metric_key, "value": value, "status": status, "reason": reason,
         "as_of_date": "2026-07-11", "sample_count": 260, "data_source": "akshare_zh_em",
     }
+
+
+def _profile_detail(
+    metric_key: str,
+    value: object,
+    *,
+    group_key: str = "valuation",
+    status: str = "computed",
+    reason: str = "已计算",
+) -> dict[str, object]:
+    return {
+        "index_code": "000300",
+        "group_key": group_key,
+        "metric_key": metric_key,
+        "metric_label": metric_key,
+        "value": value,
+        "status": status,
+        "reason": reason,
+        "as_of_date": "2026-07-29",
+        "sample_count": 1000,
+        "data_source": "tushare_index_dailybasic" if group_key == "valuation" else "unit",
+        "window_start_date": "2021-07-29" if "5y" in metric_key else "",
+        "window_end_date": "2026-07-29" if "5y" in metric_key else "",
+    }
+
+
+def _profile_summary() -> dict[str, object]:
+    return {
+        "index_code": "000300", "index_name": "沪深300", "latest_date": "2026-07-29",
+        "valuation_as_of_date": "2026-07-29", "valuation_support_status": "supported",
+        "valuation_freshness_status": "fresh", "pe_ttm": 11.6, "pe_ttm_5y_percentile": 0.18,
+        "pb": 1.24, "pb_5y_percentile": 0.22, "close_above_ma_20": False,
+        "close_vs_ma_20": -0.037, "drawdown_250": -0.079,
+    }
+
+
+def _profile_details() -> pd.DataFrame:
+    return pd.DataFrame([
+        _profile_detail("pe_ttm", 11.6),
+        _profile_detail("pe_ttm_percentile_5y", 0.18),
+        _profile_detail("pe_ttm_band_5y", "历史低位"),
+        _profile_detail("pb", 1.24),
+        _profile_detail("pb_percentile_5y", 0.22),
+        _profile_detail("pb_band_5y", "偏低"),
+        _profile_detail("close", 4569.52, group_key="price_ma"),
+        _profile_detail("ma_20", 4743.52, group_key="price_ma"),
+        _profile_detail("close_above_ma_20", False, group_key="price_ma"),
+        _profile_detail("drawdown_250", -0.079, group_key="return_drawdown"),
+        _profile_detail("rsi_14", 41.2, group_key="momentum_return"),
+        _profile_detail("annualized_volatility_20", 0.146, group_key="drawdown_risk"),
+        _profile_detail("amount_avg_20", 100_000_000, group_key="trading_activity"),
+    ])
+
+
+def test_index_profile_view_builds_approved_summary_and_five_domains():
+    view = index_profile_view(_profile_summary(), _profile_details(), "000300")
+
+    assert isinstance(view, IndexProfileView)
+    assert view.identity == "000300 · 沪深300"
+    assert [card.label for card in view.summary_cards] == ["PE-TTM", "PB", "趋势位置", "250日当前回撤"]
+    assert view.valuation.pe_ttm.percentile_5y == "18.0%"
+    assert view.valuation.pe_ttm.band_5y == "历史低位"
+    assert [section.title for section in view.trend_risk_sections] == [
+        "趋势结构", "动量与收益", "回撤与风险", "成交活跃度",
+    ]
+
+
+def test_index_profile_overview_uses_stable_representative_atoms_while_detail_keeps_bulk_atoms():
+    details = pd.concat(
+        [
+            _profile_details(),
+            pd.DataFrame(
+                [
+                    _profile_detail("ma_60", 4600.0, group_key="price_ma"),
+                    _profile_detail("ma_120", 4500.0, group_key="price_ma"),
+                    _profile_detail("ma_cross_down_60", False, group_key="ma_cross"),
+                    _profile_detail("range_60_high", False, group_key="range_position"),
+                    _profile_detail("return_20", 0.04, group_key="return_drawdown"),
+                    _profile_detail("return_60", 0.08, group_key="return_drawdown"),
+                    _profile_detail("up_day_ratio_20", 0.65, group_key="momentum_return"),
+                    _profile_detail("max_drawdown_250", -0.12, group_key="drawdown_risk"),
+                    _profile_detail("annualized_volatility_60", 0.18, group_key="drawdown_risk"),
+                    _profile_detail("amount_avg_60", 120_000_000, group_key="trading_activity"),
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    overview_trend_labels = {item.label for item in view.overview_trend.rows}
+    overview_compact_keys = {
+        item.metric_key for section in view.overview_trend_risk_sections for item in section.items
+    }
+    detail_keys = {item.metric_key for section in view.trend_risk_sections for item in section.items}
+
+    assert {"ma_20", "ma_60"} <= overview_trend_labels
+    assert {"ma_120", "ma_cross_down_60", "range_60_high"}.isdisjoint(overview_trend_labels)
+    assert {"return_20", "return_60", "rsi_14", "max_drawdown_250", "annualized_volatility_60"} <= overview_compact_keys
+    assert "amount_avg_60" not in overview_compact_keys
+    assert {"ma_120", "ma_cross_down_60", "range_60_high", "amount_avg_60"} <= detail_keys
+
+
+def test_index_profile_formats_published_boolean_atoms_without_numeric_coercion():
+    details = pd.concat(
+        [
+            _profile_details(),
+            pd.DataFrame(
+                [
+                    _profile_detail("ma_cross_up_20", "False", group_key="ma_cross", reason="字符串布尔原子"),
+                    _profile_detail("ma_cross_down_20", True, group_key="ma_cross", reason="原生布尔原子"),
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    rows = {item.label: item for item in view.trend.rows}
+    assert (rows["ma_cross_up_20"].value, rows["ma_cross_up_20"].status, rows["ma_cross_up_20"].reason) == (
+        "否",
+        "已计算",
+        "字符串布尔原子",
+    )
+    assert (rows["ma_cross_down_20"].value, rows["ma_cross_down_20"].status, rows["ma_cross_down_20"].reason) == (
+        "是",
+        "已计算",
+        "原生布尔原子",
+    )
+
+
+def test_index_profile_view_hides_valuation_tracks_when_unsupported():
+    summary = _profile_summary() | {
+        "index_code": "801010", "index_name": "农林牧渔", "valuation_support_status": "unsupported",
+        "valuation_as_of_date": "",
+    }
+    details = _profile_details().copy()
+    details["index_code"] = "801010"
+    details = pd.concat([details, pd.DataFrame([{
+        **_profile_detail("valuation_support_status", "unsupported", status="unsupported", reason="Tushare 官方估值暂不支持该指数"),
+        "index_code": "801010",
+    }])], ignore_index=True)
+
+    view = index_profile_view(summary, details, "801010")
+
+    assert view.valuation.visible is False
+    assert view.valuation.reason == "Tushare 官方估值暂不支持该指数"
+    assert view.trend.visible is True
+
+
+def test_index_profile_view_exposes_stale_dates_without_relabeling_old_value():
+    summary = _profile_summary() | {
+        "valuation_as_of_date": "2026-07-20", "valuation_freshness_status": "stale",
+    }
+
+    view = index_profile_view(summary, _profile_details(), "000300")
+
+    assert view.valuation.status == "估值数据已过期"
+    assert view.price_as_of_date == "2026-07-29"
+    assert view.valuation_as_of_date == "2026-07-20"
+
+
+def test_index_profile_quality_formats_official_valuation_source_label():
+    details = pd.concat([_profile_details(), pd.DataFrame([
+        _profile_detail("valuation_source", "tushare_index_dailybasic"),
+    ])], ignore_index=True)
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    source = next(item for item in view.quality if item.label == "valuation_source")
+    assert source.value == "Tushare（官方指数每日指标）"
+
+
+def test_index_profile_marks_not_synced_valuation_without_empty_tracks():
+    summary = _profile_summary() | {
+        "valuation_support_status": "not_synced", "valuation_freshness_status": "",
+        "valuation_as_of_date": "",
+    }
+    details = pd.concat([_profile_details(), pd.DataFrame([{
+        **_profile_detail("valuation_support_status", "not_synced", status="not_synced", reason="尚未同步官方估值"),
+    }])], ignore_index=True)
+
+    view = index_profile_view(summary, details, "000300")
+
+    assert view.valuation.visible is False
+    assert view.valuation.status == "官方估值尚未同步"
+    assert view.valuation.reason == "尚未同步官方估值"
+    assert view.valuation.pe_ttm is None
+
+
+@pytest.mark.parametrize(
+    ("status", "status_label"),
+    [("insufficient_history", "历史不足"), ("calculation_failed", "计算失败")],
+)
+def test_index_profile_keeps_empty_atomic_values_and_statuses(status, status_label):
+    details = _profile_details()
+    details.loc[details["metric_key"] == "drawdown_250", ["value", "status", "reason"]] = [pd.NA, status, "原子指标不可用"]
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    risk = next(section for section in view.trend_risk_sections if section.title == "回撤与风险")
+    drawdown = next(item for item in risk.items if item.metric_key == "drawdown_250")
+    assert (drawdown.value, drawdown.status, drawdown.reason) == ("数据不足", status_label, "原子指标不可用")
+
+
+def test_index_profile_all_groups_cover_every_published_atom_in_stable_group_order():
+    details = pd.DataFrame([
+        _profile_detail("pe_ttm", 11.6),
+        _profile_detail("history_rows", 1000, group_key="data_quality"),
+        _profile_detail("close", 4569.52, group_key="price_ma"),
+        _profile_detail("ma_20", 4743.52, group_key="price_ma"),
+        _profile_detail("ma_cross_up_20", True, group_key="ma_cross"),
+        _profile_detail("range_20_from_high", -0.04, group_key="range_position"),
+        _profile_detail("return_20", 0.03, group_key="return_drawdown"),
+        _profile_detail("annualized_volatility_20", 0.146, group_key="volatility_volume"),
+        _profile_detail("rsi_14", 41.2, group_key="momentum_return"),
+        _profile_detail("max_drawdown_250", -0.20, group_key="drawdown_risk"),
+        _profile_detail("amount_avg_20", 100_000_000, group_key="trading_activity"),
+    ])
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    assert [group.title for group in view.all_groups] == [
+        "估值与便宜程度", "价格与均线", "均线穿越", "区间位置与突破", "收益与回撤", "波动与量能",
+        "动量与收益", "回撤与风险", "成交活跃度", "数据质量",
+    ]
+    assert [item.metric_key for group in view.all_groups for item in group.items] == [
+        "pe_ttm", "close", "ma_20", "ma_cross_up_20", "range_20_from_high", "return_20",
+        "annualized_volatility_20", "rsi_14", "max_drawdown_250", "amount_avg_20", "history_rows",
+    ]
+
+
+def test_index_profile_events_are_sorted_newest_to_oldest_across_price_and_valuation():
+    details = pd.concat(
+        [
+            _profile_details(),
+            pd.DataFrame(
+                [
+                    _profile_detail("days_since_ma_cross_up_20", 5, group_key="ma_cross"),
+                    _profile_detail("pe_ttm_5y_band_changed", True),
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    view = index_profile_view(_profile_summary(), details, "000300")
+
+    assert [(event.label, event.days) for event in view.events] == [
+        ("PE-TTM 5年分位区间变化", "2026-07-29"),
+        ("上穿20日均线", "5 日前"),
+    ]
 
 
 def test_index_atomic_overview_reads_stored_atoms_without_conclusions():

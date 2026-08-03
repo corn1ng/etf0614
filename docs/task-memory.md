@@ -1,5 +1,31 @@
 # Task Memory
 
+## 2026-07-30 - Add durable official valuation maintenance task
+
+- Summary: Added a resumable NiceGUI maintenance task for the six explicit official-index valuation mappings. It persists per-index progress and redacted failures, restores the latest task after page refresh, offers an explicit catalog-panel trigger, and localizes valuation-sync states.
+- Verification: `H:\\pythonproject\\etf0614\\etf0614\\.venv-win\\Scripts\\python.exe -m pytest -q --basetemp C:\\Users\\cjj\\AppData\\Local\\Temp\\index-profile-maintenance-full` passed with 463 tests and 1 skipped.
+- Watch out next time:
+  - The official valuation provider route is intentionally Tushare-primary only; do not add AkShare fallback to `fetch_index_official_valuations`.
+  - Any persisted failure must be redacted before it reaches SQLite or the maintenance page; keep the token environment-only.
+  - Include durable task types in both initial restored-run selection and timer refresh selection.
+
+## 2026-07-30 - Reject invalid official valuation index codes
+
+- Summary: Hardened official valuation synchronization so a non-empty provider response must contain a non-null `index_code` matching the index currently being synchronized before any cache write occurs.
+- Verification: `H:\\pythonproject\\etf0614\\etf0614\\.venv-win\\Scripts\\python.exe -m pytest -q --basetemp C:\\Users\\cjj\\AppData\\Local\\Temp\\index-profile-sync-index-code-full` passed with 459 tests and 1 skipped.
+- Watch out next time:
+  - A valid date and valuation metric are insufficient: every returned row must belong to the requested index before deduplicating or writing.
+  - Test cache-preservation paths with a write-recording store as well as persisted-frame equality, so a rejected response cannot cause even a transient write.
+
+## 2026-07-30 - Synchronize official index valuation cache
+
+- Summary: Added an idempotent official-valuation synchronization service for the six explicit Tushare index mappings. It performs a 2004-01-01 first fill, date-bounded incremental updates, deduplicated merges, progress callbacks, response-schema validation, and redacted failure reporting; empty or failed calls leave a successful cache untouched.
+- Verification: `H:\\pythonproject\\etf0614\\etf0614\\.venv-win\\Scripts\\python.exe -m pytest -q --basetemp C:\\Users\\cjj\\AppData\\Local\\Temp\\index-profile-sync-full-final` passed with 456 tests and 1 skipped.
+- Watch out next time:
+  - Call `fetch_index_official_valuations` directly; valuation sync must never fall back to AkShare.
+  - Validate a non-empty response has `trade_date` plus at least one valuation metric before replacing cache contents.
+  - Keep provider errors redacted before they enter a result frame, progress record, UI, or log.
+
 ## 2026-07-19 - Unified Tushare index routing
 
 - Summary: Removed category-based Tushare skips so every index history request reaches Tushare first; AkShare remains the fallback for empty, unsupported, permission, or network failures.
@@ -79,6 +105,21 @@
 Use this file as the project-level memory for future Codex tasks. Read it at the start of substantive work and update it after every task that changes files or project behavior.
 
 Keep entries concise and reusable. Prefer lessons, constraints, verification notes, and project-specific pitfalls over a raw activity log.
+
+## 2026-07-31 - Explain empty profile momentum and risk panel
+
+- Summary: The read-only profile overview now renders `数据不足` when every compact momentum/risk section is empty, instead of leaving a title-only blank panel.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-compact-empty-full` passed with 514 tests, 1 skipped, and 2 existing pandas warnings.
+- Watch out next time:
+  - A compact summary panel needs an explicit textual unavailable state when its complete source collection is empty; do not rely on an empty visual region to communicate that state.
+
+## 2026-07-31 - Render unified index profile dialog
+
+- Summary: Replaced the index-health row-click target with a five-tab, read-only unified index profile dialog backed only by `index_profile_view`; it presents summary, valuation, trend/risk, all facts, and data quality without scores or recommendations.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-ui-full` passed with 513 tests, 1 skipped, and 2 existing pandas warnings.
+- Watch out next time:
+  - Keep dialog interactions presentation-only: do not start a snapshot build, valuation sync, fetch, or write on row click or tab switch.
+  - Keep all new dialog selectors under `index-profile-*`, including mobile grid and tab-overflow rules.
 
 ## 2026-07-12 - Keep index atomic rebuild inputs coherent and configured
 
@@ -660,3 +701,79 @@ Keep entries concise and reusable. Prefer lessons, constraints, verification not
 - Verification: A regression first failed on LF/CRLF copies, then passed after the fix; the merged `main` suite passed 614 tests with 1 skipped, and the existing full-run package `20260730T191223407974Z-eb8fad0d41` strictly reloaded as `failed` from a non-project working directory.
 - Watch out next time:
   - Audit hashes for text configuration must describe canonical text, not platform-specific checkout bytes; binary evidence artifacts should continue using raw-byte hashes where applicable.
+## 2026-07-31 - Calculate index valuation percentile atoms
+
+- Summary: Added local-only, atomic PE-TTM/PB valuation facts with aligned valuation dates, fixed 3/5/10-calendar-year mid-rank percentiles, bands, medians, turnover observations, and explicit supported/missing/stale states.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_index_valuation_atoms.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-valuation-atoms-green-refactor` passed with 7 tests; full `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-valuation-atoms-full` passed with 470 tests and 1 skipped.
+- Watch out next time:
+  - Keep PE-TTM/PB percentiles as independent mid-rank facts; do not turn their bands into a score, rank, or trading conclusion.
+  - Apply the positive, finite, numeric filter before selecting current metric values as well as before computing historical samples.
+- Retain exact calendar-year window dates and sample counts even when a percentile is unavailable.
+
+## 2026-07-31 - Publish unified index profile snapshots
+
+- Summary: Unified local price atoms with independent official-valuation atoms in one snapshot, preserving the latest price date as the valuation observation date and exposing only atomic facts.
+- Verification: Focused unified snapshot regression suite passed; full suite result is recorded in `.superpowers/sdd/unified-index-profile-task-6-report.md`.
+- Watch out next time:
+  - Read valuation histories only for codes in `OFFICIAL_INDEX_VALUATION_TS_CODES`; unsupported codes retain explicit unsupported atoms and no percentile tracks.
+  - A valuation cache file is part of the snapshot input signature, including its absence; recheck that combined signature before publication.
+  - Keep valuation dates no later than the price observation date and treat more than five unique price trading days of lag as stale.
+
+## 2026-07-31 - Bind index snapshot signatures to input content
+
+- Summary: Hardened unified index snapshot input signatures with chunked file-content SHA-256 digests for selected price files and supported official-valuation files, preventing metadata-preserving replacement from publishing an obsolete snapshot.
+- Verification: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-signature-full` passed with 503 tests, 1 skipped, and 2 existing pandas warnings.
+- Watch out next time:
+  - Size and mtime are only hints: retain a deterministic, chunked content digest in every freshness-critical local-file signature.
+  - The same content-signature function must supply both cache reads and the publication-time recheck, or a rebuild can still publish stale inputs.
+
+## 2026-07-31 - Add read-only cross-index valuation comparison
+
+- Summary: Added the Market “指数估值” section, projecting configured official valuation atoms from the already-published unified snapshot into a stable compact comparison table.
+- Verification: H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-comparison-full passed with 517 tests, 1 skipped, and 2 existing pandas warnings.
+- Watch out next time:
+  - Keep comparison rows sourced exclusively from the read-only index snapshot loader; UI refreshes must never fetch, calculate, or write.
+  - Preserve configured official-code ordering and render percentiles as independent facts, never as a score, rank, or trading conclusion.
+  - Exclude unsupported rows from the official comparison table while keeping missing, failed, stale, and not-synced states explicit in the presentation.
+
+## 2026-07-31 - Keep valuation comparison on the read-only snapshot path
+
+- Summary: Routed Market “指数估值” through the atomic-index lightweight snapshot mode and retained not-synced/stale official rows with their specific Chinese valuation states.
+- Verification: H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-comparison-review-full passed with 519 tests, 1 skipped, and 2 existing pandas warnings.
+- Watch out next time:
+  - A new read-only market section must explicitly select atomic_index; otherwise shell startup can invoke the full snapshot loader and its cold-cache writes.
+  - Use valuation-specific labels for stale, not the generic atomic snapshot “待重建” label.
+  - Exclude only explicit unsupported valuation rows; retain official mappings whose synchronization state is not yet ready.
+
+## 2026-07-31 - Make atomic-index shell rendering SQLite-free
+
+- Summary: Replaced the atomic-index shell path’s maintenance snapshot with a direct published-atomic projection and removed the valuation renderer’s SQLite store creation; canonical not-synced valuation rows now fall back from freshness to support state.
+- Verification: H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-comparison-second-review-full passed with 521 tests, 1 skipped, and 2 existing pandas warnings.
+- Watch out next time:
+  - Do not reuse a “lightweight” maintenance loader for a read-only route unless it is verified not to initialize or migrate SQLite.
+  - A published atomic shell projection must accept no SQLite store, so the call boundary itself prevents initialization and write paths.
+  - For valuation state display, use freshness when available and otherwise support status; canonical not-synced rows intentionally have no freshness value.
+
+## 2026-07-31 - Avoid filesystem creation on atomic-index shell routes
+
+- Summary: Moved snapshot-mode selection before store construction and introduced a root-only atomic snapshot reader so the index valuation shell cannot create SQLite or Parquet directories.
+- Verification: H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-comparison-third-review-full passed with 523 tests, 1 skipped, and 2 existing pandas warnings.
+- Watch out next time:
+  - Determining a route’s read/write policy after creating storage objects is too late: constructors may mutate the filesystem.
+  - A read-only filesystem handle should carry only a path and must not call mkdir, even if the corresponding mutable store normally does.
+  - Exercise lifecycle guarantees in a real previously nonexistent directory; constructor mocks cannot reveal mkdir side effects.
+
+## 2026-07-31 - Separate valuation and health shell lifecycles
+
+- Summary: Added an index-valuation-only read-only shell mode; index health remains on its initialized atomic-index lifecycle so direct empty-database rendering can read the catalog safely.
+- Verification: H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-comparison-fourth-review-full passed with 524 tests, 1 skipped, and 2 existing pandas warnings.
+- Watch out next time:
+  - Shared data labels do not imply shared lifecycle rules: valuation may be path-only read-only while health needs initialized SQLite metadata.
+  - Any new lightweight mode needs an explicit route-policy regression; do not broaden an existing mode merely because two sections read the same published snapshot.
+  - Test a renderer’s prerequisite queries from a truly empty database, not only its shell snapshot construction.
+
+## 2026-07-30 - Add unified index valuation and trend profile
+
+- Summary: Added Tushare official index valuation history, transparent 3/5/10-year PE-TTM and PB percentiles, expanded price/risk atoms, one signed unified snapshot, and the five-tab index profile dialog. Current valuation fields come only from the latest aligned official record; the all-indicators tab preserves valuation, price, and data-quality atoms.
+- Verification: Final review-focused: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest tests\test_index_valuation_atoms.py tests\test_nicegui_view_models.py tests\test_nicegui_app_import.py tests\test_index_health_snapshot.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-final-review-focused-r3` observed 149 passed and 2 known pandas `RuntimeWarning`s. Final full: `H:\pythonproject\etf0614\etf0614\.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-profile-final-review-full-fix` observed 530 passed, 1 skipped (the opt-in live smoke test because `TUSHARE_TOKEN` is unset), and 2 known pandas `RuntimeWarning`s. Final Browser-plugin Chrome QA used viewport overrides 390x844 and 1440x900 on `/page/market/指数体检`: the 390 viewport had root client/scroll width 375/375, profile card rect 327.02x810.41 at (23.99, 23.99) with no card overflow, title/date own scroll widths equal client widths, 48px tabs with horizontal scrolling (454px content in 303px client width), and internally scrolling panels; the 1440 viewport had root 1425/1425, card 1180x828, non-overflowing title/date/header, 48px tabs, and 1144x666 internal panels. The `000300` row opened the profile at both sizes; all five tabs switched at both sizes; all five full-indicator groups were expanded on mobile before the final review added valuation and data-quality groups; browser console and final server stderr were empty. Evidence: `C:\Users\cjj\AppData\Local\Temp\unified-index-profile-task10-evidence-20260731\mobile-overview-final.png` is a 375x844 captured-content PNG (not a 390px PNG because of browser content/scrollbar sizing), and `desktop-overview-fixed.png` is the visually complete desktop evidence. Chrome's final 1440 screenshot capture timed out, so no final desktop PNG is claimed; the computed geometry and interactions above passed.
+- Caution: Keep valuation and price histories as separate inputs, include both in the snapshot signature, never derive unsupported index valuations from constituents, keep invalid latest-record fields unavailable instead of backfilling older values, and keep market-page interactions read-only.

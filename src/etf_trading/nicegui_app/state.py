@@ -23,6 +23,7 @@ from etf_trading.data.index_catalog import (
     default_index_catalog,
 )
 from etf_trading.data.indexes import DEFAULT_INDEXES, IndexDefinition
+from etf_trading.data.index_valuations import OFFICIAL_INDEX_VALUATION_TS_CODES
 from etf_trading.data.quality import (
     HistoryAssessment,
     HistoryReadiness,
@@ -63,8 +64,9 @@ _ATOMIC_SNAPSHOT_CACHE: dict[str, tuple[str, pd.DataFrame, datetime | None]] = {
 _ATOMIC_SNAPSHOT_ERRORS: dict[str, str] = {}
 _ATOMIC_SNAPSHOT_CACHE_LOCK = RLock()
 ATOMIC_SNAPSHOT_BUILD_MARKER_MAX_AGE_SECONDS = 600.0
-INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 2
+INDEX_ATOMIC_SNAPSHOT_CACHE_SCHEMA_VERSION = 3
 _INDEX_ATOMIC_SNAPSHOT_LOCK = RLock()
+_INDEX_ATOMIC_INPUT_HASH_CHUNK_SIZE = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,13 @@ class IndexAtomicSnapshotCacheResult:
     task_result_id: int | None = None
 
 
+@dataclass(frozen=True)
+class IndexAtomicSnapshotReader:
+    """Root-only reader handle that never creates the atomic snapshot directory."""
+
+    root: Path
+
+
 # Temporary UI compatibility while Task 5 migrates the market page.  The
 # legacy trend/valuation cache contract is deliberately not retained.
 IndexHealthSnapshotCacheResult = IndexAtomicSnapshotCacheResult
@@ -97,6 +106,10 @@ def create_store(db_path: str | Path | None = None) -> SQLiteStore:
 
 def create_parquet_store(root: str | Path | None = None) -> ParquetStore:
     return ParquetStore() if root is None else ParquetStore(root)
+
+
+def create_index_atomic_snapshot_reader(root: str | Path | None = None) -> IndexAtomicSnapshotReader:
+    return IndexAtomicSnapshotReader(Path("data/parquet") if root is None else Path(root))
 
 
 def load_snapshot(store: SQLiteStore, parquet_store: ParquetStore) -> PlatformSnapshot:
@@ -146,6 +159,21 @@ def load_maintenance_task_snapshot(store: SQLiteStore) -> PlatformSnapshot:
         gaps=pd.DataFrame(),
         coverage=pd.DataFrame(),
         generated_at=datetime.now(),
+    )
+
+
+def load_index_atomic_shell_snapshot_readonly(parquet_store: ParquetStore) -> PlatformSnapshot:
+    """Project a published index-atomic snapshot for the shell without SQLite access."""
+
+    result = load_index_atomic_snapshot_readonly(parquet_store)
+    return PlatformSnapshot(
+        master=pd.DataFrame(),
+        watchlist=pd.DataFrame(),
+        index_summary=result.summary,
+        universe=pd.DataFrame(),
+        gaps=pd.DataFrame(),
+        coverage=pd.DataFrame(),
+        generated_at=result.generated_at or datetime.now(),
     )
 
 
@@ -554,16 +582,48 @@ def _index_atomic_snapshot_source_signature(
     digest.update(_index_atomic_snapshot_catalog_signature(selected_definitions).encode())
     digest.update(_index_coverage_signature_bytes(coverage))
     for definition in selected_definitions:
-        path = root / "indexes" / f"{definition.index_code}.parquet"
-        try:
-            stat = path.stat()
-        except OSError:
-            digest.update(f"|{definition.index_code}|exists=0".encode())
-        else:
-            digest.update(
-                f"|{definition.index_code}|exists=1|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}".encode()
+        _append_index_atomic_input_file_signature(
+            digest,
+            "prices",
+            definition.index_code,
+            root / "indexes" / f"{definition.index_code}.parquet",
+        )
+        if definition.index_code in OFFICIAL_INDEX_VALUATION_TS_CODES:
+            _append_index_atomic_input_file_signature(
+                digest,
+                "valuations",
+                definition.index_code,
+                root / "index_valuations" / f"{definition.index_code}.parquet",
             )
     return digest.hexdigest()
+
+
+def _append_index_atomic_input_file_signature(
+    digest: hashlib._Hash,
+    family: str,
+    index_code: str,
+    path: Path,
+) -> None:
+    try:
+        stat = path.stat()
+    except OSError:
+        digest.update(f"|{family}|{index_code}|exists=0".encode())
+        return
+
+    content_digest = hashlib.sha256()
+    try:
+        with path.open("rb") as input_file:
+            while chunk := input_file.read(_INDEX_ATOMIC_INPUT_HASH_CHUNK_SIZE):
+                content_digest.update(chunk)
+    except OSError as exc:
+        digest.update(
+            f"|{family}|{index_code}|exists=1|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}|unreadable={type(exc).__name__}".encode()
+        )
+        return
+
+    digest.update(
+        f"|{family}|{index_code}|exists=1|size={stat.st_size}|mtime_ns={stat.st_mtime_ns}|sha256={content_digest.hexdigest()}".encode()
+    )
 
 
 def _index_coverage_signature_bytes(coverage: pd.DataFrame | None) -> bytes:
@@ -878,6 +938,10 @@ _INDEX_ATOMIC_SUMMARY_TEXT_COLUMNS = {
     "ma_250_status",
     "range_20_status",
     "return_20_status",
+    "valuation_support_status",
+    "valuation_as_of_date",
+    "valuation_freshness_status",
+    "valuation_source",
 }
 
 _INDEX_ATOMIC_SUMMARY_BOOLEAN_COLUMNS = {

@@ -32,7 +32,9 @@ from etf_trading.nicegui_app.view_models import (
     index_atomic_overview,
     index_choice_options,
     index_data_status_notice,
+    index_profile_view,
     market_overview,
+    official_index_valuation_comparison_rows,
 )
 
 
@@ -59,6 +61,8 @@ def render(snapshot: PlatformSnapshot, section: str, parquet_store=None) -> None
         _render_overview(snapshot)
     elif section == "指数体检":
         _render_index_health(snapshot, parquet_store)
+    elif section == "指数估值":
+        _render_index_valuation(parquet_store)
     elif section == "指数买卖参考":
         _render_index_reference(snapshot)
     else:
@@ -81,6 +85,34 @@ def _render_overview(snapshot: PlatformSnapshot) -> None:
     else:
         empty_state("暂无指数状态", "到数据维护补齐指数历史后再查看市场总览。")
     _render_audit("market")
+
+
+def _render_index_valuation(parquet_store) -> None:
+    """Render official valuation atoms from the published snapshot only."""
+
+    if parquet_store is None:
+        _render_index_valuation_empty_state()
+        return
+
+    result = load_index_atomic_snapshot_readonly(parquet_store)
+    rows = official_index_valuation_comparison_rows(result.summary)
+    if result.status in {"missing", "failed"} or not rows:
+        _render_index_valuation_empty_state()
+        return
+
+    ui.label("仅展示已发布统一快照中的官方估值与独立分位；不计算、不排序评分，也不作交易结论。").classes("workbench-chart-note")
+    if result.status != "ready":
+        ui.label(f"快照状态：{_status_text(result.status, '数据不足')}；请在数据维护完成补齐后重新读取。").classes(
+            "workbench-chart-note"
+        )
+    render_table(rows, row_key="指数代码", pagination=15, compact=True, ui_module=ui).classes(
+        "workbench-data-table workbench-data-table--compact w-full"
+    )
+
+
+def _render_index_valuation_empty_state() -> None:
+    empty_state("暂无可展示的官方指数估值", "请前往数据维护 -> 补齐任务，同步官方估值并重建统一指数快照。")
+    ui.link("前往数据维护 -> 补齐任务", f"/page/maintenance/{quote('补齐任务', safe='')}").classes("text-sm font-semibold")
 
 
 def _render_index_reference(snapshot: PlatformSnapshot) -> None:
@@ -173,9 +205,10 @@ def _render_index_health(snapshot: PlatformSnapshot, parquet_store) -> None:
         table_rows = _index_atomic_table_rows(rows)
         with table_area:
             if table_rows:
-                render_table(table_rows, row_key="index_code", pagination=15, compact=True, ui_module=ui).classes(
+                table = render_table(table_rows, row_key="index_code", pagination=15, compact=True, ui_module=ui).classes(
                     "workbench-data-table workbench-data-table--compact w-full"
-                ).on("rowClick", lambda event: _open_index_atomic_dialog(holder["result"], _event_row_code(event, "index_code")))
+                )
+                _bind_index_profile_row_click(table, holder["result"])
             else:
                 empty_state("没有匹配的指数", "请调整核心/研究池或搜索条件。")
 
@@ -207,6 +240,190 @@ def _index_atomic_table_rows(rows: list[dict[str, object]]) -> list[dict[str, ob
         projected["index_code"] = row.get("index_code", "")
         result.append(projected)
     return result
+
+
+def _bind_index_profile_row_click(table, result) -> None:
+    """Open a stored profile from QTable's supported row-click event only."""
+
+    table.on(
+        "rowClick",
+        lambda event: _open_index_profile_dialog(result, _event_row_code(event, "index_code")),
+        args=[[], ["index_code"], None],
+    )
+
+
+def _open_index_profile_dialog(result, index_code: str) -> None:
+    """Render the published profile only; opening and tab changes are inert."""
+
+    if not index_code:
+        return
+    summary = _summary_row(result.summary, index_code)
+    profile = index_profile_view(summary, result.details, index_code)
+    if profile is None:
+        return
+    dialog = ui.dialog()
+    with dialog:
+        with ui.card().classes("index-profile-dialog"):
+            _render_index_profile_header(profile, dialog.close)
+            with ui.tabs().classes("index-profile-tabs w-full") as tabs:
+                overview_tab = ui.tab("画像总览")
+                valuation_tab = ui.tab("估值详情")
+                trend_risk_tab = ui.tab("趋势与风险")
+                all_tab = ui.tab("全部指标")
+                quality_tab = ui.tab("数据质量")
+            with ui.tab_panels(tabs, value=overview_tab).classes("index-profile-panels w-full"):
+                with ui.tab_panel(overview_tab):
+                    _render_index_profile_overview(profile)
+                with ui.tab_panel(valuation_tab):
+                    _render_index_profile_valuation(profile.valuation)
+                with ui.tab_panel(trend_risk_tab):
+                    _render_index_profile_trend_risk(profile)
+                with ui.tab_panel(all_tab):
+                    _render_index_profile_all_groups(profile.all_groups)
+                with ui.tab_panel(quality_tab):
+                    _render_index_profile_quality(profile)
+    dialog.open()
+
+
+def _render_index_profile_header(profile, close) -> None:
+    with ui.row().classes("index-profile-header w-full items-start justify-between gap-2"):
+        with ui.column().classes("index-profile-header-copy gap-0"):
+            ui.label(f"指数画像：{profile.identity}").classes("index-profile-title")
+            ui.label(f"价格截至：{profile.price_as_of_date} · 估值截至：{profile.valuation_as_of_date}").classes(
+                "index-profile-as-of"
+            )
+        ui.button("关闭", icon="close", on_click=close).props("flat dense").classes("index-profile-close")
+
+
+def _render_index_profile_overview(profile) -> None:
+    with ui.element("div").classes("index-profile-summary-grid"):
+        for card in profile.summary_cards:
+            with ui.element("section").classes("index-profile-summary-card"):
+                ui.label(card.label).classes("index-profile-card-label")
+                ui.label(card.value).classes("index-profile-card-value")
+                ui.label(card.detail if card.available else f"数据不足：{card.detail}").classes("index-profile-card-detail")
+    with ui.element("div").classes("index-profile-primary-grid"):
+        _render_index_profile_valuation(profile.valuation, compact=True)
+        _render_index_profile_trend(profile.overview_trend)
+    with ui.element("div").classes("index-profile-secondary-grid"):
+        _render_index_profile_compact_sections(profile.overview_trend_risk_sections)
+        _render_index_profile_events(profile.events)
+        _render_index_profile_availability(profile)
+
+
+def _render_index_profile_valuation(valuation, compact: bool = False) -> None:
+    with ui.element("section").classes("index-profile-panel index-profile-valuation-panel"):
+        ui.label("估值详情" if not compact else "估值分位").classes("index-profile-panel-title")
+        if not valuation.visible:
+            ui.label(valuation.status).classes("index-profile-state")
+            ui.label(valuation.reason or "数据不足").classes("index-profile-reason")
+            return
+        ui.label(valuation.status).classes("index-profile-state")
+        for metric in (valuation.pe_ttm, valuation.pb):
+            if metric is None:
+                continue
+            with ui.element("div").classes("index-profile-valuation-metric"):
+                ui.label(f"{metric.label}：{metric.current_value}").classes("index-profile-metric-heading")
+                with ui.element("div").classes("index-profile-detail-grid"):
+                    for label, value in (
+                        ("3年分位", metric.percentile_3y),
+                        ("5年分位", metric.percentile_5y),
+                        ("10年分位", metric.percentile_10y),
+                        ("5年区间", metric.band_5y),
+                        ("5年中位数", metric.median_5y),
+                        ("偏离中位数", metric.median_deviation_5y),
+                    ):
+                        _render_index_profile_metric(label, value)
+                ui.label(f"5年样本数：{metric.sample_count_5y}").classes("index-profile-note")
+
+
+def _render_index_profile_trend(trend) -> None:
+    with ui.element("section").classes("index-profile-panel index-profile-trend-panel"):
+        ui.label("趋势关系").classes("index-profile-panel-title")
+        if not trend.visible:
+            ui.label(trend.close.value).classes("index-profile-state")
+            ui.label(trend.reason or "数据不足").classes("index-profile-reason")
+            return
+        _render_index_profile_trend_row(trend.close)
+        for item in trend.rows:
+            _render_index_profile_trend_row(item)
+
+
+def _render_index_profile_trend_row(item) -> None:
+    with ui.element("div").classes("index-profile-trend-row"):
+        ui.label(item.label).classes("index-profile-row-label")
+        ui.label(item.value).classes("index-profile-row-value")
+        ui.label(item.status if item.status != "已计算" else "已计算").classes("index-profile-row-status")
+        if item.status != "已计算" and item.reason:
+            ui.label(item.reason).classes("index-profile-row-reason")
+
+
+def _render_index_profile_compact_sections(sections) -> None:
+    with ui.element("section").classes("index-profile-panel index-profile-compact-panel"):
+        ui.label("动量与风险").classes("index-profile-panel-title")
+        if not any(section.items for section in sections):
+            ui.label("数据不足").classes("index-profile-reason")
+            return
+        for section in sections:
+            for item in section.items:
+                _render_index_profile_trend_row(item)
+
+
+def _render_index_profile_events(events) -> None:
+    with ui.element("section").classes("index-profile-panel index-profile-events-panel"):
+        ui.label("最近事件").classes("index-profile-panel-title")
+        if not events:
+            ui.label("暂无已记录事件").classes("index-profile-reason")
+            return
+        for event in events:
+            with ui.row().classes("index-profile-event-row w-full justify-between"):
+                ui.label(event.label)
+                ui.label(event.days)
+
+
+def _render_index_profile_availability(profile) -> None:
+    with ui.element("section").classes("index-profile-panel index-profile-availability-panel"):
+        ui.label("数据可用性").classes("index-profile-panel-title")
+        for item in profile.quality:
+            _render_index_profile_trend_row(item)
+
+
+def _render_index_profile_trend_risk(profile) -> None:
+    with ui.element("div").classes("index-profile-section-grid"):
+        _render_index_profile_trend(profile.trend)
+        for section in profile.trend_risk_sections:
+            with ui.element("section").classes("index-profile-panel"):
+                ui.label(section.title).classes("index-profile-panel-title")
+                if not section.items:
+                    ui.label("数据不足").classes("index-profile-reason")
+                for item in section.items:
+                    _render_index_profile_trend_row(item)
+
+
+def _render_index_profile_all_groups(groups) -> None:
+    with ui.element("div").classes("index-profile-section-grid"):
+        for group in groups:
+            with ui.expansion(
+                group.title,
+                value=group.title == "价格与均线",
+            ).classes("index-profile-panel index-profile-all-group"):
+                if not group.items:
+                    ui.label("数据不足").classes("index-profile-reason")
+                for item in group.items:
+                    _render_index_profile_trend_row(item)
+
+
+def _render_index_profile_quality(profile) -> None:
+    with ui.element("section").classes("index-profile-panel index-profile-quality-panel"):
+        ui.label("数据质量").classes("index-profile-panel-title")
+        for item in profile.quality:
+            _render_index_profile_trend_row(item)
+
+
+def _render_index_profile_metric(label: str, value: str) -> None:
+    with ui.element("div").classes("index-profile-detail-item"):
+        ui.label(label).classes("index-profile-detail-label")
+        ui.label(value).classes("index-profile-detail-value")
 
 
 def _open_index_atomic_dialog(result, index_code: str) -> None:

@@ -4,6 +4,7 @@ from etf_trading.data.index_valuations import (
     CORE_VALUATION_METRICS,
     INDEX_VALUATION_COLUMNS,
     MACRO_SERIES_COLUMNS,
+    OFFICIAL_INDEX_VALUATION_TS_CODES,
     finalize_index_valuation_frame,
     normalize_macro_series,
 )
@@ -41,6 +42,26 @@ def test_finalize_index_valuation_frame_keeps_invalid_pe_from_yield_derivation()
 
     assert pd.isna(result.iloc[0]["earnings_yield"])
     assert pd.isna(result.iloc[0]["erp"])
+
+
+def test_index_valuation_schema_includes_official_dailybasic_fields():
+    assert OFFICIAL_INDEX_VALUATION_TS_CODES == {
+        "000001": "000001.SH",
+        "000016": "000016.SH",
+        "000300": "000300.SH",
+        "000905": "000905.SH",
+        "399001": "399001.SZ",
+        "399006": "399006.SZ",
+    }
+    assert INDEX_VALUATION_COLUMNS[13:20] == [
+        "total_mv",
+        "float_mv",
+        "total_share",
+        "float_share",
+        "free_share",
+        "turnover_rate",
+        "turnover_rate_f",
+    ]
 
 
 def test_normalize_macro_series_uses_standard_schema():

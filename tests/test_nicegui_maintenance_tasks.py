@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 from pathlib import Path
 import threading
 from datetime import datetime
@@ -122,6 +123,17 @@ def _snapshot_meta(parquet_store: ParquetStore) -> dict[str, object]:
     return json.loads((parquet_store.root / "cache" / "index_atomic_snapshot.meta.json").read_text(encoding="utf-8"))
 
 
+def _change_file_content_preserving_size_and_mtime(path: Path) -> None:
+    metadata = path.stat()
+    content = bytearray(path.read_bytes())
+    assert content
+    content[len(content) // 2] ^= 1
+    path.write_bytes(content)
+    os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    assert path.stat().st_size == metadata.st_size
+    assert path.stat().st_mtime_ns == metadata.st_mtime_ns
+
+
 def _write_previous_snapshot(parquet_store: ParquetStore) -> None:
     definitions = (_atomic_definition().to_index_definition(),)
     coverage = _atomic_coverage()
@@ -226,6 +238,26 @@ def test_atomic_snapshot_runner_rejects_publish_when_local_history_changes_durin
     assert result.status == "stale"
     assert result.summary["index_code"].tolist() == ["000300"]
     assert _snapshot_meta(parquet_store)["task_result_id"] == 99
+
+
+def test_atomic_snapshot_runner_rejects_publish_when_valuation_history_changes_during_build(tmp_path, monkeypatch):
+    valuation_file = tmp_path / "parquet" / "index_valuations" / "000300.parquet"
+    valuation_file.parent.mkdir(parents=True, exist_ok=True)
+    valuation_file.write_bytes(b"official-valuation-input")
+
+    def build_snapshot(parquet_store, definitions, *, coverage=None, on_progress=None):
+        del definitions, coverage, on_progress
+        _change_file_content_preserving_size_and_mtime(valuation_file)
+        return _atomic_summary("000905"), _atomic_details("000905")
+
+    runner, store, parquet_store = _atomic_runner(tmp_path, build_snapshot, monkeypatch)
+    _write_previous_snapshot(parquet_store)
+
+    task = runner.start()
+    failed = _wait_for_terminal_task(store, task.task_id)
+
+    assert failed.state == "failed"
+    assert failed.error_message == "重建指数原子指标失败：本地输入已变化，拒绝发布快照"
 
 
 def test_atomic_snapshot_runner_start_deduplicates_concurrent_calls_per_store(tmp_path, monkeypatch):
@@ -420,6 +452,7 @@ def test_render_tasks_restores_persisted_atomic_snapshot_result_after_page_refre
 
     monkeypatch.setattr(maintenance, "ui", FakeUi())
     monkeypatch.setattr(maintenance, "IndexHistoryBatchRunner", FakeHistoryRunner)
+    monkeypatch.setattr(maintenance, "OfficialIndexValuationMaintenanceRunner", FakeHistoryRunner)
     monkeypatch.setattr(maintenance, "IndexAtomicSnapshotMaintenanceRunner", FakeAtomicRunner)
     monkeypatch.setattr(maintenance, "IndexCatalogMaintenanceRunner", FakeCatalogRunner)
     monkeypatch.setattr(maintenance, "_render_task_center", lambda container, status: captured.append(status))
@@ -494,10 +527,20 @@ def test_catalog_index_tasks_show_atomic_snapshot_rebuild_help(monkeypatch):
         maintenance.MaintenanceTaskStatus(),
         object(),
         object(),
+        object(),
     )
 
     assert "重建指数原子指标" in buttons
     assert "只读取本地指数历史；初始化、补齐或修复历史后，请手动重建。" in labels
+
+
+def test_catalog_panel_exposes_explicit_official_valuation_sync():
+    from etf_trading.nicegui_app.pages import maintenance
+
+    source = inspect.getsource(maintenance._render_catalog_index_tasks)
+
+    assert '"同步官方指数估值"' in source
+    assert "_start_official_index_valuation_sync_task" in source
 
 
 def test_task_center_renders_idle_and_running_states(monkeypatch):
@@ -1388,6 +1431,7 @@ def test_render_tasks_restores_persisted_index_batch_after_page_refresh(monkeypa
 
     monkeypatch.setattr(maintenance, "ui", FakeUi())
     monkeypatch.setattr(maintenance, "IndexHistoryBatchRunner", FakeRunner)
+    monkeypatch.setattr(maintenance, "OfficialIndexValuationMaintenanceRunner", FakeRunner)
     monkeypatch.setattr(maintenance, "_render_task_center", lambda container, status: captured.append(status))
     monkeypatch.setattr(maintenance, "_render_master_tasks", lambda *args: None)
     monkeypatch.setattr(maintenance, "_render_etf_history_tasks", lambda *args: None)
@@ -1535,6 +1579,7 @@ def test_persisted_index_timer_does_not_replace_another_active_task(monkeypatch)
     )
     monkeypatch.setattr(maintenance, "ui", FakeUi())
     monkeypatch.setattr(maintenance, "IndexHistoryBatchRunner", FakeRunner)
+    monkeypatch.setattr(maintenance, "OfficialIndexValuationMaintenanceRunner", FakeRunner)
     monkeypatch.setattr(maintenance, "_render_task_center", lambda container, status: captured.append(status.title))
     monkeypatch.setattr(maintenance, "_render_master_tasks", lambda *args: None)
     def render_active_etf_task(*args):
