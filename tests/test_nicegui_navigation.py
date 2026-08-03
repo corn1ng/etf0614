@@ -19,7 +19,7 @@ def test_nicegui_sections_keep_market_and_etf_boundaries():
 
     assert sections_by_slug["market"] == ["市场总览", "指数体检", "指数买卖参考", "指数K线"]
     assert sections_by_slug["etf-data"] == ["ETF总览", "原子指标", "ETF行情", "搜索加入", "每日计算池", "指数样本池"]
-    assert sections_by_slug["research"] == ["策略库", "新建策略", "运行回测", "策略比较", "ETF复盘", "指数过滤实验"]
+    assert sections_by_slug["research"] == ["策略库", "新建策略", "运行回测", "策略比较", "ETF复盘", "指数过滤实验", "指数趋势回测"]
     assert sections_by_slug["maintenance"] == ["数据体检", "缺口明细", "补齐任务", "日志与设置"]
     assert "ETF行情" not in sections_by_slug["market"]
     assert "原子指标" not in sections_by_slug["market"]

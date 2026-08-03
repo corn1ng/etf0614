@@ -191,6 +191,13 @@ def build_echart_options(
     volume_series = volume_panel.get("series", [])
     candle = _first_series(main_series, "Candlestick")
     categories = [str(point.get("time", "")) for point in candle.get("data", [])] if candle else []
+    if not categories:
+        for item in main_series:
+            if item.get("type") != "Line":
+                continue
+            categories = _line_series_categories(item)
+            if categories:
+                break
     series: list[dict] = []
 
     if candle:
@@ -407,6 +414,8 @@ def _chart_categories(payload: list[dict]) -> list[str]:
 
 
 def _default_zoom_window(categories: list[str], *, visible_start: str | None = None, visible_end: str | None = None) -> dict:
+    if not categories:
+        return {"start": 0, "end": 100}
     if visible_start or visible_end:
         start = _coerce_category_start(categories, visible_start or categories[0])
         end = _coerce_category_end(categories, visible_end or categories[-1])
@@ -584,6 +593,20 @@ def _line_series_points(item: dict) -> list:
         else:
             data.append(value)
     return data
+
+
+def _line_series_categories(item: dict) -> list[str]:
+    categories = []
+    seen = set()
+    for point in _line_series_points(item):
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        category = str(point[0])
+        if not category or category in seen:
+            continue
+        seen.add(category)
+        categories.append(category)
+    return categories
 
 
 def _first_series(series: list[dict], kind: str) -> dict | None:

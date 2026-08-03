@@ -1,0 +1,380 @@
+import inspect
+from pathlib import Path
+from types import SimpleNamespace
+
+import pandas as pd
+import pytest
+
+
+def test_page_source_contains_required_run_and_result_states():
+    source = Path("src/etf_trading/nicegui_app/pages/research.py").read_text(encoding="utf-8")
+    for label in (
+        "重新回测", "结果已过期", "策略版本", "数据截止日", "总体结论",
+        "五年滚动", "缓冲带诊断", "交易记录", "排除原因", "指数理论回测",
+    ):
+        assert label in source
+    for state in ("missing", "invalid", "queued", "running", "completed", "failed", "cancelled"):
+        assert state in source
+
+
+def test_index_research_page_uses_strict_loader_without_render_time_research_execution():
+    from etf_trading.nicegui_app.pages.research import render_index_trend_research
+
+    section = inspect.getsource(render_index_trend_research)
+    assert "IndexResearchPageController" in section
+    assert "run_index_research(" not in section
+    assert "run_and_publish_index_research(" not in section
+
+
+def test_selector_filters_nav_to_full_history_and_all_linked_evidence_to_selected_index():
+    from etf_trading.nicegui_app.pages.research import _filtered_index_research_evidence
+
+    loaded = SimpleNamespace(
+        nav=pd.DataFrame([
+            {"index_code": "A", "period_type": "full_history", "strategy_name": "index_trend_v1", "trade_date": "2026-01-01", "nav": 1.0},
+            {"index_code": "A", "period_type": "calendar_year", "strategy_name": "index_trend_v1", "trade_date": "2026-01-02", "nav": 1.1},
+            {"index_code": "B", "period_type": "full_history", "strategy_name": "buy_hold", "trade_date": "2026-01-01", "nav": 1.0},
+        ]),
+        trades=pd.DataFrame([{"index_code": "A", "period_type": "full_history"}, {"index_code": "B", "period_type": "full_history"}]),
+        yearly=pd.DataFrame([{"index_code": "A"}, {"index_code": "B"}]),
+        rolling=pd.DataFrame([{"index_code": "A"}, {"index_code": "B"}]),
+    )
+
+    evidence = _filtered_index_research_evidence(loaded, "A")
+
+    assert set(evidence) == {"nav", "trades", "yearly", "rolling"}
+    assert set(evidence["nav"]["index_code"]) == {"A"}
+    assert set(evidence["nav"]["period_type"]) == {"full_history"}
+    for key in ("trades", "yearly", "rolling"):
+        assert set(evidence[key]["index_code"]) == {"A"}
+
+
+def test_nav_chart_keeps_each_strategy_separate_and_has_no_duplicate_dates():
+    from etf_trading.nicegui_app.pages.research import _index_research_nav_payload
+
+    payload = _index_research_nav_payload(pd.DataFrame([
+        {"strategy_name": "index_trend_v1", "trade_date": "2026-01-01", "nav": 1.0},
+        {"strategy_name": "index_trend_v1", "trade_date": "2026-01-01", "nav": 1.1},
+        {"strategy_name": "buy_hold", "trade_date": "2026-01-01", "nav": 1.0},
+    ]))
+
+    lines = [item for item in payload[0]["series"] if "回撤" not in item["options"]["title"]]
+    assert {item["options"]["title"] for item in lines} == {"index_trend_v1", "buy_hold"}
+    assert len(next(item for item in lines if item["options"]["title"] == "index_trend_v1")["data"]) == 1
+
+
+@pytest.mark.parametrize("exc", [OSError("<disk failure>"), PermissionError("<denied>"), TypeError("<bad type>")])
+def test_strict_loader_converts_expected_read_errors_to_safe_invalid_state(monkeypatch, exc):
+    from etf_trading.nicegui_app.pages import research
+
+    monkeypatch.setattr(research, "load_latest_index_research", lambda _root: (_ for _ in ()).throw(exc))
+
+    loaded, state, diagnostic = research._load_index_research_for_page("unused")
+
+    assert loaded is None
+    assert state == "invalid"
+    assert "<" not in diagnostic and ">" not in diagnostic
+
+
+def test_page_controller_polls_jobs_without_reloading_evidence_until_completed_transition():
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    class Manager:
+        def __init__(self):
+            self.current = SimpleNamespace(status="queued")
+
+        def snapshot(self):
+            return self.current
+
+    calls = {"loader": 0, "stale": 0}
+    loaded = SimpleNamespace(run_meta={"limited_run": False})
+
+    def loader(_root):
+        calls["loader"] += 1
+        return loaded
+
+    def stale(_meta, _store):
+        calls["stale"] += 1
+        return False
+
+    manager = Manager()
+    controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=stale)
+    controller.load_evidence()
+    controller.poll()
+    controller.poll()
+    assert calls == {"loader": 1, "stale": 1}
+
+    manager.current = SimpleNamespace(status="completed")
+    assert controller.poll() is True
+    controller.poll()
+    assert calls == {"loader": 2, "stale": 2}
+
+
+def test_index_research_poll_timer_cancels_once_when_client_disconnects():
+    from etf_trading.nicegui_app.pages.research import _create_index_research_poll_timer
+
+    class FakeTimer:
+        def __init__(self):
+            self.cancel_calls = 0
+
+        def cancel(self):
+            self.cancel_calls += 1
+
+    class FakeClient:
+        def __init__(self):
+            self.disconnect_handlers = []
+
+        def on_disconnect(self, handler):
+            self.disconnect_handlers.append(handler)
+
+        def disconnect(self):
+            for handler in self.disconnect_handlers:
+                handler(self)
+
+    timer = FakeTimer()
+    client = FakeClient()
+    created = _create_index_research_poll_timer(
+        lambda: None,
+        timer_factory=lambda interval, callback: timer,
+        client_getter=lambda: client,
+    )
+
+    assert created is timer
+    assert len(client.disconnect_handlers) == 1
+    client.disconnect()
+    client.disconnect()
+    assert timer.cancel_calls == 1
+
+
+def test_index_research_poll_timer_is_safe_without_a_current_client():
+    from etf_trading.nicegui_app.pages.research import _create_index_research_poll_timer
+
+    timer = SimpleNamespace(cancel=lambda: pytest.fail("timer should not be cancelled"))
+
+    assert _create_index_research_poll_timer(
+        lambda: None,
+        timer_factory=lambda interval, callback: timer,
+        client_getter=lambda: None,
+    ) is timer
+
+
+def test_page_controller_reloads_each_completed_job_identity_once_and_refresh_marks_it_loaded():
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    class Manager:
+        def __init__(self):
+            self.current = SimpleNamespace(status="running", job_id="a", run_id=None)
+
+        def snapshot(self):
+            return self.current
+
+    calls = {"loader": 0}
+    manager = Manager()
+
+    def loader(_root):
+        calls["loader"] += 1
+        return SimpleNamespace(run_id=manager.current.run_id, run_meta={"limited_run": False})
+
+    controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=lambda *_: False)
+    controller.load_evidence()
+    manager.current = SimpleNamespace(status="completed", job_id="a", run_id="run-a")
+    assert controller.poll() is True
+    manager.current = SimpleNamespace(status="completed", job_id="b", run_id="run-b")
+    assert controller.poll() is True
+    assert calls == {"loader": 3}
+
+    controller.load_evidence()  # explicit refresh while b is completed
+    assert controller.poll() is False
+    assert calls == {"loader": 4}
+
+
+def test_evidence_load_does_not_mark_new_completed_job_when_loader_returns_old_run():
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    class Manager:
+        def __init__(self):
+            self.current = SimpleNamespace(status="completed", job_id="a", run_id="run-a")
+
+        def snapshot(self):
+            return self.current
+
+    manager = Manager()
+    calls = {"loader": 0}
+
+    def loader(_root):
+        calls["loader"] += 1
+        if calls["loader"] == 1:
+            manager.current = SimpleNamespace(status="completed", job_id="b", run_id="run-b")
+            return SimpleNamespace(run_id="run-a", run_meta={"limited_run": False})
+        return SimpleNamespace(run_id="run-b", run_meta={"limited_run": False})
+
+    controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=lambda *_: False)
+    controller.load_evidence()
+
+    assert (controller.last_loaded_completed_job_id, controller.last_loaded_completed_run_id) != ("b", "run-b")
+    assert controller.last_attempted_completed_identity is None
+    assert controller.poll() is True
+    assert calls == {"loader": 2}
+    assert controller.last_attempted_completed_identity == ("b", "run-b")
+    assert controller.poll() is False
+
+
+def test_matching_completed_identity_and_loaded_run_do_not_reload_on_later_polls():
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    manager = SimpleNamespace(snapshot=lambda: SimpleNamespace(status="completed", job_id="a", run_id="run-a"))
+    calls = {"loader": 0}
+
+    def loader(_root):
+        calls["loader"] += 1
+        return SimpleNamespace(run_id="run-a", run_meta={"limited_run": False})
+
+    controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=lambda *_: False)
+    controller.load_evidence()
+    assert controller.poll() is False
+    assert controller.poll() is False
+    assert calls == {"loader": 1}
+
+
+def test_completed_invalid_evidence_is_attempted_once_until_explicit_refresh():
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    manager = SimpleNamespace(snapshot=lambda: SimpleNamespace(status="completed", job_id="a", run_id="run-a"))
+    calls = {"loader": 0}
+
+    def loader(_root):
+        calls["loader"] += 1
+        raise ValueError("latest index research pointer is missing")
+
+    controller = IndexResearchPageController("reports", object(), manager, loader=loader, stale_checker=lambda *_: False)
+
+    assert controller.poll() is True
+    assert controller.poll() is False
+    assert controller.poll() is False
+    assert calls == {"loader": 1}
+    assert controller.last_loaded_completed_job_id is None
+    assert controller.last_attempted_completed_identity == ("a", "run-a")
+
+    controller.load_evidence()
+    assert calls == {"loader": 2}
+    assert controller.poll() is False
+    assert calls == {"loader": 2}
+
+
+@pytest.mark.parametrize("exc", [ValueError("latest index research pointer is missing"), OSError("unavailable")])
+def test_invalid_or_missing_evidence_never_marks_completed_identity(exc):
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageController
+
+    manager = SimpleNamespace(snapshot=lambda: SimpleNamespace(status="completed", job_id="a", run_id="run-a"))
+    controller = IndexResearchPageController(
+        "reports", object(), manager,
+        loader=lambda _root: (_ for _ in ()).throw(exc),
+        stale_checker=lambda *_: False,
+    )
+
+    controller.load_evidence()
+    assert controller.last_loaded_completed_job_id is None
+    assert controller.last_loaded_completed_run_id is None
+
+
+def test_cancel_handler_updates_widgets_and_running_text_uses_snapshot_message():
+    from etf_trading.nicegui_app.pages.research import _cancel_index_research_job, _index_research_job_state_text
+
+    calls = []
+    manager = SimpleNamespace(cancel=lambda: calls.append("cancel"))
+    _cancel_index_research_job(manager, lambda: calls.append("update"))
+
+    assert calls == ["cancel", "update"]
+    assert "取消已请求" in _index_research_job_state_text(SimpleNamespace(status="running", done=1, total=2, index_code="A", phase="", message="取消已请求，将在当前指数完成后取消"))
+
+
+def test_index_research_layout_has_metadata_controls_then_results():
+    from etf_trading.nicegui_app.pages.research import index_research_layout_order
+
+    assert index_research_layout_order() == ("metadata", "controls", "results")
+
+
+def test_full_run_gate_rows_show_actual_threshold_and_reason_for_all_six_gates():
+    from etf_trading.nicegui_app.pages.research import _index_research_gate_rows
+
+    meta = {
+        "gates": {
+            "drawdown_win_rate": True,
+            "median_drawdown_reduction": True,
+            "median_calmar_improves": True,
+            "median_return_is_retained": False,
+            "buffer_reduces_whipsaw_rate_and_trades": True,
+            "stress_keeps_first_four_gates": False,
+        },
+        "gate_values": {
+            "drawdown_win_rate": 0.75,
+            "median_drawdown_reduction": 0.31,
+            "median_calmar_v1": 0.88,
+            "median_calmar_buy_hold": 0.54,
+            "median_annual_return_v1": 0.061,
+            "median_annual_return_buy_hold": 0.089,
+            "whipsaw_rate_0": 0.42,
+            "whipsaw_rate_2": 0.25,
+            "trades_per_year_0": 5.4,
+            "trades_per_year_2": 3.1,
+            "stress_first_four_gates": {
+                "drawdown_win_rate": True,
+                "median_drawdown_reduction": True,
+                "median_calmar_improves": False,
+                "median_return_is_retained": True,
+            },
+        },
+        "gate_reasons": [
+            "median_return_is_retained:median_annual_return_lag_exceeds_0.02",
+            "stress_keeps_first_four_gates:median_calmar_improves",
+        ],
+    }
+
+    rows = _index_research_gate_rows(meta)
+
+    assert len(rows) == 6
+    assert [row["门槛"] for row in rows] == [
+        "drawdown_win_rate",
+        "median_drawdown_reduction",
+        "median_calmar_improves",
+        "median_return_is_retained",
+        "buffer_reduces_whipsaw_rate_and_trades",
+        "stress_keeps_first_four_gates",
+    ]
+    assert all(row["实际值"] not in ("", None) and row["阈值"] and row["原因"] for row in rows)
+    assert "V1=0.88" in rows[2]["实际值"]
+    assert "0%=0.42" in rows[4]["实际值"]
+    assert "median_calmar_improves" in rows[5]["原因"]
+
+
+def test_empty_nav_detail_keeps_all_followup_empty_sections():
+    from etf_trading.nicegui_app.pages.research import empty_index_research_detail_states
+
+    assert empty_index_research_detail_states() == ("暂无净值曲线", "暂无年度数据", "暂无五年滚动", "没有交易记录")
+
+
+@pytest.mark.parametrize(
+    ("evidence_status", "limited", "job_status"),
+    [
+        ("missing", False, "idle"), ("invalid", False, "idle"), ("stale", False, "idle"),
+        ("available", False, "idle"), ("available", True, "idle"), ("available", False, "queued"),
+        ("available", False, "running"), ("available", False, "completed"), ("available", False, "failed"),
+        ("available", False, "cancelled"),
+    ],
+)
+def test_page_state_exposes_evidence_and_job_states(evidence_status, limited, job_status):
+    from etf_trading.nicegui_app.pages.research import IndexResearchPageState
+
+    state = IndexResearchPageState(
+        evidence_status=evidence_status,
+        limited=limited,
+        job=SimpleNamespace(status=job_status),
+        diagnostic="",
+        loaded=None,
+    )
+
+    assert state.evidence_status == evidence_status
+    assert state.limited is limited
+    assert state.job.status == job_status
+    assert state.can_start is (job_status not in {"queued", "running"})
+    assert state.can_cancel is (job_status in {"queued", "running"})

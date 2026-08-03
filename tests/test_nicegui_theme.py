@@ -25,6 +25,17 @@ def test_theme_keeps_mobile_sidebar_navigation_labels_readable():
     assert "#0f172a" in WORKBENCH_CSS
 
 
+def test_theme_allows_mobile_workbench_topbar_to_wrap_without_overlapping_page_header():
+    mobile_css = WORKBENCH_CSS.split("@media (max-width: 720px) {", 1)[1]
+    topbar_rule = mobile_css.split(".workbench-topbar {", 1)[1].split("}", 1)[0]
+
+    assert "height: auto;" in topbar_rule
+    assert "min-height:" in topbar_rule
+    assert "flex-wrap: wrap;" in topbar_rule
+    assert "padding:" in topbar_rule
+    assert "gap:" in topbar_rule
+
+
 def test_tone_class_maps_unknown_to_neutral():
     assert tone_class("success") == "tone-success"
     assert tone_class("warning") == "tone-warning"

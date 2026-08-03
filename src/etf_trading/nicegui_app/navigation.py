@@ -36,7 +36,7 @@ NICEGUI_PAGES: tuple[NicePageSpec, ...] = (
         slug="research",
         label="策略实验室",
         caption="创建策略、运行回测、比较表现并复盘 ETF 的买卖点。",
-        sections=("策略库", "新建策略", "运行回测", "策略比较", "ETF复盘", "指数过滤实验"),
+        sections=("策略库", "新建策略", "运行回测", "策略比较", "ETF复盘", "指数过滤实验", "指数趋势回测"),
     ),
     NicePageSpec(
         slug="maintenance",

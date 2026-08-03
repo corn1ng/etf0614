@@ -1,0 +1,115 @@
+# Task 4 report: locked index trend V1 validation
+
+## Delivered
+
+- Added the deterministic research matrix in `index_validation.py`: full-history,
+  calendar-year, named-stage, complete five-calendar-year rolling, buffer ablation,
+  doubled-cost stress, and strictly post-lock prospective outputs.
+- Added immutable output contracts for the matrix and six-gate assessment.
+- Added validation tests for matrix coverage, calendar windows, prospective boundary,
+  official-only aggregation, each safe failure mode, stress recomputation,
+  deterministic ordering/progress/cancellation, and reporting aggregates.
+
+## RED evidence
+
+Command:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_validation.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task4-red
+```
+
+Result: collection failed as expected with
+`ModuleNotFoundError: No module named 'etf_trading.research.index_validation'`.
+
+## GREEN evidence
+
+Focused command:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_validation.py tests\test_index_research_data.py tests\test_index_trend_v1.py tests\test_index_research_backtest.py tests\test_index_research_metrics.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task4-focused
+```
+
+Result: `63 passed in 8.85s`.
+
+Full command:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-task4-full
+```
+
+Result: `512 passed, 1 skipped in 37.26s`.
+
+## Design choices and self-check
+
+- Results are sorted by index, period, strategy, and label so input dictionary order
+  cannot affect output order.  Cancellation is checked before each index and raises
+  `IndexResearchCancelled`, never returning a partial output.
+- Each evaluation starts empty.  V1 receives only one preceding row for an initial
+  crossover comparison; its NAV is filtered strictly to the evaluation range.  Buy
+  and hold receives no preceding row, so it buys only at the evaluation start.
+- The gates fail closed for empty official pairs, non-finite metrics, zero buy-hold
+  drawdown, missing buffer evidence, and invalid stress evidence.  Main gates and
+  rolling pass rate use official rows only; reference rows remain in their own
+  outputs and group statistics.
+- The post-lock sample is `trade_date > locked_at`; when absent the output records
+  `no_prospective_sample` rather than treating an empty sample as evidence.
+
+## Known limits
+
+This task supplies in-memory research outputs only.  Versioned artifact publishing,
+  report rendering, background execution, and the complete real-index run are
+intentionally reserved for later tasks.
+
+## Review hardening
+
+The review follow-up added RED evidence for six defects and then fixed them:
+
+- rolling-window coverage now requires January and December observations in every
+  consecutive calendar year (a documented data-coverage proxy, not an exchange
+  calendar) and rolling gates pair `rolling_5y` rows rather than full-history rows;
+- buffer evidence is paired by official index at 0% and 2%, rejecting duplicates,
+  missing mates, and non-finite values before aggregation;
+- buy-and-hold carries an undated `initial_nav=1.0` capital base so first-buy costs
+  affect total and annualized returns without fabricating a NAV date; its annualized
+  period count is the number of dated close observations after that initial capital;
+- cancellation is checked after every index completion and before final assessment;
+- every failed effectiveness gate has a gate-named, value/threshold or
+  evidence-unavailable reason.
+
+Review GREEN command:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_validation.py tests\test_index_research_backtest.py tests\test_index_research_metrics.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-review-green
+```
+
+Result: `47 passed in 9.57s`.
+
+Review focused suite (`validation`, Task 2, and Task 3 neighbors): `54 passed in
+9.56s`.  Review full suite: `520 passed, 1 skipped in 37.93s`.
+
+## Second review hardening
+
+Second-review RED command:
+
+```powershell
+.venv-win\Scripts\python.exe -m pytest tests\test_index_research_validation.py -q --basetemp C:\Users\cjj\AppData\Local\Temp\index-trend-v1-second-review-red
+```
+
+Result: 2 expected failures.  The integration case omitted the `2005-2009`
+rolling window because coverage was checked after MA/ATR warm-up, and V1 had no
+initial capital base while buy-and-hold did.
+
+The follow-up now determines rolling coverage from the admitted, sorted raw date
+history; each backtest still starts empty on January 1, and unavailable indicators
+only prevent V1 signals.  Every `IndexBacktestResult` has an undated initial NAV
+of 1.0.  Metrics include it in return, annualization period count, volatility,
+drawdown, and Calmar without adding a synthetic trade date.  If a drawdown peak is
+that virtual starting capital, `drawdown_start` is stably `None`.  The frame-only
+annual summary deliberately retains its existing first-observed-NAV semantics and
+does not assign initial entry costs to a calendar year.  The cancellation exception
+documentation now names the before-index, after-index, and final-publication
+boundaries.
+
+Second-review GREEN: validation plus backtest/metrics: `49 passed in 11.75s`;
+validation plus Task 2/3 neighbors: `56 passed in 11.56s`; full suite: `522
+passed, 1 skipped in 40.18s`.
