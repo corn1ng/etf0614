@@ -2,6 +2,11 @@
 .venv-win/
 __pycache__/
 .pytest_cache/
+# pytest 临时目录（--basetemp 派生，属于测试残留）
+pytest-tmp-*/
+.pytest-basetemp-*/
+pytest-basetemp-*/
+codex-baseline-*/
 *.pyc
 *.egg-info/
 .superpowers/
